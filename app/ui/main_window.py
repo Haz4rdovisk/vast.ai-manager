@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
 
         # Register Cloud body + Lab shell in the workspace stack.
         self.workspace_stack.addWidget(self.cloud_body)
-        self.lab_shell = LabShell(self.config)
+        self.lab_shell = LabShell(self.config, self.config_store)
         self.workspace_stack.addWidget(self.lab_shell)
         self.workspace_stack.setCurrentWidget(self.cloud_body)
 

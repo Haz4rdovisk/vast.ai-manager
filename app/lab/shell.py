@@ -36,12 +36,13 @@ class _Placeholder(QWidget):
 
 
 class LabShell(QWidget):
-    def __init__(self, config=None, parent=None):
+    def __init__(self, config=None, config_store=None, parent=None):
         super().__init__(parent)
         self.setObjectName("lab-shell")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.store = LabStore(self)
         self._config = config
+        self._config_store = config_store
         self._downloads: dict[str, DownloadWorker] = {}
 
         root = QHBoxLayout(self)
@@ -117,6 +118,7 @@ class LabShell(QWidget):
                        self.nav.set_active("benchmark"),
                        self._switch("benchmark")))
         self.library_view.model_detail_requested.connect(self._open_detail)
+        self.library_view.models_dir_changed.connect(self._persist_models_dir)
 
         # --- Overview view ---
         self.overview_view = OverviewView(self.store, self)
@@ -186,3 +188,8 @@ class LabShell(QWidget):
             self.library_view.rescan()
         elif not ok:
             QMessageBox.critical(self, "Download failed", msg or "Unknown error")
+
+    def _persist_models_dir(self, path: str):
+        if self._config_store is not None and self._config is not None:
+            self._config.models_dir = path
+            self._config_store.save(self._config)
