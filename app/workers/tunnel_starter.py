@@ -1,0 +1,173 @@
+from __future__ import annotations
+import time
+from PySide6.QtCore import QObject, Signal, Slot
+from app.services.vast_service import VastService
+from app.services.ssh_service import SSHService, wait_for_local_port, is_port_open
+from app.models import AppConfig, InstanceState, TunnelStatus
+
+
+# Total time budget for establishing a tunnel
+MAX_READY_WAIT_SECONDS = 180         # wait for instance to be "running" with ssh info
+SSH_PROBE_WAIT_SECONDS = 120         # wait for remote sshd to accept connections
+LOCAL_PORT_WAIT_SECONDS = 60         # wait for -L port to become available locally
+SSH_RETRY_ATTEMPTS = 60              # how many times to retry the ssh -L handshake (4 minutes total)
+
+
+class TunnelStarter(QObject):
+    status_changed = Signal(int, str, str)  # instance_id, TunnelStatus.value, message
+
+    def __init__(self, vast: VastService, ssh: SSHService, config: AppConfig):
+        super().__init__()
+        self.vast = vast
+        self.ssh = ssh
+        self.config = config
+
+    def _emit(self, iid: int, status: TunnelStatus, msg: str):
+        self.status_changed.emit(iid, status.value, msg)
+
+    @Slot(int, int)
+    def connect(self, instance_id: int, local_port: int):
+        self._emit(instance_id, TunnelStatus.CONNECTING,
+                   "Aguardando instância ficar pronta...")
+
+        # 1. Poll until RUNNING with ssh info
+        inst = self._wait_for_ready(instance_id)
+        if inst is None:
+            self._emit(instance_id, TunnelStatus.FAILED,
+                       "Timeout esperando instância ficar pronta")
+            return
+
+        host, port = inst.ssh_host, inst.ssh_port
+
+        # 2. Probe remote sshd until it responds cleanly
+        self._emit(instance_id, TunnelStatus.CONNECTING,
+                   f"Aguardando SSH de {host}:{port}...")
+        if not self._wait_for_remote_ssh(host, port):
+            self._emit(instance_id, TunnelStatus.FAILED,
+                       f"SSH remoto não respondeu em {SSH_PROBE_WAIT_SECONDS}s. "
+                       f"A instância pode ainda estar inicializando — tente novamente em instantes.")
+            return
+
+        # 3. Open tunnel with retries
+        self._emit(instance_id, TunnelStatus.CONNECTING,
+                   f"Estabelecendo túnel em {host}:{port}...")
+        last_err = ""
+        for attempt in range(1, SSH_RETRY_ATTEMPTS + 1):
+            try:
+                handle = self.ssh.start_tunnel(instance_id, host, port, local_port)
+            except FileNotFoundError:
+                self._emit(instance_id, TunnelStatus.FAILED,
+                           "SSH não encontrado. Instale o OpenSSH do Windows.")
+                return
+            except Exception as e:
+                self._emit(instance_id, TunnelStatus.FAILED, f"Falha ao iniciar SSH: {e}")
+                return
+
+            ok = wait_for_local_port(
+                local_port,
+                timeout=LOCAL_PORT_WAIT_SECONDS,
+                is_alive=handle.alive,
+            )
+            if ok:
+                self._emit(instance_id, TunnelStatus.CONNECTED,
+                           f"Conectado em 127.0.0.1:{local_port}")
+                
+                # 4. Handle initialization script if present
+                if self.config.on_connect_script:
+                    self._emit(instance_id, TunnelStatus.CONNECTED, "Roteando script de inicialização da GPU para o servidor...")
+                    success, output = self.ssh.run_script(host, port, self.config.on_connect_script)
+                    if success:
+                        self._emit(instance_id, TunnelStatus.CONNECTED, 
+                                   f"✓ Script Iniciado com Sucesso\n--- Resposta ---\n{output.strip()}\n--- Fim da Resposta ---")
+                    else:
+                        self._emit(instance_id, TunnelStatus.CONNECTED, 
+                                   f"⚠ Script reportou um erro\n--- Erro ---\n{output.strip()}\n--- Fim de Erro ---")
+                return
+
+            # Collect diagnostics and retry
+            last_err = self._read_stderr(handle)
+            self.ssh.stop_tunnel(instance_id)
+
+            err_lower = last_err.lower()
+            if "permission denied" in err_lower or "incorrect passphrase" in err_lower or "publickey" in err_lower:
+                break  # Fatal auth error, no point in retrying
+
+            if attempt < SSH_RETRY_ATTEMPTS:
+                if "connection closed by" in err_lower:
+                    msg = f"Aguardando servidor iniciar serviços internos ({attempt}/{SSH_RETRY_ATTEMPTS})..."
+                else:
+                    msg = f"Tentativa {attempt} falhou, aguardando... ({self._short(last_err)})"
+                    
+                self._emit(instance_id, TunnelStatus.CONNECTING, msg)
+                time.sleep(4)
+
+        hint = self._auth_hint(last_err)
+        self._emit(instance_id, TunnelStatus.FAILED,
+                   f"Não foi possível estabelecer o túnel. {self._short(last_err)}{hint}")
+
+    # ---------- helpers ----------
+
+    def _wait_for_ready(self, instance_id: int):
+        deadline = time.time() + MAX_READY_WAIT_SECONDS
+        last_state = None
+        while time.time() < deadline:
+            try:
+                all_instances = self.vast.list_instances()
+                inst = next((i for i in all_instances if i.id == instance_id), None)
+            except Exception as e:
+                self._emit(instance_id, TunnelStatus.CONNECTING, f"Verificando... ({e})")
+                time.sleep(4)
+                continue
+            if inst and inst.state != last_state:
+                last_state = inst.state
+                self._emit(instance_id, TunnelStatus.CONNECTING,
+                           f"Estado da instância: {inst.state.value}")
+            if (inst
+                    and inst.state == InstanceState.RUNNING
+                    and inst.ssh_host
+                    and inst.ssh_port):
+                return inst
+            time.sleep(3)
+        return None
+
+    def _wait_for_remote_ssh(self, host: str, port: int) -> bool:
+        deadline = time.time() + SSH_PROBE_WAIT_SECONDS
+        while time.time() < deadline:
+            if is_port_open(host, port, timeout=3.0):
+                # Port accepts TCP — give sshd a moment to be ready for real handshakes
+                time.sleep(2)
+                return True
+            time.sleep(3)
+        return False
+
+    @staticmethod
+    def _read_stderr(handle) -> str:
+        try:
+            if handle.process.stderr is None:
+                return ""
+            # Non-blocking: only read what's already available after process exit
+            if handle.process.poll() is not None:
+                return (handle.process.stderr.read() or "").strip()
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _auth_hint(msg: str) -> str:
+        low = (msg or "").lower()
+        if ("permission denied" in low
+                or "incorrect passphrase" in low
+                or "no such identity" in low
+                or "publickey" in low
+                or "host key verification failed" in low):
+            return (" → Parece problema de chave SSH. Verifique se sua chave pública "
+                    "está registrada em https://cloud.vast.ai/account/ e configure o "
+                    "caminho da chave privada em ⚙ Configurações.")
+        return ""
+
+    @staticmethod
+    def _short(msg: str) -> str:
+        if not msg:
+            return ""
+        msg = msg.replace("\r", " ").replace("\n", " ").strip()
+        return msg[:160]
