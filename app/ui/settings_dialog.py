@@ -110,6 +110,11 @@ class SettingsDialog(QDialog):
             auto_connect_on_activate=self.auto_connect_input.isChecked(),
             ssh_key_path=self.ssh_key_input.text().strip(),
             on_connect_script=self.on_connect_script_input.toPlainText().strip(),
+            # Preserve non-UI-exposed fields so saving doesn't reset them.
+            model_runner_template=self.config.model_runner_template,
+            include_storage_in_burn_rate=self.config.include_storage_in_burn_rate,
+            burn_rate_smoothing_window=self.config.burn_rate_smoothing_window,
+            estimated_network_cost_per_hour=self.config.estimated_network_cost_per_hour,
             schema_version=2,
         )
 

@@ -79,6 +79,7 @@ class AppConfig:
     terminal_preference: str = "auto"
     auto_connect_on_activate: bool = True
     ssh_key_path: str = ""
+    models_dir: str = ""   # local folder containing .gguf files for the Lab
     on_connect_script: str = ""
     model_runner_template: str = (
         "pkill -f \"llama-server\"\n"
@@ -97,4 +98,8 @@ class AppConfig:
         "  --no-warmup \\\n"
         "  > /tmp/llama-server.log 2>&1 &"
     )
+    # Phase 2: autonomy calculation tuning.
+    include_storage_in_burn_rate: bool = True
+    burn_rate_smoothing_window: int = 10
+    estimated_network_cost_per_hour: float = 0.0
     schema_version: int = 2

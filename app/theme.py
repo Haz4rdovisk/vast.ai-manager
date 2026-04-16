@@ -36,13 +36,23 @@ def temp_color(temp: float | None) -> str:
 
 
 def autonomy_color(hours: float | None) -> str:
+    """
+    Retorna a cor baseada no nível de autonomia.
+    
+    - CRITICAL (< 1h): Vermelho (DANGER)
+    - LOW (1-6h): Laranja (#ff9800)
+    - MEDIUM (6-24h): Amarelo (WARNING)
+    - GOOD (> 24h): Verde (SUCCESS)
+    """
     if hours is None:
         return TEXT_SECONDARY
     if hours > 24:
         return SUCCESS
     if hours > 6:
         return WARNING
-    return DANGER
+    if hours > 1:
+        return "#ff9800"  # Laranja para LOW (1-6h)
+    return DANGER  # CRITICAL (< 1h)
 
 
 STYLESHEET = f"""

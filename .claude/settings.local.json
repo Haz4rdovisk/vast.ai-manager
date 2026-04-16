@@ -14,7 +14,27 @@
       "Bash(/c/Python314/python.exe -m pytest tests/ -q)",
       "Bash(/c/Python314/python.exe -c \"from app.ui.main_window import MainWindow; from app.ui.model_manager_dialog import ModelManagerDialog; from app.workers.llama_probe import LlamaReadyProbe; print\\('imports ok'\\)\")",
       "Bash(/c/Python314/python.exe -c \"from app.ui.model_manager_dialog import ModelManagerDialog; print\\('ok'\\)\")",
-      "Bash(/c/Python314/python.exe -c \"from app.ui.main_window import MainWindow; from app.workers.live_metrics import LiveMetricsWorker, _parse_block; print\\('ok'\\)\")"
+      "Bash(/c/Python314/python.exe -c \"from app.ui.main_window import MainWindow; from app.workers.live_metrics import LiveMetricsWorker, _parse_block; print\\('ok'\\)\")",
+      "Bash(python -m pytest tests/test_billing.py -q)",
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest -q --no-header)",
+      "Bash(python -c ' *)",
+      "Bash(python)",
+      "Bash(git -C \"/c/Users/Pc_Lu/Desktop/vastai-app\" log --oneline -15)",
+      "Bash(pip install *)",
+      "Bash(python -c \"import app.lab, app.lab.components, app.lab.services, app.lab.workers, app.lab.state, app.lab.views, app.lab.assets; print\\('OK'\\)\")",
+      "Bash(python -c \"from app.lab.theme import STYLESHEET, ACCENT; assert '#7C5CFF' in ACCENT; print\\('OK'\\)\")",
+      "Bash(python -c \"from app.lab.components.primitives import GlassCard, MetricTile, StatusPill, HealthDot, KeyValueRow, SectionHeader; print\\('OK'\\)\")",
+      "Bash(python -u -m pytest tests/lab/test_store.py -v)",
+      "Bash(python -c \"from app.ui.main_window import MainWindow; from app.lab.shell import LabShell; print\\('OK'\\)\")",
+      "Bash(python -u -m pytest -q)",
+      "Bash(python -u -m pytest tests/ -q)",
+      "Bash(python -u -m pytest tests/lab/ -q)",
+      "Bash(ls C:\\\\\\\\Users\\\\\\\\Pc_Lu\\\\\\\\Desktop\\\\\\\\vastai-app\\\\\\\\app\\\\\\\\lab\\\\\\\\services C:\\\\\\\\Users\\\\\\\\Pc_Lu\\\\\\\\Desktop\\\\\\\\vastai-app\\\\\\\\app\\\\\\\\lab\\\\\\\\workers C:\\\\\\\\Users\\\\\\\\Pc_Lu\\\\\\\\Desktop\\\\\\\\vastai-app\\\\\\\\app\\\\\\\\lab\\\\\\\\views C:\\\\\\\\Users\\\\\\\\Pc_Lu\\\\\\\\Desktop\\\\\\\\vastai-app\\\\\\\\tests\\\\\\\\lab)",
+      "Bash(cd C:\\\\\\\\Users\\\\\\\\Pc_Lu\\\\\\\\Desktop\\\\\\\\vastai-app)",
+      "Bash(python -u -m pytest tests/lab/test_runtime_parser.py -v)",
+      "Bash(python -u -m pytest tests/lab/test_gguf_parser.py -v)",
+      "Bash(python -u -m pytest tests/lab/test_library.py -v)"
     ]
   }
 }
