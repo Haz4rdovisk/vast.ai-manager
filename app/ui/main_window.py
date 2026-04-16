@@ -4,7 +4,9 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QMessageBox, QComboBox, QInputDialog, QLineEdit,
+    QStackedWidget,
 )
+from app.lab.shell import LabShell
 from app.config import ConfigStore
 from app.models import AppConfig, Instance, InstanceState, TunnelStatus, UserInfo
 from app.services.vast_service import VastService
@@ -78,7 +80,36 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
+
+        # Top-level shell around the existing Cloud UI + the new Lab.
+        shell_root = QVBoxLayout(central)
+        shell_root.setContentsMargins(0, 0, 0, 0)
+        shell_root.setSpacing(0)
+
+        toggle_bar = QWidget()
+        toggle_bar.setFixedHeight(44)
+        tb = QHBoxLayout(toggle_bar)
+        tb.setContentsMargins(16, 6, 16, 6)
+        self.toggle_cloud_btn = QPushButton("\u2601  Cloud")
+        self.toggle_lab_btn = QPushButton("\u2726  Lab")
+        for b in (self.toggle_cloud_btn, self.toggle_lab_btn):
+            b.setObjectName("secondary")
+            b.setCheckable(True)
+            b.setFixedHeight(30)
+        self.toggle_cloud_btn.setChecked(True)
+        self.toggle_cloud_btn.clicked.connect(lambda: self._switch_workspace("cloud"))
+        self.toggle_lab_btn.clicked.connect(lambda: self._switch_workspace("lab"))
+        tb.addStretch()
+        tb.addWidget(self.toggle_cloud_btn)
+        tb.addWidget(self.toggle_lab_btn)
+        tb.addStretch()
+        shell_root.addWidget(toggle_bar)
+
+        self.workspace_stack = QStackedWidget()
+        self.cloud_body = QWidget()
+        shell_root.addWidget(self.workspace_stack, 1)
+
+        root = QVBoxLayout(self.cloud_body)
         root.setContentsMargins(22, 22, 22, 22)
         root.setSpacing(16)
 
@@ -112,7 +143,7 @@ class MainWindow(QMainWindow):
         root.addLayout(top_bar)
 
         # Billing header
-        self.billing = BillingHeader()
+        self.billing = BillingHeader(config=self.config)
         root.addWidget(self.billing)
 
         # Scrollable instance list
@@ -139,6 +170,22 @@ class MainWindow(QMainWindow):
         # Auto-refresh timer
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self._on_timer_tick)
+
+        # Register Cloud body + Lab shell in the workspace stack.
+        self.workspace_stack.addWidget(self.cloud_body)
+        self.lab_shell = LabShell(self.config)
+        self.workspace_stack.addWidget(self.lab_shell)
+        self.workspace_stack.setCurrentWidget(self.cloud_body)
+
+    def _switch_workspace(self, key: str):
+        if key == "cloud":
+            self.workspace_stack.setCurrentWidget(self.cloud_body)
+            self.toggle_cloud_btn.setChecked(True)
+            self.toggle_lab_btn.setChecked(False)
+        else:
+            self.workspace_stack.setCurrentWidget(self.lab_shell)
+            self.toggle_cloud_btn.setChecked(False)
+            self.toggle_lab_btn.setChecked(True)
 
     # ---------- Workers bootstrap ----------
 
@@ -224,6 +271,7 @@ class MainWindow(QMainWindow):
         self.config = cfg
         self.config_store.save(cfg)
         self.ssh.ssh_key_path = cfg.ssh_key_path
+        self.billing.apply_config(cfg)
         self.log.log("Configurações salvas.")
         # Sync combo to new interval
         idx_map = {5: 0, 10: 1, 30: 2, 60: 3, 0: 4}
