@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
 
         # Register Cloud body + Lab shell in the workspace stack.
         self.workspace_stack.addWidget(self.cloud_body)
-        self.lab_shell = LabShell(self.config, self.config_store)
+        self.lab_shell = LabShell(self.config, self.config_store, self.ssh)
         self.workspace_stack.addWidget(self.lab_shell)
         self.workspace_stack.setCurrentWidget(self.cloud_body)
 
@@ -432,15 +432,15 @@ class MainWindow(QMainWindow):
         if not inst:
             Toast(self, "Instância não encontrada para gerenciar modelos.", "error")
             return
-
-        dlg = ModelManagerDialog(inst, self.ssh, self.config, self.config_store, self)
-        dlg.deploy_status.connect(self._on_deploy_status)
-        # Track open dialog so we can mirror probe progress while it's visible.
-        self._open_model_dialogs[iid] = dlg
-        try:
-            dlg.exec()
-        finally:
-            self._open_model_dialogs.pop(iid, None)
+        if not inst.ssh_host or not inst.ssh_port:
+            Toast(self, "Instância sem SSH disponível.", "warning")
+            return
+        # Switch to Lab workspace with this instance selected
+        self._switch_workspace("lab")
+        self.lab_shell.select_instance(
+            iid, inst.gpu_name or "",
+            inst.ssh_host, inst.ssh_port,
+        )
 
     @Slot(int, str, str)
     def _on_deploy_status(self, iid: int, kind: str, msg: str):
@@ -468,27 +468,17 @@ class MainWindow(QMainWindow):
             probe.wait(2000)
 
     def _on_llama_progress(self, iid: int, elapsed: int, hint: str):
-        # Mirror to dialog if open
-        dlg = self._open_model_dialogs.get(iid)
-        if dlg is not None:
-            dlg.on_external_progress(elapsed, hint)
         # Throttled log: every 15s
         if elapsed > 0 and elapsed % 15 == 0:
             self.log.log(f"ModelManager #{iid}: ⏳ carregando modelo... {elapsed}s")
 
     def _on_llama_ready(self, iid: int, model_id: str):
         self._stop_llama_probe(iid)
-        dlg = self._open_model_dialogs.get(iid)
-        if dlg is not None:
-            dlg.on_external_ready(model_id)
         self.log.log(f"ModelManager #{iid}: ✓ modelo pronto — {model_id}")
         Toast(self, f"Modelo carregado: {model_id}", "success", duration_ms=4000)
 
     def _on_llama_failed(self, iid: int, reason: str):
         self._stop_llama_probe(iid)
-        dlg = self._open_model_dialogs.get(iid)
-        if dlg is not None:
-            dlg.on_external_failed(reason)
         self.log.log(f"ModelManager #{iid}: ✗ {reason}")
         Toast(self, "Modelo não respondeu. Veja o log.", "error", duration_ms=5000)
 

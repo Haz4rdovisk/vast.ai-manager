@@ -1,4 +1,4 @@
-"""Plain dataclasses for the Lab state tree. No Qt. Serializable via asdict."""
+"""Plain dataclasses for the Lab V2 state tree — remote-instance-first."""
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
@@ -7,87 +7,90 @@ HealthLevel = Literal["ok", "warn", "err", "info", "unknown"]
 
 
 @dataclass
-class GPUInfo:
+class RemoteGPU:
     name: str
-    vram_total_gb: float
-    driver: str | None = None
-    cuda_capable: bool = False
+    vram_gb: float | None = None
 
 
 @dataclass
-class HardwareSpec:
-    os_name: str = ""
-    os_version: str = ""
+class RemoteSystem:
+    """Hardware info from LLMfit /api/v1/system or SSH probing."""
     cpu_name: str = ""
-    cpu_cores_physical: int = 0
-    cpu_cores_logical: int = 0
+    cpu_cores: int = 0
     ram_total_gb: float = 0.0
     ram_available_gb: float = 0.0
-    disk_total_gb: float = 0.0
-    disk_free_gb: float = 0.0
-    gpus: list[GPUInfo] = field(default_factory=list)
-    # Best-guess backend label: "cuda", "rocm", "metal", "cpu".
-    best_backend: str = "cpu"
+    has_gpu: bool = False
+    gpu_name: str | None = None
+    gpu_vram_gb: float | None = None
+    gpu_count: int = 0
+    backend: str = ""
+    gpus: list[RemoteGPU] = field(default_factory=list)
 
 
 @dataclass
-class RuntimeStatus:
-    installed: bool = False
-    version: str | None = None
-    binary_path: str | None = None
-    backend: str | None = None     # "cuda"|"cpu"|...
-    validated: bool = False
-    error: str | None = None
-
-
-@dataclass
-class ModelFile:
-    path: str
-    name: str               # display name ("Qwen2.5-7B-Instruct-Q4_K_M")
-    size_bytes: int
-    architecture: str = ""  # from GGUF header ("llama", "qwen2", ...)
-    param_count_b: float = 0.0
+class RemoteModel:
+    """A model recommendation from LLMfit /api/v1/models."""
+    name: str
+    provider: str = ""
+    parameter_count: str = ""
+    params_b: float = 0.0
     context_length: int = 0
-    quant: str = ""         # "Q4_K_M", "Q8_0", ...
-    valid: bool = True
-    error: str | None = None
+    use_case: str = ""
+    category: str = ""
+    fit_level: str = ""          # "perfect"|"good"|"marginal"|"too_tight"
+    fit_label: str = ""
+    run_mode: str = ""           # "gpu"|"cpu"|"partial"
+    score: float = 0.0
+    score_components: dict = field(default_factory=dict)
+    estimated_tps: float = 0.0
+    runtime: str = ""
+    runtime_label: str = ""
+    best_quant: str = ""
+    memory_required_gb: float = 0.0
+    memory_available_gb: float = 0.0
+    utilization_pct: float = 0.0
+    notes: list[str] = field(default_factory=list)
+    gguf_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
-class CatalogEntry:
-    id: str                   # stable key, e.g. "qwen2.5-7b-instruct-q4km"
-    family: str               # "Qwen2.5"
-    display_name: str
-    params_b: float
-    quant: str
-    repo_id: str              # HF repo
-    filename: str             # GGUF filename in repo
-    approx_size_gb: float
-    approx_vram_gb: float     # full GPU offload
-    approx_ram_gb: float      # full CPU
-    context_length: int
-    use_cases: list[str] = field(default_factory=list)  # ["coding","chat","long_context"]
-    quality_tier: int = 3     # 1..5
-    notes: str = ""
+class RemoteGGUF:
+    """A GGUF file found on the remote instance."""
+    path: str
+    filename: str
+    size_bytes: int = 0
+    size_display: str = ""
 
 
 @dataclass
-class Recommendation:
-    entry: CatalogEntry
-    fit: Literal["excellent", "good", "tight", "not_recommended"]
-    score: float
-    reasons: list[str] = field(default_factory=list)
+class SetupStatus:
+    """Tracks what's installed on the remote instance."""
+    llmfit_installed: bool = False
+    llmfit_serving: bool = False
+    llamacpp_installed: bool = False
+    llamacpp_path: str = ""
+    llama_server_running: bool = False
+    llama_server_model: str = ""
+    model_count: int = 0
+    probed: bool = False        # True after first probe completes
 
 
 @dataclass
-class BenchmarkResult:
-    model_name: str
-    timestamp: float
-    tokens_per_sec: float
-    ttft_ms: float
-    prompt_eval_tok_per_sec: float
-    ram_peak_gb: float | None = None
-    vram_peak_gb: float | None = None
+class ServerParams:
+    """Full llama-server parameter configuration."""
+    model_path: str = ""
+    context_length: int = 4096
+    gpu_layers: int = 99
+    threads: int = 0               # 0 = auto
+    batch_size: int = 512
+    parallel_requests: int = 1
+    repeat_penalty: float = 1.10
+    host: str = "127.0.0.1"
+    port: int = 11434
+    flash_attention: bool = True
+    kv_cache_type: str = "bf16"    # bf16|f16|q8_0|q4_0
+    extra_args: str = ""
+    no_warmup: bool = True
 
 
 @dataclass
@@ -96,4 +99,4 @@ class DiagnosticsItem:
     level: HealthLevel
     title: str
     detail: str
-    fix_action: str | None = None   # handler key, e.g. "install_runtime"
+    fix_action: str | None = None

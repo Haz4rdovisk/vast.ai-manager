@@ -1,4 +1,4 @@
-"""Left nav rail for the Lab. Emits `selected(key)` on button click."""
+"""Left nav rail for the Lab V2. Emits `selected(key)` on button click."""
 from __future__ import annotations
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QPushButton, QLabel
 from PySide6.QtCore import Signal, Qt
@@ -6,13 +6,11 @@ from app.lab import theme as t
 
 
 NAV_ITEMS = [
-    ("overview",    "Overview",    "\u25C8"),
-    ("machine",     "Machine",     "\u25A3"),
-    ("runtime",     "Runtime",     "\u25E7"),
-    ("discover",    "Discover",    "\u2726"),
-    ("library",     "Library",     "\u25A4"),
-    ("benchmark",   "Benchmark",   "\u25F4"),
-    ("diagnostics", "Diagnostics", "\u25C9"),
+    ("dashboard",  "Dashboard",    "\u25C8"),
+    ("discover",   "Discover",     "\u2726"),
+    ("models",     "Models",       "\u25A4"),
+    ("configure",  "Configure",    "\u2699"),
+    ("monitor",    "Monitor",      "\u25F4"),
 ]
 
 
@@ -27,7 +25,7 @@ class NavRail(QFrame):
         lay.setContentsMargins(t.SPACE_4, t.SPACE_5, t.SPACE_3, t.SPACE_4)
         lay.setSpacing(2)
 
-        brand = QLabel("LOCAL AI LAB")
+        brand = QLabel("\u2726  AI LAB")
         brand.setStyleSheet(
             f"color: {t.TEXT_HI}; font-weight: 800; letter-spacing: 2px;"
             f" font-size: 10pt; padding: 4px 8px 20px 8px;"
@@ -46,12 +44,12 @@ class NavRail(QFrame):
 
         lay.addStretch()
 
-        foot = QLabel("llama.cpp \u2022 local inference")
+        foot = QLabel("Vast.ai \u2022 remote inference")
         foot.setAlignment(Qt.AlignCenter)
         foot.setStyleSheet(f"color: {t.TEXT_LOW}; font-size: 8pt; padding: 8px;")
         lay.addWidget(foot)
 
-        self.set_active("overview")
+        self.set_active("dashboard")
 
     def _on_click(self, key: str):
         self.set_active(key)

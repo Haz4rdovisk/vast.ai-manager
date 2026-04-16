@@ -1,89 +1,155 @@
-"""Discover view \u2014 filterable list of catalog recommendations ranked for the
-current hardware. Drives the Download flow."""
+"""Discover view \u2014 LLMfit-powered model recommendations from the remote instance."""
 from __future__ import annotations
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QScrollArea, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
+    QScrollArea, QPushButton, QLineEdit,
 )
 from PySide6.QtCore import Signal
 from app.lab import theme as t
-from app.lab.components.primitives import SectionHeader
-from app.lab.components.recommendation_card import RecommendationCard
-from app.lab.services.catalog import load_catalog
-from app.lab.services.recommender import recommend
-from app.lab.state.store import LabStore
+from app.lab.components.primitives import GlassCard, SectionHeader, StatusPill
 
+
+_FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err"}
 
 USE_CASES = [
-    ("all", "All models"),
-    ("chat", "Chat"),
-    ("coding", "Coding"),
-    ("quality", "Best quality"),
-    ("fast", "Fastest"),
-    ("long_context", "Long context"),
-    ("low_ram", "Low RAM"),
+    ("all", "All"), ("general", "General"), ("coding", "Coding"),
+    ("reasoning", "Reasoning"), ("chat", "Chat"),
+    ("multimodal", "Multimodal"), ("embedding", "Embedding"),
 ]
 
 
 class DiscoverView(QWidget):
-    install_requested = Signal(str)   # catalog entry id
+    download_requested = Signal(str, str)  # model name, best_quant
+    refresh_requested = Signal(str, str)   # use_case, search
 
-    def __init__(self, store: LabStore, parent=None):
+    def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
-        self.store.set_catalog(load_catalog())
 
         root = QVBoxLayout(self)
         root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
         root.setSpacing(t.SPACE_5)
 
         head = QHBoxLayout()
-        head.addWidget(SectionHeader("CATALOG", "Discover"))
+        head.addWidget(SectionHeader("LLMFIT", "Discover Models"))
         head.addStretch()
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search models...")
+        self.search_input.setFixedWidth(200)
+        self.search_input.returnPressed.connect(self._refresh)
+        head.addWidget(self.search_input)
+
         self.filter = QComboBox()
         for key, label in USE_CASES:
             self.filter.addItem(label, key)
-        self.filter.currentIndexChanged.connect(lambda _: self._rerank())
+        self.filter.currentIndexChanged.connect(lambda _: self._refresh())
         head.addWidget(self.filter)
+
+        self.refresh_btn = QPushButton("\u21BB")
+        self.refresh_btn.setFixedWidth(36)
+        self.refresh_btn.clicked.connect(self._refresh)
+        head.addWidget(self.refresh_btn)
         root.addLayout(head)
 
+        # Status
+        self.status_lbl = QLabel("LLMfit must be running on the instance. Go to Dashboard \u2192 Setup.")
+        self.status_lbl.setProperty("role", "muted")
+        self.status_lbl.setWordWrap(True)
+        root.addWidget(self.status_lbl)
+
+        # Model list scroll
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.list_host = QWidget()
         self.list_lay = QVBoxLayout(self.list_host)
         self.list_lay.setContentsMargins(0, 0, 0, 0)
-        self.list_lay.setSpacing(t.SPACE_4)
+        self.list_lay.setSpacing(t.SPACE_3)
         self.scroll.setWidget(self.list_host)
         root.addWidget(self.scroll, 1)
 
-        self.store.hardware_changed.connect(lambda _: self._rerank())
-        self.store.catalog_changed.connect(lambda _: self._rerank())
-        self._cards: dict[str, RecommendationCard] = {}
-        self._rerank()
+        self.store.remote_models_changed.connect(self._render)
+        self.store.setup_status_changed.connect(self._update_status)
 
-    def _rerank(self):
-        use_case = self.filter.currentData()
-        uc = None if use_case == "all" else use_case
-        recs = recommend(self.store.hardware, self.store.catalog, uc)
-        self.store.set_recommendations(recs)
+    def _refresh(self):
+        uc = self.filter.currentData() or "all"
+        search = self.search_input.text().strip()
+        self.refresh_requested.emit(uc, search)
 
+    def _update_status(self, s):
+        if s.llmfit_serving:
+            self.status_lbl.setText(f"LLMfit active \u2714  \u00b7  Showing models ranked for this instance's hardware.")
+            self.status_lbl.setStyleSheet(f"color: {t.OK};")
+        else:
+            self.status_lbl.setText("LLMfit not running. Go to Dashboard \u2192 Setup first.")
+            self.status_lbl.setStyleSheet(f"color: {t.WARN};")
+
+    def _render(self, models):
         while self.list_lay.count():
             w = self.list_lay.takeAt(0).widget()
             if w:
                 w.deleteLater()
-        self._cards = {}
-        for r in recs:
-            card = RecommendationCard(r)
-            card.install_requested.connect(self.install_requested.emit)
+
+        if not models:
+            lbl = QLabel("No models found. Try a different filter or install LLMfit first.")
+            lbl.setProperty("role", "muted")
+            self.list_lay.addWidget(lbl)
+            self.list_lay.addStretch()
+            return
+
+        for m in models:
+            card = GlassCard()
+            # Header row: name + fit pill
+            header = QHBoxLayout()
+            title = QLabel(m.name)
+            title.setProperty("role", "title")
+            header.addWidget(title)
+            header.addStretch()
+            level = _FIT_LEVEL.get(m.fit_level, "info")
+            header.addWidget(StatusPill(m.fit_label or m.fit_level.upper(), level))
+            card.body().addLayout(header)
+
+            # Meta row
+            meta_parts = []
+            if m.provider:
+                meta_parts.append(m.provider)
+            meta_parts.append(f"{m.params_b:.1f}B")
+            if m.best_quant:
+                meta_parts.append(m.best_quant)
+            if m.use_case:
+                meta_parts.append(m.use_case)
+            if m.estimated_tps:
+                meta_parts.append(f"~{m.estimated_tps:.0f} tok/s")
+            if m.memory_required_gb:
+                meta_parts.append(f"~{m.memory_required_gb:.1f} GB")
+            meta = QLabel("  \u00b7  ".join(meta_parts))
+            meta.setProperty("role", "muted")
+            card.body().addWidget(meta)
+
+            # Score bar
+            score_row = QHBoxLayout()
+            score_lbl = QLabel(f"Score: {m.score:.0f}")
+            score_lbl.setStyleSheet(f"color: {t.ACCENT}; font-weight: bold;")
+            score_row.addWidget(score_lbl)
+
+            if m.run_mode:
+                run = QLabel(f"Run: {m.run_mode.upper()}")
+                run.setProperty("role", "muted")
+                score_row.addWidget(run)
+
+            score_row.addStretch()
+
+            # Download button
+            dl_btn = QPushButton("Download to Instance")
+            dl_btn.setEnabled(m.fit_level != "too_tight")
+            dl_btn.clicked.connect(
+                lambda _=False, name=m.name, q=m.best_quant:
+                    self.download_requested.emit(name, q))
+            score_row.addWidget(dl_btn)
+            card.body().addLayout(score_row)
+
             self.list_lay.addWidget(card)
-            self._cards[r.entry.id] = card
+
         self.list_lay.addStretch()
-
-    def on_progress(self, entry_id: str, d: int, total: int, speed: float):
-        card = self._cards.get(entry_id)
-        if card and hasattr(card, 'set_progress'):
-            card.set_progress(d, total, speed)
-
-    def on_install_result(self, entry_id: str, ok: bool):
-        card = self._cards.get(entry_id)
-        if card and hasattr(card, 'set_install_state'):
-            card.set_install_state("done" if ok else "failed")
+        self.status_lbl.setText(f"{len(models)} models ranked for this instance.")
+        self.status_lbl.setStyleSheet(f"color: {t.OK};")
