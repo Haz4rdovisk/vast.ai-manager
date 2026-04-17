@@ -12,7 +12,8 @@ from app.workers.tunnel_starter import TunnelStarter
 from app.workers.live_metrics import LiveMetricsWorker
 from app.workers.model_watcher import ModelWatcher
 from app.workers.llama_probe import LlamaReadyProbe
-from app.billing import DailySpendTracker
+from app.billing import DailySpendTracker, burn_rate_breakdown
+from app.analytics_store import AnalyticsStore, CostSnapshot
 
 
 class AppController(QObject):
@@ -40,12 +41,14 @@ class AppController(QObject):
         self.vast: VastService | None = None
         self.ssh = SSHService(ssh_key_path=self.config.ssh_key_path)
         self.tracker = DailySpendTracker()
+        self.analytics_store = AnalyticsStore()
 
         self.last_instances: list[Instance] = []
         self.last_user: UserInfo | None = None
         self.tunnel_states: dict[int, TunnelStatus] = {}
 
         self._pending_start: set[int] = set()
+        self._force_next_backfill = False
         self._pending_stop:  set[int] = set()
         self._pending_tunnel:set[int] = set()
 
@@ -66,7 +69,9 @@ class AppController(QObject):
 
     # ---- Convenience ----
     def today_spend(self) -> float:
-        return self.tracker.today_spend()
+        """Real persistent today spend from analytics store."""
+        stored = self.analytics_store.today_spend()
+        return stored if stored > 0 else self.tracker.today_spend()
 
     # ---- Lifecycle ----
     def bootstrap(self):
@@ -169,10 +174,57 @@ class AppController(QObject):
                     self.tunnel_states[inst.id] = TunnelStatus.DISCONNECTED
                     self.tunnel_status_changed.emit(inst.id, TunnelStatus.DISCONNECTED, "instance-not-running")
 
+        # Log cost snapshot for persistent analytics
+        self._log_analytics_snapshot(instances, user, force_backfill=self._force_next_backfill)
+        self._force_next_backfill = False # Reset flag
+
         self._check_tunnels_health()
         self._sync_live_workers(instances)
         self.log_line.emit(f"✓ Dados sincronizados ({len(instances)} instâncias)")
         self.instances_refreshed.emit(instances, user)
+
+    def _log_analytics_snapshot(self, instances: list, user, force_backfill: bool = False):
+        """Persist a cost snapshot for the analytics dashboard."""
+        if not user:
+            self.log_line.emit("⌛ Aguardando dados do usuário para snapshot...")
+            return
+
+        # 1. Backfill history IF store is almost empty OR requested (Sync Now)
+        if self.analytics_store.entry_count < 2 or force_backfill:
+            try:
+                self.log_line.emit("⌛ Reconstruindo histórico (Invoices + Charges)...")
+                fin_data = self.vast.fetch_financial_data()
+                
+                # Combine both data streams for a complete forensic reconstruction
+                self.analytics_store.import_history(
+                    invoices=fin_data.get("invoices", []),
+                    charges=fin_data.get("charges", []),
+                    current_balance=user.balance
+                )
+                
+                count = len(fin_data.get("invoices", [])) + len(fin_data.get("charges", []))
+                self.log_line.emit(f"✓ Histórico reconstruído ({count} registros)")
+            except Exception as e:
+                self.log_line.emit(f"⚠ Falha ao importar histórico: {str(e)}")
+
+        from datetime import datetime
+        cfg = self.config
+        bd = burn_rate_breakdown(
+            instances,
+            include_storage=cfg.include_storage_in_burn_rate,
+            estimated_network_cost_per_hour=cfg.estimated_network_cost_per_hour,
+        )
+        snap = CostSnapshot(
+            ts=datetime.now().isoformat(timespec="seconds"),
+            balance=user.balance,
+            burn_total=bd["total"],
+            burn_gpu=bd["gpu"],
+            burn_storage=bd["storage"],
+            burn_network=bd["network"],
+            instances=bd["instances"],
+        )
+        self.log_line.emit(f"📊 Gravando snapshot (Saldo: ${user.balance:.2f}, Gasto: ${bd['total']:.3f}/h)")
+        self.analytics_store.log_snapshot(snap)
 
     def _on_refresh_failed(self, kind: str, message: str):
         self.log_line.emit(f"✗ Erro ao sincronizar: {message}")
@@ -183,6 +235,11 @@ class AppController(QObject):
             self.toast_requested.emit("Sem conexão com Vast.ai", "warning", 3000)
         else:
             self.toast_requested.emit(f"Falha: {message[:80]}", "error", 3000)
+
+    def request_deep_sync(self):
+        """Force a deep history scan on the next refresh."""
+        self._force_next_backfill = True
+        self._trigger_refresh.emit()
 
     # ---- Actions ----
     def _find_instance(self, iid: int) -> Instance | None:

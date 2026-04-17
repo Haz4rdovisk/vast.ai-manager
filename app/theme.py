@@ -1,46 +1,81 @@
-"""Unified design system for Vast.ai Manager. One theme for the whole app —
-scoped stylesheets and per-workspace QSS are gone."""
+"""Unified design system for Vast.ai Manager — Premium Black Glassmorphism.
+All design tokens, color helpers, and the global QSS live here."""
 from __future__ import annotations
 
-# ---- Surfaces ----------------------------------------------------------------
-BG_DEEP    = "#07090D"
-BG_BASE    = "#0C1016"
-SURFACE_1  = "#141922"
-SURFACE_2  = "#1C2330"
-SURFACE_3  = "#262F3F"
-BORDER_LOW = "#1B2230"
-BORDER_MED = "#2A3345"
-BORDER_HI  = "#3B4662"
+# ━━ Surfaces ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BG_VOID    = "#030508"
+BG_DEEP    = "#070A0F"
+BG_BASE    = "#0B0F17"
 
-# ---- Typography --------------------------------------------------------------
-TEXT_HI  = "#F1F4FA"
-TEXT     = "#C7CEDC"
-TEXT_MID = "#8891A6"
-TEXT_LOW = "#5A6277"
+# Glass surfaces — rgba for conceptual reference; QSS uses solid fallbacks.
+# Actual glass blur is handled via QPainter overrides in components.
+SURFACE_1       = "#0F141E"          # card (solid fallback)
+SURFACE_2       = "#161C2A"          # raised card
+SURFACE_3       = "#1E2637"          # inputs / recessed
+GLASS_HOVER     = "#283246"          # hover overlay
+
+SURFACE_1_RGBA  = "rgba(15, 20, 30, 0.65)"
+SURFACE_2_RGBA  = "rgba(22, 28, 42, 0.55)"
+SURFACE_3_RGBA  = "rgba(30, 38, 55, 0.50)"
+
+# ━━ Borders ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BORDER_GLOW = "rgba(124, 92, 255, 0.15)"
+BORDER_LOW  = "rgba(255,255,255, 0.04)"
+BORDER_MED  = "rgba(255,255,255, 0.08)"
+BORDER_HI   = "rgba(255,255,255, 0.14)"
+
+# ━━ Typography ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEXT_HERO = "#FFFFFF"
+TEXT_HI   = "#F1F4FA"
+TEXT      = "#C7CEDC"
+TEXT_MID  = "#6B7590"
+TEXT_LOW  = "#3D4560"
 
 FONT_DISPLAY = "Inter, 'Segoe UI Variable', 'Segoe UI', sans-serif"
 FONT_MONO    = "'JetBrains Mono', Consolas, 'Courier New', monospace"
 
-# ---- Accent + status ---------------------------------------------------------
+FONT_SIZE_DISPLAY = 28   # page titles
+FONT_SIZE_TITLE   = 16   # card titles
+FONT_SIZE_BODY    = 14   # body text
+FONT_SIZE_LABEL   = 11   # labels (uppercase, tracking 1.5px)
+FONT_SIZE_SMALL   = 12   # secondary
+FONT_SIZE_MONO    = 13   # code / values
+
+# ━━ Accent + Status ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ACCENT      = "#7C5CFF"
 ACCENT_HI   = "#9B83FF"
-ACCENT_GLOW = "rgba(124, 92, 255, 0.35)"
+ACCENT_SOFT = "#B3A0FF"
+ACCENT_GLOW = "rgba(124, 92, 255, 0.25)"
+ACCENT_END  = "#5A8AFF"       # gradient endpoint
 
 OK   = "#3BD488"
 WARN = "#F4B740"
 ERR  = "#F0556A"
 INFO = "#4EA8FF"
-LIVE = "#19C37D"  # "alive / tunneled" indicator
+LIVE = "#19C37D"
 
-# ---- Geometry ----------------------------------------------------------------
-RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_XL = 6, 10, 14, 20
-SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6, SPACE_7 = 4, 8, 12, 16, 24, 32, 48
+# ━━ Geometry ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_XL, RADIUS_PILL = 8, 12, 16, 24, 999
+SPACE_1, SPACE_2, SPACE_3, SPACE_4 = 4, 8, 12, 16
+SPACE_5, SPACE_6, SPACE_7, SPACE_8 = 24, 32, 48, 64
 
 TITLEBAR_HEIGHT = 38
-TITLEBAR_BG = BG_BASE
+TITLEBAR_BG     = "transparent"
+
+# ━━ Animation durations (ms) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ANIM_FAST   = 150
+ANIM_NORMAL = 250
+ANIM_SLOW   = 400
+ANIM_GAUGE  = 800
+
+# ━━ Shadow tokens (descriptive, for QPainter helpers) ━━━━━━━━━━━━━━━━━━━━━━━
+SHADOW_BLUR_SM  = 8
+SHADOW_BLUR_MD  = 32
+SHADOW_BLUR_LG  = 48
+SHADOW_OFFSET_Y = 8
 
 
-# ---- Semantic color helpers --------------------------------------------------
+# ━━ Color helpers ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def metric_color(percent: float | None) -> str:
     if percent is None:
         return TEXT_MID
@@ -62,8 +97,7 @@ def temp_color(temp: float | None) -> str:
 
 
 def autonomy_color(hours: float | None) -> str:
-    """4-tier scale preserved from the pre-migration theme:
-    <1h = CRITICAL, 1-6h = LOW, 6-24h = MEDIUM, >24h = GOOD."""
+    """4-tier scale: <1h CRITICAL, 1-6h LOW, 6-24h MEDIUM, >24h GOOD."""
     if hours is None:
         return TEXT_MID
     if hours > 24:
@@ -76,64 +110,88 @@ def autonomy_color(hours: float | None) -> str:
 
 
 def health_color(level: str) -> str:
-    return {"ok": OK, "warn": WARN, "err": ERR, "info": INFO, "live": LIVE}.get(level, TEXT_MID)
+    return {
+        "ok": OK, "warn": WARN, "err": ERR,
+        "info": INFO, "live": LIVE, "unknown": TEXT_MID,
+    }.get(level, TEXT_MID)
 
 
-# ---- Global stylesheet -------------------------------------------------------
+# ━━ Global stylesheet ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STYLESHEET = f"""
+/* ── Base ──────────────────────────────────────────────────────────────── */
 QMainWindow, QDialog, QWidget#app-shell {{
     background-color: {BG_DEEP};
     color: {TEXT};
     font-family: {FONT_DISPLAY};
-    font-size: 10pt;
+    font-size: {FONT_SIZE_BODY}px;
 }}
 QWidget {{ color: {TEXT}; }}
+
+/* ── Labels ────────────────────────────────────────────────────────────── */
 QLabel {{ background: transparent; color: {TEXT}; }}
 QLabel[role="display"] {{
-    color: {TEXT_HI};
-    font-size: 22pt;
+    color: {TEXT_HERO};
+    font-size: {FONT_SIZE_DISPLAY}px;
     font-weight: 700;
     letter-spacing: -0.5px;
 }}
 QLabel[role="title"] {{
     color: {TEXT_HI};
-    font-size: 14pt;
+    font-size: {FONT_SIZE_TITLE}px;
     font-weight: 600;
 }}
 QLabel[role="section"] {{
     color: {TEXT_MID};
-    font-size: 9pt;
+    font-size: {FONT_SIZE_LABEL}px;
     font-weight: 600;
-    letter-spacing: 1.2px;
+    letter-spacing: 1.5px;
     text-transform: uppercase;
 }}
 QLabel[role="mono"] {{
     font-family: {FONT_MONO};
+    font-size: {FONT_SIZE_MONO}px;
     color: {TEXT};
 }}
 QLabel[role="muted"] {{ color: {TEXT_MID}; }}
 
+/* ── Cards (transparent — QPainter handles glass effect) ───────────── */
 QFrame[role="card"] {{
-    background-color: {SURFACE_1};
-    border: 1px solid {BORDER_LOW};
+    background-color: transparent;
+    border: none;
     border-radius: {RADIUS_LG}px;
 }}
 QFrame[role="card-raised"] {{
-    background-color: {SURFACE_2};
-    border: 1px solid {BORDER_MED};
+    background-color: transparent;
+    border: none;
     border-radius: {RADIUS_LG}px;
 }}
 
+/* ── Buttons ───────────────────────────────────────────────────────────── */
 QPushButton {{
-    background-color: {ACCENT};
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {ACCENT}, stop:1 {ACCENT_END}
+    );
     color: white;
     border: none;
     border-radius: {RADIUS_MD}px;
-    padding: 10px 18px;
+    padding: 10px 20px;
     font-weight: 600;
+    font-size: {FONT_SIZE_BODY}px;
 }}
-QPushButton:hover {{ background-color: {ACCENT_HI}; }}
-QPushButton:disabled {{ background-color: {SURFACE_3}; color: {TEXT_LOW}; }}
+QPushButton:hover {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {ACCENT_HI}, stop:1 #6EA0FF
+    );
+}}
+QPushButton:pressed {{
+    background-color: {ACCENT};
+}}
+QPushButton:disabled {{
+    background-color: {SURFACE_3};
+    color: {TEXT_LOW};
+}}
 QPushButton[variant="ghost"] {{
     background-color: transparent;
     color: {TEXT};
@@ -142,44 +200,80 @@ QPushButton[variant="ghost"] {{
 QPushButton[variant="ghost"]:hover {{
     background-color: {SURFACE_2};
     border-color: {BORDER_HI};
+    color: {TEXT_HI};
 }}
-QPushButton[variant="danger"] {{ background-color: {ERR}; }}
-QPushButton[variant="danger"]:hover {{ background-color: #d63a4d; }}
+QPushButton[variant="ghost"]:pressed {{
+    background-color: {SURFACE_3};
+}}
+QPushButton[variant="danger"] {{
+    background-color: {ERR};
+    border: none;
+}}
+QPushButton[variant="danger"]:hover {{
+    background-color: #d63a4d;
+}}
+QPushButton[variant="secondary"] {{
+    background-color: {SURFACE_3};
+    color: {TEXT_HI};
+    border: 1px solid {BORDER_MED};
+}}
+QPushButton[variant="secondary"]:hover {{
+    background-color: {GLASS_HOVER};
+    border-color: {BORDER_HI};
+}}
 
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit {{
+/* ── Inputs ─────────────────────────────────────────────────────────────── */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
     background-color: {SURFACE_3};
     color: {TEXT_HI};
     border: 1px solid {BORDER_MED};
     border-radius: {RADIUS_MD}px;
-    padding: 8px 12px;
+    padding: 8px 14px;
+    font-size: {FONT_SIZE_BODY}px;
     selection-background-color: {ACCENT};
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
+QDoubleSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
     border-color: {ACCENT};
 }}
+QComboBox::drop-down {{
+    border: none;
+    width: 28px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {SURFACE_2};
+    color: {TEXT_HI};
+    border: 1px solid {BORDER_MED};
+    border-radius: {RADIUS_MD}px;
+    selection-background-color: {ACCENT};
+    padding: 4px;
+}}
 
+/* ── Console ───────────────────────────────────────────────────────────── */
 QTextEdit#console {{
-    background-color: {BG_DEEP};
+    background-color: {BG_VOID};
     color: {TEXT};
     border: 1px solid {BORDER_LOW};
     border-radius: {RADIUS_MD}px;
     font-family: {FONT_MONO};
-    font-size: 9pt;
-    padding: 8px 10px;
+    font-size: {FONT_SIZE_MONO}px;
+    padding: 10px 12px;
 }}
 
+/* ── NavRail ───────────────────────────────────────────────────────────── */
 QFrame#nav-rail {{
-    background-color: {BG_BASE};
+    background-color: #080B12;
     border-right: 1px solid {BORDER_LOW};
 }}
 QFrame#nav-rail QPushButton[role="nav-item"] {{
     background-color: transparent;
     color: {TEXT_MID};
     text-align: left;
-    padding: 12px 18px;
+    padding: 10px 16px;
     border: none;
     border-radius: {RADIUS_MD}px;
     font-weight: 500;
+    font-size: {FONT_SIZE_BODY}px;
 }}
 QFrame#nav-rail QPushButton[role="nav-item"]:hover {{
     color: {TEXT_HI};
@@ -188,35 +282,61 @@ QFrame#nav-rail QPushButton[role="nav-item"]:hover {{
 QFrame#nav-rail QPushButton[role="nav-item"][active="true"] {{
     color: {TEXT_HI};
     background-color: {SURFACE_2};
-    border-left: 2px solid {ACCENT};
+    border-left: 3px solid {ACCENT};
 }}
 
+/* ── Scroll ─────────────────────────────────────────────────────────────── */
 QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{
     border: none;
     background-color: {BG_DEEP};
 }}
-QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {BORDER_MED}; border-radius: 4px; min-height: 28px; }}
-QScrollBar::handle:vertical:hover {{ background: {ACCENT}; }}
-QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+QScrollBar:vertical {{
+    background: transparent;
+    width: 6px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {BORDER_MED};
+    border-radius: 3px;
+    min-height: 28px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {ACCENT};
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{
+    height: 0;
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 6px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {BORDER_MED};
+    border-radius: 3px;
+}}
 
+/* ── Checkboxes ────────────────────────────────────────────────────────── */
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{
-    width: 16px; height: 16px;
+    width: 18px; height: 18px;
     border: 1px solid {BORDER_MED};
-    border-radius: 4px;
+    border-radius: 5px;
     background: {SURFACE_3};
 }}
 QCheckBox::indicator:checked {{
     background: {ACCENT};
     border-color: {ACCENT};
 }}
+QCheckBox::indicator:hover {{
+    border-color: {BORDER_HI};
+}}
 
+/* ── MessageBox ────────────────────────────────────────────────────────── */
 QMessageBox QLabel {{ color: {TEXT}; }}
 
-/* Title Bar */
+/* ── Title Bar ─────────────────────────────────────────────────────────── */
 QWidget#title-bar {{
-    background-color: {TITLEBAR_BG};
+    background-color: transparent;
     border-bottom: 1px solid {BORDER_LOW};
 }}
 QPushButton#title-btn, QPushButton#title-btn-close {{
@@ -227,7 +347,8 @@ QPushButton#title-btn, QPushButton#title-btn-close {{
     width: 46px;
     height: {TITLEBAR_HEIGHT}px;
     padding: 0;
-    font-size: 11pt;
+    font-size: 12px;
+    font-weight: 400;
 }}
 QPushButton#title-btn:hover {{
     background-color: {SURFACE_1};
@@ -237,11 +358,31 @@ QPushButton#title-btn-close:hover {{
     background-color: {ERR};
     color: white;
 }}
+
+/* ── ProgressBar default ───────────────────────────────────────────────── */
+QProgressBar {{
+    background: {SURFACE_3};
+    border: none;
+    border-radius: 4px;
+    max-height: 8px;
+}}
+QProgressBar::chunk {{
+    border-radius: 4px;
+}}
+
+/* ── Tooltip ───────────────────────────────────────────────────────────── */
+QToolTip {{
+    background-color: {SURFACE_2};
+    color: {TEXT_HI};
+    border: 1px solid {BORDER_MED};
+    border-radius: {RADIUS_SM}px;
+    padding: 6px 10px;
+    font-size: {FONT_SIZE_SMALL}px;
+}}
 """
 
-# ---- Back-compat aliases (Phase 0 transition) --------------------------------
-# These keep the existing Cloud UI code importable during Phases 1-4.
-# Removed once Cloud widgets are replaced.
+# ━━ Back-compat aliases ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Keep the existing Cloud UI code importable during transition.
 TEXT_SECONDARY = TEXT_MID
 SUCCESS = OK
 WARNING = WARN
@@ -251,4 +392,3 @@ CARD_BG = SURFACE_1
 CARD_BORDER = BORDER_MED
 ACCENT_HOVER = ACCENT_HI
 LOG_BG = BG_DEEP
-

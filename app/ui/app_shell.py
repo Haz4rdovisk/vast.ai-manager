@@ -15,6 +15,8 @@ from app.lab.views.discover_view import DiscoverView
 from app.lab.views.models_view import ModelsView
 from app.controller import AppController
 from app.ui.views.instances_view import InstancesView
+from app.ui.views.analytics_view import AnalyticsView
+from app.ui.views.settings_view import SettingsView
 from app.lab.views.hardware_view import HardwareView
 from app.lab.views.configure_view import ConfigureView
 from app.lab.views.monitor_view import MonitorView
@@ -28,9 +30,23 @@ from app.ui.dialogs import UpdateSelectionDialog
 from app.ui.components.title_bar import TitleBar
 
 
+# View key → readable label for the title bar
+_VIEW_LABELS = {
+    "instances": "Instances",
+    "analytics": "Analytics",
+    "dashboard": "Dashboard",
+    "hardware": "Hardware",
+    "discover": "Discover Models",
+    "models": "Models",
+    "monitor": "Monitor",
+    "configure": "Configure",
+    "settings": "Settings",
+}
+
+
 class AppShell(QWidget):
     def __init__(self, config=None, config_store=None,
-                 ssh_service=None, parent=None):
+                 ssh_service=None, analytics_store=None, parent=None):
         super().__init__(parent)
         self.setObjectName("app-shell")
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -38,13 +54,15 @@ class AppShell(QWidget):
         self._config = config
         self._config_store = config_store
         self._ssh = ssh_service
+        self.analytics_store = analytics_store
+        self._controller = None
+        
         self._host: str = ""
         self._port: int = 0
         
         self._probe_workers: dict[int, RemoteProbeWorker] = {}
         self._probe_callbacks: dict[int, callable] = {}
         self._setup_workers: dict[int, RemoteSetupWorker] = {}
-        self._controller: AppController | None = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -102,9 +120,21 @@ class AppShell(QWidget):
         self.monitor.stop_requested.connect(self._stop_server)
         self.monitor.restart_requested.connect(self._restart_server)
         self.monitor.fetch_log_requested.connect(self._fetch_log)
+
         # --- Hardware ---
         self.hardware = HardwareView(self.store, self)
         self._add_view("hardware", self.hardware)
+
+        # --- Analytics (NEW) ---
+        self.analytics = AnalyticsView(self._config, analytics_store=self.analytics_store, parent=self)
+        self._add_view("analytics", self.analytics)
+
+        # --- Settings (NEW) ---
+        self.settings_view = SettingsView(self._config, self)
+        self._add_view("settings", self.settings_view)
+        self.settings_view.back_requested.connect(
+            lambda: self._go("instances")
+        )
 
         self._switch("dashboard")
 
@@ -112,8 +142,7 @@ class AppShell(QWidget):
         QShortcut(QKeySequence("Ctrl+R"), self,
                   activated=lambda: self._controller and self._controller.request_refresh())
         QShortcut(QKeySequence("Ctrl+,"), self,
-                  activated=lambda: self.window().open_settings()
-                                     if hasattr(self.window(), "open_settings") else None)
+                  activated=lambda: self._go("settings"))
 
     # --- View management ---
 
@@ -125,6 +154,7 @@ class AppShell(QWidget):
         v = self._views.get(key)
         if v is not None:
             self.stack.setCurrentWidget(v)
+            self.title_bar.setPageTitle(_VIEW_LABELS.get(key, key.title()))
 
     def _go(self, key: str):
         self.nav.set_active(key)
@@ -138,13 +168,27 @@ class AppShell(QWidget):
         self._add_view("instances", self.instances)
         self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
         self.instances.open_settings_requested.connect(
-            lambda: self.parent() and self.parent().open_settings())
+            lambda: self._go("settings")
+        )
+        self.instances.open_analytics_requested.connect(
+            lambda: self._go("analytics")
+        )
         
         # Proactive: listen to tunnel status
         controller.tunnel_status_changed.connect(self._on_tunnel_status_changed)
         # Sync dashboard and hardware with current active instances
         controller.instances_refreshed.connect(self.dashboard.sync_instances)
         controller.instances_refreshed.connect(self.hardware.sync_instances)
+        # Sync analytics
+        controller.instances_refreshed.connect(self._sync_analytics)
+
+        # Settings wiring
+        self.settings_view.load_config(controller.config)
+        self.settings_view.saved.connect(self._on_settings_saved)
+
+        # Wire persistent analytics store from controller
+        self.analytics.set_store(controller.analytics_store)
+        self.analytics.sync_requested.connect(controller.request_deep_sync)
         
         # Models connections
         self.models.back_requested.connect(lambda: self._go("dashboard"))
@@ -152,6 +196,20 @@ class AppShell(QWidget):
         # Landing view
         self._switch("instances")
         self.nav.set_active("instances")
+
+    def _sync_analytics(self, instances, user_info):
+        self.analytics.sync(
+            instances, user_info,
+            self._controller.today_spend() if self._controller else 0.0,
+        )
+
+    def _on_settings_saved(self, cfg):
+        """Handle settings save from the inline view."""
+        if self._controller:
+            self._controller.apply_config(cfg)
+            self._controller.config_store.save(cfg)
+            self.instances.billing.apply_config(cfg)
+            self.analytics.apply_config(cfg)
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
         # Notify dashboard UI
@@ -162,7 +220,7 @@ class AppShell(QWidget):
             self._probe_instance(iid)
 
     def _on_open_lab_from_card(self, iid: int):
-        """User clicked "Abrir no Lab" on an instance card. Select the instance
+        """User clicked "Open Lab" on an instance card. Select the instance
         and jump to Dashboard."""
         self.select_instance(iid)
         self._go("dashboard")
@@ -291,7 +349,6 @@ class AppShell(QWidget):
         worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, action)
         self._setup_workers[iid] = worker
         
-        # TODO: how to show progress per card? For now we can use toast or global log
         worker.progress.connect(lambda msg: self._controller.log_line.emit(f"#{iid}: {msg}"))
         worker.finished.connect(lambda ok, out: self._on_chain_step_done(ok, out, actions, iid))
         worker.start()
@@ -331,7 +388,7 @@ class AppShell(QWidget):
         
         # Proactive Warmup: Start LLMfit if it's installed but not serving
         if not st.setup.llmfit_serving and st.setup.llmfit_installed:
-            self._controller.log_line.emit(f"#{iid}: Acordando Model Advisor (LLMfit)...")
+            self._controller.log_line.emit(f"#{iid}: Waking up Model Advisor (LLMfit)...")
             self._run_single_setup("start_llmfit", iid, 
                                  callback=lambda: self._perform_llmfit_query(use_case, search))
             return

@@ -93,6 +93,51 @@ def total_burn_rate(
     return round(gpu + storage + network, 4)
 
 
+def burn_rate_breakdown(
+    instances: Iterable[Instance],
+    include_storage: bool = True,
+    estimated_network_cost_per_hour: float = 0.0,
+) -> dict:
+    """Decomposed burn rate returning GPU / storage / network $/h.
+
+    Returns:
+        {
+            "gpu": float,        # compute $/h
+            "storage": float,    # prorated storage $/h
+            "network": float,    # estimated network $/h
+            "total": float,      # sum
+            "instances": [       # per-instance detail
+                {"id": int, "gpu": str, "dph": float,
+                 "state": str, "storage_h": float},
+            ],
+        }
+    """
+    instances = list(instances)
+    active_states = {InstanceState.RUNNING, InstanceState.STARTING}
+
+    gpu = sum(i.dph for i in instances if i.state in active_states)
+    storage = sum(_storage_burn_for(i) for i in instances) if include_storage else 0.0
+    network = max(0.0, estimated_network_cost_per_hour)
+
+    per_inst = []
+    for i in instances:
+        per_inst.append({
+            "id": i.id,
+            "gpu": i.gpu_name or "GPU",
+            "dph": i.dph if i.state in active_states else 0.0,
+            "state": i.state.value,
+            "storage_h": round(_storage_burn_for(i), 4),
+        })
+
+    return {
+        "gpu": round(gpu, 4),
+        "storage": round(storage, 4),
+        "network": round(network, 4),
+        "total": round(gpu + storage + network, 4),
+        "instances": per_inst,
+    }
+
+
 def autonomy_hours(balance: float, burn: float) -> float | None:
     """
     Calcula as horas de autonomia restantes.

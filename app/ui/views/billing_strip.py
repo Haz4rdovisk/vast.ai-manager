@@ -1,58 +1,81 @@
-"""Compact always-visible billing strip. Same numbers as the old BillingHeader
-(balance, burn rate, autonomy, today spend, projection) rendered on the new
-design system — horizontal layout of MetricTiles + projection subtitle."""
+"""Compact billing bar — shows balance + burn rate inline.
+All detailed cost analysis lives in AnalyticsView."""
 from __future__ import annotations
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtCore import Signal
 from app import theme as t
-from app.billing import (
-    BurnRateTracker, autonomy_hours, format_autonomy,
-    project_balance, total_burn_rate,
-)
+from app.billing import BurnRateTracker, autonomy_hours, format_autonomy, total_burn_rate
 from app.models import AppConfig, Instance, UserInfo
 from app.ui.components.primitives import GlassCard
 
 
 class BillingStrip(GlassCard):
+    """Compact inline bar: Balance | Burn Rate | Autonomy — one row."""
+    analytics_requested = Signal()
+
     def __init__(self, config: AppConfig | None = None, parent=None):
         super().__init__(raised=True, parent=parent)
         self._config = config or AppConfig()
         self._tracker = BurnRateTracker(
             window_size=max(1, self._config.burn_rate_smoothing_window)
         )
-        self._lay.setContentsMargins(t.SPACE_4, t.SPACE_3, t.SPACE_4, t.SPACE_3)
-        self._lay.setSpacing(t.SPACE_2)
+        self._lay.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_3)
+        self._lay.setSpacing(0)
 
         row = QHBoxLayout()
-        row.setSpacing(t.SPACE_6)
-        self.balance_lbl = _metric("SALDO", "—")
-        self.burn_lbl    = _metric("GASTANDO", "$0.00/h")
-        self.autonomy_lbl= _metric("AUTONOMIA", "—")
-        self.today_lbl   = _metric("HOJE", "$0.00")
-        row.addWidget(self.balance_lbl)
+        row.setSpacing(t.SPACE_5)
+
+        # Balance
+        self.bal_lbl = QLabel("$—")
+        self.bal_lbl.setStyleSheet(
+            f"color: {t.TEXT_HI}; font-size: 18px; font-weight: 700;"
+            f" font-family: {t.FONT_MONO};"
+        )
+        row.addWidget(self.bal_lbl)
+
+        row.addWidget(_dot())
+
+        # Burn rate
+        self.burn_lbl = QLabel("$0.00/h")
+        self.burn_lbl.setStyleSheet(
+            f"color: {t.TEXT_MID}; font-size: 13px; font-weight: 600;"
+            f" font-family: {t.FONT_MONO};"
+        )
         row.addWidget(self.burn_lbl)
-        row.addWidget(self.autonomy_lbl)
-        row.addWidget(self.today_lbl)
+
+        row.addWidget(_dot())
+
+        # Autonomy
+        self.auto_lbl = QLabel("\u2014")
+        self.auto_lbl.setStyleSheet(
+            f"color: {t.TEXT}; font-size: 13px; font-weight: 600;"
+        )
+        row.addWidget(self.auto_lbl)
+
         row.addStretch()
+
+        # Link to Analytics
+        self.analytics_btn = QPushButton("Analytics \u2192")
+        self.analytics_btn.setProperty("variant", "ghost")
+        self.analytics_btn.setFixedHeight(30)
+        self.analytics_btn.clicked.connect(self.analytics_requested.emit)
+        row.addWidget(self.analytics_btn)
+
         self._lay.addLayout(row)
 
-        self.projection_lbl = QLabel("")
-        self.projection_lbl.setProperty("role", "muted")
-        self.projection_lbl.setStyleSheet(f"font-size: 9pt; color: {t.TEXT_MID};")
-        self._lay.addWidget(self.projection_lbl)
-
-    def apply_config(self, config: AppConfig) -> None:
+    def apply_config(self, config: AppConfig):
         self._config = config
         new_window = max(1, config.burn_rate_smoothing_window)
         if new_window != self._tracker.window_size:
             self._tracker = BurnRateTracker(window_size=new_window)
 
     def update_values(self, user: UserInfo | None,
-                      instances: list[Instance], today_spend: float) -> None:
+                      instances: list[Instance], today_spend: float):
         cfg = self._config
         if user is None:
-            self.balance_lbl.set_value("—")
+            self.bal_lbl.setText("$\u2014")
         else:
-            self.balance_lbl.set_value(f"${user.balance:.2f}")
+            self.bal_lbl.setText(f"${user.balance:.2f}")
 
         burn = total_burn_rate(
             instances,
@@ -62,51 +85,23 @@ class BillingStrip(GlassCard):
         smoothed = self._tracker.update(burn)
         trend = self._tracker.get_trend()
         display_burn = smoothed if smoothed > 0 else burn
-        self.burn_lbl.set_value(f"${display_burn:.2f}/h {trend.arrow}")
+        self.burn_lbl.setText(f"${display_burn:.2f}/h {trend.arrow}")
 
         hours = autonomy_hours(user.balance if user else 0.0, display_burn)
         if hours is None:
-            self.autonomy_lbl.set_value("—", color=t.TEXT)
-            self.projection_lbl.setText("")
+            self.auto_lbl.setText("— remaining")
+            self.auto_lbl.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 13px; font-weight: 600;")
         else:
             color = t.autonomy_color(hours)
-            self.autonomy_lbl.set_value(format_autonomy(hours), color=color)
-            self.balance_lbl.set_value(self.balance_lbl.value_text, color=color)
-            if user is not None and display_burn > 0:
-                p24 = project_balance(user.balance, display_burn, 24)
-                p7  = project_balance(user.balance, display_burn, 24 * 7)
-                p30 = project_balance(user.balance, display_burn, 24 * 30)
-                self.projection_lbl.setText(
-                    f"Projeção  ·  24h → ${p24['balance']:.2f}  ·  "
-                    f"7d → ${p7['balance']:.2f}  ·  30d → ${p30['balance']:.2f}"
-                )
-            else:
-                self.projection_lbl.setText("")
-
-        self.today_lbl.set_value(f"${today_spend:.2f}")
-
-
-class _metric(QWidget):
-    """Private helper — small two-line metric: uppercase label + big value."""
-    def __init__(self, label: str, initial: str, parent=None):
-        super().__init__(parent)
-        v = QVBoxLayout(self)
-        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(2)
-        self._k = QLabel(label); self._k.setProperty("role", "section")
-        self._v = QLabel(initial)
-        self._v.setStyleSheet(
-            f"color: {t.TEXT_HI}; font-size: 14pt; font-weight: 700;"
-        )
-        v.addWidget(self._k); v.addWidget(self._v)
-        self.value_text = initial
-
-    def set_value(self, text: str, color: str | None = None):
-        self.value_text = text
-        self._v.setText(text)
-        if color:
-            self._v.setStyleSheet(
-                f"color: {color}; font-size: 14pt; font-weight: 700;"
+            self.auto_lbl.setText(f"{format_autonomy(hours)} remaining")
+            self.auto_lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: 600;")
+            self.bal_lbl.setStyleSheet(
+                f"color: {color}; font-size: 18px; font-weight: 700;"
+                f" font-family: {t.FONT_MONO};"
             )
 
-    def text(self) -> str:  # shim for tests
-        return self._v.text()
+
+def _dot():
+    lbl = QLabel("\u00b7")
+    lbl.setStyleSheet(f"color: {t.TEXT_LOW}; font-size: 16px; font-weight: 900;")
+    return lbl

@@ -227,3 +227,34 @@ class VastService:
 
     def get_user_info(self) -> UserInfo:
         return self.test_connection()
+
+    def fetch_financial_data(self) -> dict:
+        """Fetch both invoices (deposits) and charges (usage) for the last 30 days."""
+        import time, requests, json
+        cutoff = int(time.time() - (30 * 24 * 3600))
+        results = {"invoices": [], "charges": []}
+        
+        headers = {"Authorization": f"Bearer {self.api_key}"} # Optional but cleaner
+        params = {"api_key": self.api_key}
+        
+        # 1. Fetch Invoices (Deposits/Credits)
+        try:
+            url_inv = "https://console.vast.ai/api/v0/invoices/"
+            resp = requests.get(url_inv, params=params, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                results["invoices"] = data if isinstance(data, list) else data.get("invoices", [])
+        except Exception: pass
+
+        # 2. Fetch Charges (Usage)
+        try:
+            # Filters format according to research: select_filters={"when":{"gte":...}}
+            filters = json.dumps({"when": {"gte": cutoff}})
+            url_chg = "https://console.vast.ai/api/v0/charges/"
+            resp = requests.get(url_chg, params={"api_key": self.api_key, "select_filters": filters}, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                results["charges"] = data if isinstance(data, list) else data.get("charges", [])
+        except Exception: pass
+        
+        return results

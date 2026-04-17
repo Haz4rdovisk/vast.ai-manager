@@ -43,7 +43,13 @@ class MainWindow(QMainWindow):
         from app.ui.app_shell import AppShell
         
         # Add app shell (it now handles its own internal TitleBar)
-        self.shell = AppShell(self.config, self.config_store, self.controller.ssh, self)
+        self.shell = AppShell(
+            self.config,
+            self.config_store,
+            self.controller.ssh,
+            self.controller.analytics_store,
+            self
+        )
         self.shell.attach_controller(self.controller)
         
         self.setCentralWidget(self.shell)
