@@ -148,8 +148,9 @@ class AnalyticsStore:
         for chg in charges:
             ts = chg.get("timestamp") or chg.get("when")
             amt = float(chg.get("amount") or 0)
+            rate = float(chg.get("rate") or 0)
             if ts and amt > 0:
-                raw_items.append({"ts": ts, "amt": amt, "is_topup": False})
+                raw_items.append({"ts": ts, "amt": amt, "rate": rate, "is_topup": False})
 
         if not raw_items:
             return
@@ -161,14 +162,14 @@ class AnalyticsStore:
         historic_entries = []
         
         for item in raw_items:
-            ts, amt, is_topup = item["ts"], item["amt"], item["is_topup"]
+            ts, amt, rate, is_topup = item["ts"], item["amt"], item.get("rate", 0.0), item["is_topup"]
             dt = datetime.fromtimestamp(ts)
             iso = dt.isoformat()
             
             # Capture state AFTER (going backwards)
             historic_entries.append(asdict(CostSnapshot(
                 ts=iso, balance=running_balance,
-                burn_total=0.0, burn_gpu=0.0, burn_storage=0.0, burn_network=0.0, instances=[]
+                burn_total=rate, burn_gpu=rate, burn_storage=0.0, burn_network=0.0, instances=[]
             )))
 
             # Detect recharge for fuel tank metadata
@@ -218,32 +219,22 @@ class AnalyticsStore:
             if e.get("ts", "") >= cutoff
         ]
 
-    def today_spend(self) -> float:
-        """Real spending today = first balance of today - current balance.
-        Returns 0.0 if not enough data."""
-        today_str = date.today().isoformat()
-        today_entries = [
-            e for e in self._entries
-            if e.get("ts", "")[:10] == today_str
-        ]
-        if len(today_entries) < 2:
-            return 0.0
-        first_balance = today_entries[0]["balance"]
-        last_balance = today_entries[-1]["balance"]
-        spend = first_balance - last_balance
-        return max(0.0, round(spend, 4))
-
-    def period_spend(self, days: int) -> float:
-        """Real spending over the last N days from balance deltas."""
+    def period_spend(self, days: int = 1) -> float:
+        """Return total consumption (balance drops only) within the last N days."""
         if not self._entries:
             return 0.0
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         period = [e for e in self._entries if e.get("ts", "") >= cutoff]
-        if len(period) < 2:
-            return 0.0
-        first = period[0]["balance"]
-        last = period[-1]["balance"]
-        return max(0.0, round(first - last, 4))
+        
+        spend = 0.0
+        for i in range(1, len(period)):
+            p, c = period[i-1]["balance"], period[i]["balance"]
+            if c < p: # Pure consumption
+                spend += (p - c)
+        return round(spend, 4)
+
+    def today_spend(self) -> float:
+        return self.period_spend(1)
 
     def week_spend(self) -> float:
         return self.period_spend(7)
