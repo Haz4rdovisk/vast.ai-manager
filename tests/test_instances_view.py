@@ -23,7 +23,9 @@ def test_empty_state_shown_initially(qapp):
     ctl = MagicMock(last_instances=[], last_user=None, config=AppConfig(),
                     tunnel_states={})
     v = InstancesView(ctl)
-    assert v.empty_lbl.isVisible()
+    v.handle_refresh([], UserInfo(balance=0.0))
+    assert v.empty_card.isVisible()
+    assert not v.empty_lbl.isVisible()
 
 
 def test_renders_cards_on_refresh(qapp):
@@ -32,6 +34,7 @@ def test_renders_cards_on_refresh(qapp):
     v = InstancesView(ctl)
     v.handle_refresh([_inst(1), _inst(2)], UserInfo(balance=5.0, email=""))
     assert len(v.cards) == 2
+    assert not v.empty_card.isVisible()
     assert not v.empty_lbl.isVisible()
 
 

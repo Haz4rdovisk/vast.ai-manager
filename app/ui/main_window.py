@@ -12,7 +12,7 @@ class MainWindow(QMainWindow):
     def __init__(self, config_store: ConfigStore):
         super().__init__()
         self.setWindowTitle("Vast.ai Manager")
-        self.resize(960, 800)
+        self.resize(1240, 820)
 
         self.config_store = config_store
         self.config = config_store.load()

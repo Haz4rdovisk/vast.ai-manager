@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from app import theme as t
 from app.controller import AppController
 from app.models import Instance, InstanceState, TunnelStatus, UserInfo
-from app.ui.components.primitives import SectionHeader
+from app.ui.components.primitives import SectionHeader, GlassCard
 from app.ui.views.billing_strip import BillingStrip
 from app.ui.views.console_drawer import ConsoleDrawer
 from app.ui.views.instance_card import InstanceCard
@@ -65,7 +65,17 @@ class InstancesView(QWidget):
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 0, 0, 0); self.list_layout.setSpacing(t.SPACE_3)
-        self.empty_lbl = QLabel("Conecte sua API key para ver suas instâncias.")
+        self.empty_card = GlassCard()
+        self.empty_card.body().addWidget(SectionHeader("COMEÇAR", "Configure sua API key"))
+        hint = QLabel("Cole sua Vast.ai API key em Configurações para começar a ver suas instâncias.")
+        hint.setWordWrap(True); hint.setProperty("role", "muted")
+        self.empty_card.body().addWidget(hint)
+        go_btn = QPushButton("Abrir Configurações")
+        go_btn.clicked.connect(self.open_settings_requested)
+        self.empty_card.body().addWidget(go_btn)
+        self.list_layout.addWidget(self.empty_card)
+
+        self.empty_lbl = QLabel("Nenhuma instância encontrada na sua conta Vast.ai.")
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         self.empty_lbl.setProperty("role", "muted")
         self.empty_lbl.setStyleSheet(
@@ -101,7 +111,9 @@ class InstancesView(QWidget):
                 card = self.cards.pop(iid)
                 self.list_layout.removeWidget(card); card.setParent(None); card.deleteLater()
 
-        self.empty_lbl.setVisible(not instances)
+        has_key = bool(self.controller.config.api_key)
+        self.empty_card.setVisible(not instances and not has_key)
+        self.empty_lbl.setVisible(not instances and has_key)
         for inst in instances:
             tun = self.controller.tunnel_states.get(inst.id, TunnelStatus.DISCONNECTED)
             if inst.id in self.cards:
