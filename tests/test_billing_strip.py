@@ -14,7 +14,7 @@ def qapp():
 
 def _inst(iid=1, dph=0.5, state=InstanceState.RUNNING):
     return Instance(
-        id=iid, label=f"#{iid}", state=state, gpu_name="RTX 3090",
+        id=iid, state=state, gpu_name="RTX 3090",
         num_gpus=1, gpu_ram_gb=24, image="base", dph=dph,
     )
 

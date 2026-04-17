@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
         # Register Cloud body + Lab shell in the workspace stack.
         self.workspace_stack.addWidget(self.cloud_body)
         self.lab_shell = LabShell(self.config, self.config_store, self.controller.ssh)
+        self.lab_shell.attach_controller(self.controller)
         self.workspace_stack.addWidget(self.lab_shell)
         self.workspace_stack.setCurrentWidget(self.cloud_body)
 
@@ -185,6 +186,9 @@ class MainWindow(QMainWindow):
 
     def _on_manual_refresh(self):
         self.controller.request_refresh()
+
+    def open_settings(self):
+        self._open_settings()
 
     def _open_settings(self):
         dlg = SettingsDialog(self.config, self)

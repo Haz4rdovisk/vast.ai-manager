@@ -200,7 +200,8 @@ class InstanceCard(GlassCard):
         gpu_part = f"{inst.num_gpus}× {inst.gpu_name}" if inst.num_gpus > 1 else (inst.gpu_name or "GPU")
         self.gpu_lbl.setText(f"{gpu_part} · {inst.gpu_ram_gb:.0f} GB VRAM")
 
-        self.title_lbl.setText(inst.label or f"Instance #{inst.id}")
+        label_str = getattr(inst, "label", None)
+        self.title_lbl.setText(label_str or f"Instance #{inst.id}")
         self.cost_lbl.setText(f"${inst.dph:.2f}/h")
 
         sub = []
