@@ -12,6 +12,8 @@ from app.lab.state.models import RemoteGGUF, ServerParams
 from app.lab.views.dashboard_view import DashboardView
 from app.lab.views.discover_view import DiscoverView
 from app.lab.views.models_view import ModelsView
+from app.controller import AppController
+from app.ui.views.instances_view import InstancesView
 from app.lab.views.configure_view import ConfigureView
 from app.lab.views.monitor_view import MonitorView
 from app.lab.workers.remote_probe import RemoteProbeWorker
@@ -83,6 +85,7 @@ class LabShell(QWidget):
         self.monitor.fetch_log_requested.connect(self._fetch_log)
         self.monitor.navigate_requested.connect(self._go)
 
+        self._controller: AppController | None = None
         self._switch("dashboard")
 
     # --- View management ---
@@ -99,6 +102,31 @@ class LabShell(QWidget):
     def _go(self, key: str):
         self.nav.set_active(key)
         self._switch(key)
+
+    def attach_controller(self, controller: AppController):
+        """Wire the app controller into the shell. Builds and registers the
+        Instances view. Idempotent."""
+        if self._controller is not None:
+            return
+        self._controller = controller
+        self.instances = InstancesView(controller, self)
+        self._add_view("instances", self.instances)
+        self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
+        self.instances.open_settings_requested.connect(
+            lambda: self.parent() and self.parent().open_settings())
+        # Make Instances the landing view
+        self._switch("instances")
+        self.nav.set_active("instances")
+
+    def _on_open_lab_from_card(self, iid: int):
+        """User clicked "Abrir no Lab" on an instance card. Select the instance
+        and jump to Dashboard."""
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst:
+            return
+        self.select_instance(iid, inst.gpu_name or "",
+                              inst.ssh_host or "", inst.ssh_port or 0)
+        self._go("dashboard")
 
     # --- Instance selection (called from MainWindow) ---
 
