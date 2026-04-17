@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal
 from app.lab import theme as t
-from app.lab.components.primitives import GlassCard, SectionHeader
+from app.ui.components.primitives import GlassCard, SectionHeader
 from app.lab.state.models import ServerParams
 from app.lab.services.model_params import build_launch_command, params_summary
 

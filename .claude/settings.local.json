@@ -34,7 +34,15 @@
       "Bash(cd C:\\\\\\\\Users\\\\\\\\Pc_Lu\\\\\\\\Desktop\\\\\\\\vastai-app)",
       "Bash(python -u -m pytest tests/lab/test_runtime_parser.py -v)",
       "Bash(python -u -m pytest tests/lab/test_gguf_parser.py -v)",
-      "Bash(python -u -m pytest tests/lab/test_library.py -v)"
+      "Bash(python -u -m pytest tests/lab/test_library.py -v)",
+      "Bash(python -c \"import pytest\")",
+      "Bash(python -m pytest tests/test_theme_tokens.py -v)",
+      "Bash(python -c \"import main; print\\('OK'\\)\")",
+      "Bash(python -c \"from app.ui.components.primitives import *; from app.lab.components.primitives import *; print\\('OK'\\)\")",
+      "Bash(python -c \"from app.ui.components.nav_rail import NavRail, NAV_ITEMS; from app.lab.components.nav_rail import NavRail as L, NAV_ITEMS as LI; assert L is NavRail and LI is NAV_ITEMS; print\\('OK, items:', [k for k,_,_ in NAV_ITEMS]\\)\")",
+      "Bash(python -m pytest --collect-only -q C:/Users/Pc_Lu/Desktop/vastai-app/tests/)",
+      "Bash(python -m pytest tests/test_controller.py -v)",
+      "Bash(timeout 30 python -m pytest tests/test_controller.py -v --timeout=10)"
     ]
   }
 }

@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal
 from app.lab import theme as t
-from app.lab.components.primitives import GlassCard, SectionHeader, StatusPill
+from app.ui.components.primitives import GlassCard, SectionHeader, StatusPill
 
 
 _FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err"}
