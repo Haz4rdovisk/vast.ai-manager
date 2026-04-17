@@ -8,6 +8,7 @@ from PySide6.QtCore import Signal
 from app.models import AppConfig
 from app.services.vast_service import VastService, VastAuthError
 from app import theme
+from app.ui.components.primitives import SectionHeader
 
 
 class SettingsDialog(QDialog):
@@ -23,12 +24,9 @@ class SettingsDialog(QDialog):
         lay.setContentsMargins(24, 24, 24, 24)
         lay.setSpacing(16)
 
-        title = QLabel("Configurações")
-        title.setObjectName("h1")
-        lay.addWidget(title)
-
+        lay.addWidget(SectionHeader("PREFERÊNCIAS", "Configurações"))
         subtitle = QLabel("A API key é salva em %USERPROFILE%\\.vastai-app\\config.json")
-        subtitle.setObjectName("secondary")
+        subtitle.setProperty("role", "muted")
         lay.addWidget(subtitle)
 
         form = QFormLayout()
@@ -67,7 +65,7 @@ class SettingsDialog(QDialog):
         self.ssh_key_input.setPlaceholderText("(opcional) ex: C:\\Users\\voce\\.ssh\\id_rsa")
         browse_btn = QPushButton("...")
         browse_btn.setFixedWidth(32)
-        browse_btn.setObjectName("secondary")
+        browse_btn.setProperty("variant", "ghost")
         browse_btn.clicked.connect(self._on_browse_key)
         key_h.addWidget(self.ssh_key_input)
         key_h.addWidget(browse_btn)
@@ -88,12 +86,12 @@ class SettingsDialog(QDialog):
 
         btns = QHBoxLayout()
         self.test_btn = QPushButton("Testar conexão")
-        self.test_btn.setObjectName("secondary")
+        self.test_btn.setProperty("variant", "ghost")
         self.test_btn.clicked.connect(self._on_test)
         self.save_btn = QPushButton("Salvar")
         self.save_btn.clicked.connect(self._on_save)
         self.cancel_btn = QPushButton("Cancelar")
-        self.cancel_btn.setObjectName("secondary")
+        self.cancel_btn.setProperty("variant", "ghost")
         self.cancel_btn.clicked.connect(self.reject)
         btns.addWidget(self.test_btn)
         btns.addStretch()
@@ -129,25 +127,25 @@ class SettingsDialog(QDialog):
     def _on_test(self):
         cfg = self._current_config()
         if not cfg.api_key:
-            self._set_status("Cole sua API key primeiro.", theme.WARNING)
+            self._set_status("Cole sua API key primeiro.", theme.WARN)
             return
-        self._set_status("Testando...", theme.TEXT_SECONDARY)
+        self._set_status("Testando...", theme.TEXT_MID)
         self.test_btn.setEnabled(False)
         try:
             svc = VastService(cfg.api_key)
             user = svc.test_connection()
-            self._set_status(f"✓ Conectado. Saldo atual: ${user.balance:.2f}", theme.SUCCESS)
+            self._set_status(f"✓ Conectado. Saldo atual: ${user.balance:.2f}", theme.OK)
         except VastAuthError:
-            self._set_status("✗ API key inválida.", theme.DANGER)
+            self._set_status("✗ API key inválida.", theme.ERR)
         except Exception as e:
-            self._set_status(f"✗ Falha: {e}", theme.DANGER)
+            self._set_status(f"✗ Falha: {e}", theme.ERR)
         finally:
             self.test_btn.setEnabled(True)
 
     def _on_save(self):
         cfg = self._current_config()
         if not cfg.api_key:
-            self._set_status("API key é obrigatória.", theme.DANGER)
+            self._set_status("API key é obrigatória.", theme.ERR)
             return
         self.saved.emit(cfg)
         self.accept()
