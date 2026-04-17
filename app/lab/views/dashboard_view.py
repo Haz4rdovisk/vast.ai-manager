@@ -1,163 +1,111 @@
-"""Dashboard \u2014 instance selector, setup status, quick actions."""
+"""Dashboard — multi-instance control center."""
 from __future__ import annotations
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Qt
 from app import theme as t
-from app.ui.components.primitives import GlassCard, SectionHeader, MetricTile, StatusPill
+from app.ui.components.primitives import SectionHeader, GlassCard
+from app.ui.components.instance_dashboard_card import InstanceDashboardCard
+from app.models import Instance, TunnelStatus
 
 
 class DashboardView(QWidget):
     probe_requested = Signal()
-    setup_requested = Signal(str)     # "llmfit" | "llamacpp" | "all"
-    navigate_requested = Signal(str)  # nav key
+    setup_requested = Signal(str, int)  # action, iid
+    navigate_requested = Signal(str)    # view key
+    instance_action_requested = Signal(int, str) # iid, action
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
+        self.cards: dict[int, InstanceDashboardCard] = {}
+        self._last_instances: list[Instance] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
         root.setSpacing(t.SPACE_5)
 
-        # Instance selector header
+        # Header
         head = QHBoxLayout()
-        head.addWidget(SectionHeader("REMOTE INSTANCE", "AI Lab Dashboard"))
+        head.addWidget(SectionHeader("CONTROL CENTER", "AI Lab Dashboard"))
         head.addStretch()
-        self.refresh_btn = QPushButton("\u21BB  Refresh")
-        self.refresh_btn.clicked.connect(self.probe_requested.emit)
-        head.addWidget(self.refresh_btn)
         root.addLayout(head)
 
-        # Instance info card
-        self.info_card = GlassCard(raised=True)
-        self.instance_lbl = QLabel("No instance selected")
-        self.instance_lbl.setProperty("role", "display")
-        self.instance_sub = QLabel("Select an instance from Cloud view or click a model card.")
-        self.instance_sub.setProperty("role", "muted")
-        self.instance_sub.setWordWrap(True)
-        self.info_card.body().addWidget(self.instance_lbl)
-        self.info_card.body().addWidget(self.instance_sub)
-        root.addWidget(self.info_card)
+        # Scroll area for cards
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.list_lay = QVBoxLayout(self.scroll_content)
+        self.list_lay.setContentsMargins(0, 0, 0, 0)
+        self.list_lay.setSpacing(t.SPACE_4)
+        self.list_lay.addStretch()
+        self.scroll.setWidget(self.scroll_content)
+        root.addWidget(self.scroll, 1)
 
-        # Setup status strip
-        status_row = QHBoxLayout()
-        status_row.setSpacing(t.SPACE_4)
-        self.llmfit_tile = MetricTile("LLMfit", "\u2014", "model advisor")
-        self.llama_tile = MetricTile("llama.cpp", "\u2014", "inference engine")
-        self.models_tile = MetricTile("Models", "\u2014", "GGUF on instance")
-        self.server_tile = MetricTile("Server", "\u2014", "llama-server")
-        status_row.addWidget(self.llmfit_tile)
-        status_row.addWidget(self.llama_tile)
-        status_row.addWidget(self.models_tile)
-        status_row.addWidget(self.server_tile)
-        root.addLayout(status_row)
+        # Placeholder for empty state
+        self.empty_card = GlassCard()
+        self.empty_card.body().addWidget(SectionHeader("Awaiting Active Connections", "Dashboard is inactive"))
+        msg = QLabel("Ative uma instância na aba 'Instances' para começar.\n"
+                     "O Lab Dashboard se ativará automaticamente assim que a conexão SSH for estabelecida.")
+        msg.setProperty("role", "muted")
+        msg.setWordWrap(True)
+        self.empty_card.body().addWidget(msg)
+        self.list_lay.insertWidget(0, self.empty_card)
 
-        # Setup actions card
-        self.setup_card = GlassCard()
-        self.setup_card.body().addWidget(SectionHeader("SETUP", "Instance Setup"))
-        self.setup_status_lbl = QLabel("Probe the instance to check what's installed.")
-        self.setup_status_lbl.setWordWrap(True)
-        self.setup_card.body().addWidget(self.setup_status_lbl)
-        setup_btns = QHBoxLayout()
-        self.install_all_btn = QPushButton("\u26A1 Setup Everything")
-        self.install_all_btn.clicked.connect(lambda: self.setup_requested.emit("all"))
-        self.install_llmfit_btn = QPushButton("Install LLMfit")
-        self.install_llmfit_btn.setProperty("variant", "ghost")
-        self.install_llmfit_btn.clicked.connect(lambda: self.setup_requested.emit("llmfit"))
-        self.install_llama_btn = QPushButton("Install llama.cpp")
-        self.install_llama_btn.setProperty("variant", "ghost")
-        self.install_llama_btn.clicked.connect(lambda: self.setup_requested.emit("llamacpp"))
-        setup_btns.addWidget(self.install_all_btn)
-        setup_btns.addWidget(self.install_llmfit_btn)
-        setup_btns.addWidget(self.install_llama_btn)
-        setup_btns.addStretch()
-        self.setup_card.body().addLayout(setup_btns)
-        root.addWidget(self.setup_card)
+        # Global subscribe
+        self.store.instance_state_updated.connect(self._on_state_updated)
 
-        # Hardware info card (from LLMfit)
-        self.hw_card = GlassCard()
-        self.hw_card.body().addWidget(SectionHeader("HARDWARE", "Remote Instance Specs"))
-        self.hw_lbl = QLabel("Probe instance to see hardware details.")
-        self.hw_lbl.setProperty("role", "muted")
-        self.hw_lbl.setWordWrap(True)
-        self.hw_card.body().addWidget(self.hw_lbl)
-        root.addWidget(self.hw_card)
+    def sync_instances(self, instances: list[Instance], user_info):
+        """Sync the list of cards with active instances."""
+        self._last_instances = instances
+        active_ids = {i.id for i in instances if i.ssh_host and i.ssh_port}
+        
+        # Remove dead cards
+        for iid in list(self.cards.keys()):
+            if iid not in active_ids:
+                card = self.cards.pop(iid)
+                self.list_lay.removeWidget(card)
+                card.deleteLater()
+        
+        # Add new cards
+        for inst in instances:
+            if inst.id in active_ids and inst.id not in self.cards:
+                card = InstanceDashboardCard(inst.id)
+                card.select_requested.connect(lambda iid: self.instance_action_requested.emit(iid, "select"))
+                card.probe_requested.connect(lambda iid: self.instance_action_requested.emit(iid, "probe"))
+                card.setup_all_requested.connect(lambda iid: self.instance_action_requested.emit(iid, "setup_all"))
+                card.navigate_requested.connect(lambda iid, key: self._navigate_to_instance(iid, key))
+                
+                self.list_lay.insertWidget(self.list_lay.count() - 1, card)
+                self.cards[inst.id] = card
+                
+                # Immediate initial render
+                self._update_card(inst.id)
+        
+        self.empty_card.setVisible(not self.cards)
 
-        # Quick actions
-        actions = QHBoxLayout()
-        actions.setSpacing(t.SPACE_3)
-        disc_btn = QPushButton("\u2726 Discover Models")
-        disc_btn.clicked.connect(lambda: self.navigate_requested.emit("discover"))
-        models_btn = QPushButton("\u25A4 View Models")
-        models_btn.clicked.connect(lambda: self.navigate_requested.emit("models"))
-        mon_btn = QPushButton("\u25F4 Monitor Server")
-        mon_btn.clicked.connect(lambda: self.navigate_requested.emit("monitor"))
-        actions.addWidget(disc_btn)
-        actions.addWidget(models_btn)
-        actions.addWidget(mon_btn)
-        actions.addStretch()
-        root.addLayout(actions)
+    def _on_state_updated(self, iid: int, state):
+        if iid in self.cards:
+            self._update_card(iid)
 
-        root.addStretch()
+    def _update_card(self, iid: int):
+        card = self.cards.get(iid)
+        if not card: return
+        
+        # Find raw instance for SSH status hint
+        inst = next((i for i in self._last_instances if i.id == iid), None)
+        # We need to know the tunnel status. Dashboard view doesn't have it directly.
+        # But AppShell/Controller do. 
+        # For simplicity, we'll assume if it's in sync_instances with host/port, it's alive-ish.
+        # Better: AppShell should handle this. Or we check store? 
+        # Let's just pass empty for now or use the state.
+        
+        # Actually, let's assume if sync_instances called it, it's 'connected' for now
+        # until the next refresh cycle.
+        st = self.store.get_state(iid)
+        card.update_state(st, "connected", gpu_name_hint=inst.gpu_name if inst else "")
 
-        # Subscribe to store
-        self.store.setup_status_changed.connect(self._render_status)
-        self.store.remote_system_changed.connect(self._render_hw)
-        self.store.instance_changed.connect(self._render_instance)
-
-    def set_instance_info(self, iid: int, gpu_name: str, ssh_host: str):
-        self.instance_lbl.setText(f"Instance #{iid}")
-        self.instance_sub.setText(f"{gpu_name}  \u00b7  {ssh_host}")
-
-    def _render_instance(self, iid):
-        if not iid:
-            self.instance_lbl.setText("No instance selected")
-            self.instance_sub.setText("Select an instance from Cloud view.")
-
-    def _render_status(self, s):
-        self.llmfit_tile.set_value(
-            "READY" if s.llmfit_serving else ("INSTALLED" if s.llmfit_installed else "MISSING"),
-            "serving" if s.llmfit_serving else ("not serving" if s.llmfit_installed else "not installed"),
-        )
-        self.llama_tile.set_value(
-            "READY" if s.llamacpp_installed else "MISSING",
-            s.llamacpp_path or "not found",
-        )
-        self.models_tile.set_value(
-            str(s.model_count), "GGUF files on instance"
-        )
-        self.server_tile.set_value(
-            "RUNNING" if s.llama_server_running else "STOPPED",
-            s.llama_server_model or "no model loaded",
-        )
-
-        # Update setup hints
-        missing = []
-        if not s.llmfit_installed:
-            missing.append("LLMfit")
-        if not s.llamacpp_installed:
-            missing.append("llama.cpp")
-        if missing:
-            self.setup_status_lbl.setText(
-                f"Missing: {', '.join(missing)}. Click Setup to install automatically.")
-            self.setup_status_lbl.setStyleSheet(f"color: {t.WARN};")
-        else:
-            self.setup_status_lbl.setText("All tools installed. \u2714")
-            self.setup_status_lbl.setStyleSheet(f"color: {t.OK};")
-
-    def _render_hw(self, sys):
-        parts = []
-        if sys.gpu_name:
-            vram = f"{sys.gpu_vram_gb:.0f} GB" if sys.gpu_vram_gb else "?"
-            parts.append(f"\u2022 GPU: {sys.gpu_name} ({vram} VRAM)")
-            if sys.gpu_count > 1:
-                parts.append(f"  \u00d7 {sys.gpu_count} GPUs")
-        if sys.cpu_name:
-            parts.append(f"\u2022 CPU: {sys.cpu_name} ({sys.cpu_cores} cores)")
-        if sys.ram_total_gb:
-            parts.append(f"\u2022 RAM: {sys.ram_total_gb:.0f} GB total, {sys.ram_available_gb:.0f} GB free")
-        if sys.backend:
-            parts.append(f"\u2022 Backend: {sys.backend}")
-        self.hw_lbl.setText("\n".join(parts) if parts else "No hardware info available.")
+    def _navigate_to_instance(self, iid: int, view_key: str):
+        self.instance_action_requested.emit(iid, "select")
+        self.navigate_requested.emit(view_key)

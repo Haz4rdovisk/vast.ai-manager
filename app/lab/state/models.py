@@ -94,6 +94,18 @@ class ServerParams:
 
 
 @dataclass
+class LabInstanceState:
+    """Grouped state for a single remote instance in the Lab."""
+    iid: int
+    system: RemoteSystem = field(default_factory=RemoteSystem)
+    models: list[RemoteModel] = field(default_factory=list)
+    gguf: list[RemoteGGUF] = field(default_factory=list)
+    setup: SetupStatus = field(default_factory=SetupStatus)
+    server_params: ServerParams = field(default_factory=ServerParams)
+    busy_keys: set[str] = field(default_factory=set)
+
+
+@dataclass
 class DiagnosticsItem:
     id: str
     level: HealthLevel

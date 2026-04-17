@@ -239,7 +239,7 @@ class ConfigureView(QWidget):
 
     def _update_preview(self, *_):
         p = self._gather_params()
-        binary = self.store.setup_status.llamacpp_path or "/opt/llama.cpp/build/bin/llama-server"
+        st = self.store.current_state; binary = (st.setup.llamacpp_path if st else "") or "/opt/llama.cpp/build/bin/llama-server"
         cmd = build_launch_command(p, binary)
         self.preview.setPlainText(cmd)
         self.summary_lbl.setText(params_summary(p))
@@ -248,5 +248,5 @@ class ConfigureView(QWidget):
         p = self._gather_params()
         if not p.model_path:
             return
-        self.store.set_server_params(p)
+        if self.store.selected_instance_id: self.store.set_server_params(self.store.selected_instance_id, p)
         self.launch_requested.emit(p)

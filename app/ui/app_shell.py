@@ -1,14 +1,15 @@
-"""LabShell V2 \u2014 remote instance-first AI Lab workspace.
+"""LabShell V2 — remote instance-first AI Lab workspace.
 Manages views, workers, and wiring against a selected Vast.ai instance."""
 from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QStackedWidget, QLabel, QVBoxLayout, QMessageBox,
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from app import theme as t
 from app.ui.components.nav_rail import NavRail, NAV_ITEMS
 from app.lab.state.store import LabStore
 from app.lab.state.models import RemoteGGUF, ServerParams
+from app.models import TunnelStatus
 from app.lab.views.dashboard_view import DashboardView
 from app.lab.views.discover_view import DiscoverView
 from app.lab.views.models_view import ModelsView
@@ -36,8 +37,10 @@ class AppShell(QWidget):
         self._ssh = ssh_service
         self._host: str = ""
         self._port: int = 0
-        self._probe_worker: RemoteProbeWorker | None = None
-        self._setup_worker: RemoteSetupWorker | None = None
+        
+        self._probe_workers: dict[int, RemoteProbeWorker] = {}
+        self._setup_workers: dict[int, RemoteSetupWorker] = {}
+        self._controller: AppController | None = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -54,9 +57,11 @@ class AppShell(QWidget):
         # --- Dashboard ---
         self.dashboard = DashboardView(self.store, self)
         self._add_view("dashboard", self.dashboard)
-        self.dashboard.probe_requested.connect(self._probe_instance)
+        self.dashboard.probe_requested.connect(self._manual_probe)
         self.dashboard.setup_requested.connect(self._run_setup)
         self.dashboard.navigate_requested.connect(self._go)
+        # New: Dashboard emits iid for actions
+        self.dashboard.instance_action_requested.connect(self._on_dashboard_instance_action)
 
         # --- Discover ---
         self.discover = DiscoverView(self.store, self)
@@ -69,7 +74,7 @@ class AppShell(QWidget):
         self._add_view("models", self.models_view)
         self.models_view.load_requested.connect(self._load_model)
         self.models_view.delete_requested.connect(self._delete_model)
-        self.models_view.rescan_requested.connect(self._probe_instance)
+        self.models_view.rescan_requested.connect(self._manual_probe)
         self.models_view.navigate_requested.connect(self._go)
 
         # --- Configure ---
@@ -85,7 +90,6 @@ class AppShell(QWidget):
         self.monitor.fetch_log_requested.connect(self._fetch_log)
         self.monitor.navigate_requested.connect(self._go)
 
-        self._controller: AppController | None = None
         self._switch("dashboard")
 
         from PySide6.QtGui import QShortcut, QKeySequence
@@ -111,8 +115,6 @@ class AppShell(QWidget):
         self._switch(key)
 
     def attach_controller(self, controller: AppController):
-        """Wire the app controller into the shell. Builds and registers the
-        Instances view. Idempotent."""
         if self._controller is not None:
             return
         self._controller = controller
@@ -121,148 +123,169 @@ class AppShell(QWidget):
         self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
         self.instances.open_settings_requested.connect(
             lambda: self.parent() and self.parent().open_settings())
-        # Make Instances the landing view
+        
+        # Proactive: listen to tunnel status
+        controller.tunnel_status_changed.connect(self._on_tunnel_status_changed)
+        # Sync dashboard with current active instances
+        controller.instances_refreshed.connect(self.dashboard.sync_instances)
+        
+        # Landing view
         self._switch("instances")
         self.nav.set_active("instances")
+
+    def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
+        if status == TunnelStatus.CONNECTED.value:
+            # Automatic probe!
+            QTimer.singleShot(500, lambda: self._probe_instance(iid))
 
     def _on_open_lab_from_card(self, iid: int):
         """User clicked "Abrir no Lab" on an instance card. Select the instance
         and jump to Dashboard."""
+        self.select_instance(iid)
+        self._go("dashboard")
+
+    def _on_dashboard_instance_action(self, iid: int, action: str):
+        """Action requested from a specific dashboard card."""
+        if action == "select":
+            self.select_instance(iid)
+        elif action == "probe":
+            self._probe_instance(iid)
+        elif action == "setup_all":
+            self._run_setup("all", iid=iid)
+
+    # --- Instance selection ---
+
+    def select_instance(self, iid: int):
+        """Focus the entire Lab on a specific instance (Discover, Models, etc.)"""
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst:
             return
-        self.select_instance(iid, inst.gpu_name or "",
-                              inst.ssh_host or "", inst.ssh_port or 0)
-        self._go("dashboard")
-
-    # --- Instance selection (called from MainWindow) ---
-
-    def select_instance(self, iid: int, gpu_name: str,
-                        ssh_host: str, ssh_port: int):
-        """Called when user opens Lab for a specific instance."""
-        self._host = ssh_host
-        self._port = ssh_port
+        
+        self._host = inst.ssh_host or ""
+        self._port = inst.ssh_port or 0
         self.store.set_instance(iid)
-        self.dashboard.set_instance_info(iid, gpu_name, ssh_host)
-        self._probe_instance()
+        
+        # Ensure it has been probed at least once
+        if not self.store.get_state(iid).setup.probed:
+            self._probe_instance(iid)
+
+    def _manual_probe(self):
+        """Trigger probe for the CURRENT selected instance."""
+        if self.store.selected_instance_id:
+            self._probe_instance(self.store.selected_instance_id)
 
     # --- Remote probe ---
 
-    def _probe_instance(self):
-        if not self._ssh or not self._host or not self._port:
-            QMessageBox.warning(self, "No Instance",
-                                "Select an instance with SSH access first.")
+    def _probe_instance(self, iid: int):
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host or not inst.ssh_port:
             return
-        if self._probe_worker and self._probe_worker.isRunning():
+        
+        if iid in self._probe_workers and self._probe_workers[iid].isRunning():
             return
-        self.store.set_busy("probe", True)
-        self._probe_worker = RemoteProbeWorker(
-            self._ssh, self._host, self._port, self)
-        self._probe_worker.setup_ready.connect(self.store.set_setup_status)
-        self._probe_worker.system_ready.connect(self.store.set_remote_system)
-        self._probe_worker.models_ready.connect(self.store.set_remote_models)
-        self._probe_worker.gguf_ready.connect(self.store.set_remote_gguf)
-        self._probe_worker.failed.connect(
-            lambda msg: QMessageBox.warning(self, "Probe Failed", msg))
-        self._probe_worker.finished.connect(
-            lambda: self.store.set_busy("probe", False))
-        self._probe_worker.start()
+            
+        self.store.set_instance_busy(iid, "probe", True)
+        worker = RemoteProbeWorker(self._ssh, inst.ssh_host, inst.ssh_port, self)
+        self._probe_workers[iid] = worker
+        
+        worker.setup_ready.connect(lambda s: self.store.set_setup_status(iid, s))
+        worker.system_ready.connect(lambda s: self.store.set_remote_system(iid, s))
+        worker.models_ready.connect(lambda m: self.store.set_remote_models(iid, m))
+        worker.gguf_ready.connect(lambda g: self.store.set_remote_gguf(iid, g))
+        
+        worker.finished.connect(lambda: self.store.set_instance_busy(iid, "probe", False))
+        worker.start()
 
     # --- Remote setup ---
 
-    def _run_setup(self, what: str):
-        if not self._ssh or not self._host:
+    def _run_setup(self, what: str, iid: int = None):
+        if iid is None:
+            iid = self.store.selected_instance_id
+        if iid is None:
             return
-        if self._setup_worker and self._setup_worker.isRunning():
-            QMessageBox.information(self, "Busy",
-                                    "A setup operation is already running.")
+            
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host:
+            return
+            
+        if iid in self._setup_workers and self._setup_workers[iid].isRunning():
             return
 
         if what == "all":
-            # Chain: install llmfit → start serve → install llamacpp
-            self._chain_setup(["install_llmfit", "start_llmfit", "install_llamacpp"])
+            self._chain_setup(["install_llmfit", "start_llmfit", "install_llamacpp"], iid)
             return
 
-        self._run_single_setup(what if what != "llamacpp" else "install_llamacpp")
+        self._run_single_setup(what if what != "llamacpp" else "install_llamacpp", iid=iid)
 
-    def _chain_setup(self, actions: list[str]):
+    def _chain_setup(self, actions: list[str], iid: int):
         if not actions:
-            self._probe_instance()
+            self._probe_instance(iid)
             return
         action = actions.pop(0)
-        self.store.set_busy("setup", True)
-        self._setup_worker = RemoteSetupWorker(
-            self._ssh, self._host, self._port, action)
-        self._setup_worker.progress.connect(
-            lambda msg: self.dashboard.setup_status_lbl.setText(msg))
-        self._setup_worker.finished.connect(
-            lambda ok, out: self._on_chain_step_done(ok, out, actions))
-        self._setup_worker.start()
+        self.store.set_instance_busy(iid, "setup", True)
+        
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, action)
+        self._setup_workers[iid] = worker
+        
+        # TODO: how to show progress per card? For now we can use toast or global log
+        worker.progress.connect(lambda msg: self._controller.log_line.emit(f"#{iid}: {msg}"))
+        worker.finished.connect(lambda ok, out: self._on_chain_step_done(ok, out, actions, iid))
+        worker.start()
 
-    def _on_chain_step_done(self, ok: bool, output: str, remaining: list[str]):
-        self.store.set_busy("setup", False)
+    def _on_chain_step_done(self, ok: bool, output: str, remaining: list[str], iid: int):
+        self.store.set_instance_busy(iid, "setup", False)
         if not ok:
-            self.dashboard.setup_status_lbl.setText(f"Setup step failed: {output[:200]}")
-            self._probe_instance()
+            self._controller.log_line.emit(f"#{iid} Setup step failed: {output[:100]}")
             return
         if remaining:
-            self._chain_setup(remaining)
+            self._chain_setup(remaining, iid)
         else:
-            self.dashboard.setup_status_lbl.setText("Setup complete! Probing...")
-            self._probe_instance()
+            self._probe_instance(iid)
 
-    def _run_single_setup(self, action: str, **kwargs):
-        self.store.set_busy("setup", True)
-        self._setup_worker = RemoteSetupWorker(
-            self._ssh, self._host, self._port, action, **kwargs)
-        self._setup_worker.progress.connect(
-            lambda msg: self.dashboard.setup_status_lbl.setText(msg))
-        self._setup_worker.finished.connect(self._on_setup_done)
-        self._setup_worker.start()
+    def _run_single_setup(self, action: str, iid: int, **kwargs):
+        self.store.set_instance_busy(iid, "setup", True)
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, action, **kwargs)
+        self._setup_workers[iid] = worker
+        worker.finished.connect(lambda ok, out: self._on_setup_done(ok, out, iid))
+        worker.start()
 
-    def _on_setup_done(self, ok: bool, output: str):
-        self.store.set_busy("setup", False)
+    def _on_setup_done(self, ok: bool, output: str, iid: int):
+        self.store.set_instance_busy(iid, "setup", False)
         if ok:
-            self.dashboard.setup_status_lbl.setText("Done! Refreshing...")
-            self._probe_instance()
+            self._probe_instance(iid)
         else:
-            self.dashboard.setup_status_lbl.setText(f"Failed: {output[:200]}")
+            self._controller.log_line.emit(f"#{iid} Setup failed: {output[:100]}")
 
     # --- LLMfit model refresh ---
 
     def _refresh_llmfit_models(self, use_case: str, search: str):
-        if not self._ssh or not self._host:
-            return
-        from app.lab.services.remote_llmfit import build_models_query
+        iid = self.store.selected_instance_id
+        if not iid or not self._ssh: return
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host: return
+
         script = build_models_query(use_case=use_case, search=search)
-        self.store.set_busy("discover", True)
+        self.store.set_instance_busy(iid, "discover", True)
 
-        worker = RemoteSetupWorker(
-            self._ssh, self._host, self._port, "_raw_script")
-        # Patch the script builder for this one-off
+        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, "_raw_script")
         worker._build_script = lambda: script
-        worker.finished.connect(self._on_llmfit_models_done)
+        worker.finished.connect(lambda ok, out: self._on_llmfit_models_done(ok, out, iid))
         worker.start()
-        self._setup_worker = worker  # keep reference
+        self._setup_workers[iid] = worker
 
-    def _on_llmfit_models_done(self, ok: bool, output: str):
-        self.store.set_busy("discover", False)
+    def _on_llmfit_models_done(self, ok: bool, output: str, iid: int):
+        self.store.set_instance_busy(iid, "discover", False)
         if ok:
             data = parse_json_output(output)
             if data:
-                self.store.set_remote_models(parse_models(data))
+                self.store.set_remote_models(iid, parse_models(data))
 
     # --- Download model ---
 
     def _download_model_by_name(self, model_name: str, quant: str):
-        """User clicked Download in Discover. We need a repo_id and filename.
-        For now, use the model name as search hint — TODO: map properly."""
-        QMessageBox.information(
-            self, "Download",
-            f"To download a model, go to Models \u2192 check if it's already there,\n"
-            f"or use SSH to manually download:\n\n"
-            f"Model: {model_name}\nQuant: {quant}\n\n"
-            f"Full HuggingFace download support coming in the next update.")
+        QMessageBox.information(self, "Download", "Full HuggingFace download support coming soon.")
 
     # --- Model operations ---
 
@@ -271,50 +294,49 @@ class AppShell(QWidget):
         self._go("configure")
 
     def _delete_model(self, path: str):
-        if not self._ssh or not self._host:
-            return
-        self._run_single_setup("delete_model", path=path)
+        iid = self.store.selected_instance_id
+        if iid: self._run_single_setup("delete_model", iid, path=path)
 
     # --- Server operations ---
 
     def _launch_server(self, params: ServerParams):
-        if not self._ssh or not self._host:
-            return
-        binary = self.store.setup_status.llamacpp_path or ""
-        self.store.set_busy("launch", True)
+        iid = self.store.selected_instance_id
+        if not iid: return
+        st = self.store.get_state(iid)
+        binary = st.setup.llamacpp_path or ""
+        self.store.set_instance_busy(iid, "launch", True)
 
-        worker = RemoteSetupWorker(
-            self._ssh, self._host, self._port,
-            "launch_server", params=params, binary_path=binary)
-        worker.finished.connect(self._on_launch_done)
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port,
+                                    "launch_server", params=params, binary_path=binary)
+        worker.finished.connect(lambda ok, out: self._on_launch_done(ok, out, iid))
         worker.start()
-        self._setup_worker = worker
+        self._setup_workers[iid] = worker
 
-    def _on_launch_done(self, ok: bool, output: str):
-        self.store.set_busy("launch", False)
+    def _on_launch_done(self, ok: bool, output: str, iid: int):
+        self.store.set_instance_busy(iid, "launch", False)
         if ok and "LAUNCH_OK" in output:
-            self._go("monitor")
-            self._probe_instance()  # refresh status
+            if iid == self.store.selected_instance_id:
+                self._go("monitor")
+            self._probe_instance(iid)
         else:
-            QMessageBox.warning(self, "Launch Failed",
-                                f"llama-server failed to start:\n{output[:500]}")
+            self._controller.log_line.emit(f"#{iid} Launch failed.")
 
     def _stop_server(self):
-        if not self._ssh or not self._host:
-            return
-        self._run_single_setup("stop_server")
+        iid = self.store.selected_instance_id
+        if iid: self._run_single_setup("stop_server", iid)
 
     def _restart_server(self):
-        params = self.store.server_params
+        iid = self.store.selected_instance_id
+        if not iid: return
+        params = self.store.get_state(iid).server_params
         if params.model_path:
             self._launch_server(params)
-        else:
-            QMessageBox.information(self, "No Config",
-                                    "No previous config. Go to Configure first.")
 
     def _fetch_log(self):
-        if not self._ssh or not self._host:
-            return
-        ok, output = self._ssh.run_script(
-            self._host, self._port, script_fetch_log())
+        iid = self.store.selected_instance_id
+        if not iid or not self._ssh: return
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host: return
+        ok, output = self._ssh.run_script(inst.ssh_host, inst.ssh_port, script_fetch_log())
         self.monitor.set_log(output if ok else f"(SSH failed)\n{output}")
