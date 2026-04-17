@@ -23,25 +23,25 @@ class Instance:
     id: int
     state: InstanceState
     gpu_name: str
-    num_gpus: int
-    gpu_ram_gb: float
-    gpu_util: float | None
-    gpu_temp: float | None
-    vram_usage_gb: float | None
-    cpu_name: str | None
-    cpu_cores: int | None
-    cpu_util: float | None
-    ram_total_gb: float | None
-    ram_used_gb: float | None
-    disk_usage_gb: float | None
-    disk_space_gb: float | None
-    inet_down_mbps: float | None
-    inet_up_mbps: float | None
-    image: str | None
-    dph: float
-    duration_seconds: int | None
-    ssh_host: str | None
-    ssh_port: int | None
+    num_gpus: int = 1
+    gpu_ram_gb: float = 0.0
+    gpu_util: float | None = None
+    gpu_temp: float | None = None
+    vram_usage_gb: float | None = None
+    cpu_name: str | None = None
+    cpu_cores: int | None = None
+    cpu_util: float | None = None
+    ram_total_gb: float | None = None
+    ram_used_gb: float | None = None
+    disk_usage_gb: float | None = None
+    disk_space_gb: float | None = None
+    inet_down_mbps: float | None = None
+    inet_up_mbps: float | None = None
+    image: str | None = None
+    dph: float = 0.0
+    duration_seconds: int | None = None
+    ssh_host: str | None = None
+    ssh_port: int | None = None
     # Provider / location / hardware metadata (all optional — Vast may omit any).
     geolocation: str | None = None
     country: str | None = None
@@ -58,9 +58,14 @@ class Instance:
     pcie_bw_gbps: float | None = None
     disk_bw_mbps: float | None = None
     dlperf: float | None = None
+    total_flops: float | None = None
+    flops_per_dphtotal: float | None = None
     reliability: float | None = None
+    verification: str | None = None
     inet_down_billed_gb: float | None = None
     inet_up_billed_gb: float | None = None
+    discounted_total_per_hour: float | None = None
+    storage_cost_per_gb_month: float | None = None
     storage_total_cost: float | None = None
     raw: dict = field(default_factory=dict)
 

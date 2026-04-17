@@ -1,4 +1,4 @@
-from app.services.vast_service import parse_instance, parse_user_info
+from app.services.vast_service import VastService, parse_instance, parse_user_info
 from app.models import InstanceState
 
 
@@ -12,6 +12,10 @@ def test_parse_instance_running():
         "inet_up": 12.4, "inet_down": 100.1, "label": None,
         "image_uuid": "pytorch/pytorch:2.1", "dph_total": 0.42,
         "duration": 11400, "ssh_host": "ssh5.vast.ai", "ssh_port": 12345,
+        "reliability2": 0.97, "dlperf": 185.2, "total_flops": 82.5,
+        "flops_per_dphtotal": 196.4, "verification": "verified",
+        "storage_cost": 0.15,
+        "instance": {"discountedTotalPerHour": 0.38},
     }
     inst = parse_instance(raw)
     assert inst.id == 123
@@ -27,6 +31,13 @@ def test_parse_instance_running():
     assert inst.ssh_host == "ssh5.vast.ai"
     assert inst.ssh_port == 12345
     assert inst.image == "pytorch/pytorch:2.1"
+    assert inst.reliability == 0.97
+    assert inst.dlperf == 185.2
+    assert inst.total_flops == 82.5
+    assert inst.flops_per_dphtotal == 196.4
+    assert inst.verification == "verified"
+    assert inst.storage_cost_per_gb_month == 0.15
+    assert inst.discounted_total_per_hour == 0.38
 
 
 def test_parse_instance_stopped_drops_telemetry():
@@ -68,3 +79,33 @@ def test_parse_user_info_missing_fields():
     u = parse_user_info({})
     assert u.balance == 0.0
     assert u.email is None
+
+
+def test_fetch_financial_data_uses_sdk_billing_pages(monkeypatch):
+    svc = VastService("key")
+    calls = []
+
+    def fake_call(fn_name, **kwargs):
+        calls.append((fn_name, kwargs))
+        assert fn_name == "show_invoices_v1"
+        if kwargs.get("charges"):
+            if "next_token" not in kwargs:
+                return {
+                    "success": True,
+                    "results": [{"amount": 1, "end": 10}],
+                    "next_token": "next",
+                }
+            return {"success": True, "results": [{"amount": 2, "end": 20}], "next_token": None}
+        return {"success": True, "results": [{"amount": -5, "end": 30}], "next_token": None}
+
+    monkeypatch.setattr(svc, "_call", fake_call)
+    monkeypatch.setattr("app.services.vast_service.time.time", lambda: 1_000_000)
+
+    out = svc.fetch_financial_data(days=7)
+
+    assert out["charges"] == [{"amount": 1, "end": 10}, {"amount": 2, "end": 20}]
+    assert out["invoices"] == [{"amount": -5, "end": 30}]
+    assert out["sync"]["days"] == 7
+    assert len(calls) == 3
+    assert calls[0][1]["format"] == "tree"
+    assert calls[0][1]["start_date"] == 1_000_000 - 7 * 24 * 3600

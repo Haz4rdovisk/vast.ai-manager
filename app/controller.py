@@ -41,7 +41,9 @@ class AppController(QObject):
         self.vast: VastService | None = None
         self.ssh = SSHService(ssh_key_path=self.config.ssh_key_path)
         self.tracker = DailySpendTracker()
-        self.analytics_store = AnalyticsStore()
+        self.analytics_store = AnalyticsStore(
+            path=self.config_store.path.parent / "analytics.json"
+        )
 
         self.last_instances: list[Instance] = []
         self.last_user: UserInfo | None = None
@@ -71,7 +73,10 @@ class AppController(QObject):
     def today_spend(self) -> float:
         """Real persistent today spend from analytics store."""
         stored = self.analytics_store.today_spend()
-        return stored if stored > 0 else self.tracker.today_spend()
+        live = self.tracker.today_spend()
+        if self.analytics_store.has_billing_events:
+            return stored if stored > 0 else live
+        return stored if stored > 0 else live
 
     # ---- Lifecycle ----
     def bootstrap(self):
@@ -199,7 +204,8 @@ class AppController(QObject):
                 self.analytics_store.import_history(
                     invoices=fin_data.get("invoices", []),
                     charges=fin_data.get("charges", []),
-                    current_balance=user.balance
+                    current_balance=user.balance,
+                    sync_meta=fin_data.get("sync", {}),
                 )
                 
                 count = len(fin_data.get("invoices", [])) + len(fin_data.get("charges", []))
@@ -317,7 +323,8 @@ class AppController(QObject):
             self._pending_tunnel.discard(iid)
             if iid not in self._live_workers:
                 self._start_live_metrics(iid)
-            self._start_model_watcher(iid)
+            if self._find_instance(iid) is not None:
+                self._start_model_watcher(iid)
         elif self.tunnel_states[iid] == TunnelStatus.FAILED:
             self.toast_requested.emit("Falha na conexão. Veja o log.", "error", 4000)
             self._pending_tunnel.discard(iid)

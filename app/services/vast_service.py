@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import time
 from typing import Any
 from app.models import Instance, InstanceState, UserInfo
 
@@ -58,6 +59,20 @@ def _normalize_util(v: Any) -> float | None:
     if f <= 1.5:
         return f * 100.0
     return f
+
+
+def _nested_float(raw: dict, *paths: tuple[str, ...]) -> float | None:
+    for path in paths:
+        cur: Any = raw
+        for key in path:
+            if not isinstance(cur, dict):
+                cur = None
+                break
+            cur = cur.get(key)
+        val = _to_float(cur)
+        if val is not None:
+            return val
+    return None
 
 
 def parse_instance(raw: dict) -> Instance:
@@ -143,9 +158,22 @@ def parse_instance(raw: dict) -> Instance:
         pcie_bw_gbps=_to_float(raw.get("pcie_bw")),
         disk_bw_mbps=_to_float(raw.get("disk_bw")),
         dlperf=_to_float(raw.get("dlperf")),
+        total_flops=_to_float(raw.get("total_flops")),
+        flops_per_dphtotal=_to_float(raw.get("flops_per_dphtotal")),
         reliability=_to_float(raw.get("reliability2") or raw.get("reliability")),
+        verification=raw.get("verification") or None,
         inet_down_billed_gb=_to_float(raw.get("inet_down_billed")),
         inet_up_billed_gb=_to_float(raw.get("inet_up_billed")),
+        discounted_total_per_hour=_nested_float(
+            raw,
+            ("discounted_total_per_hour",),
+            ("discountedTotalPerHour",),
+            ("instance", "discountedTotalPerHour"),
+            ("search", "discountedTotalPerHour"),
+        ),
+        storage_cost_per_gb_month=_to_float(
+            raw.get("storage_cost") or raw.get("storageCost")
+        ),
         storage_total_cost=_to_float(raw.get("storage_total_cost")),
         raw=raw,
     )
@@ -168,6 +196,18 @@ def _normalize_response(raw):
         except json.JSONDecodeError:
             return {}
     return raw if raw is not None else {}
+
+
+def _results_from_response(raw: Any) -> list[dict]:
+    data = _normalize_response(raw)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("results", "charges", "invoices"):
+            rows = data.get(key)
+            if isinstance(rows, list):
+                return [item for item in rows if isinstance(item, dict)]
+    return []
 
 
 class VastService:
@@ -228,33 +268,75 @@ class VastService:
     def get_user_info(self) -> UserInfo:
         return self.test_connection()
 
-    def fetch_financial_data(self) -> dict:
-        """Fetch both invoices (deposits) and charges (usage) for the last 30 days."""
-        import time, requests, json
-        cutoff = int(time.time() - (30 * 24 * 3600))
-        results = {"invoices": [], "charges": []}
-        
-        headers = {"Authorization": f"Bearer {self.api_key}"} # Optional but cleaner
-        params = {"api_key": self.api_key}
-        
-        # 1. Fetch Invoices (Deposits/Credits)
-        try:
-            url_inv = "https://console.vast.ai/api/v0/invoices/"
-            resp = requests.get(url_inv, params=params, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                results["invoices"] = data if isinstance(data, list) else data.get("invoices", [])
-        except Exception: pass
+    def _fetch_billing_pages(
+        self,
+        *,
+        charges: bool,
+        start_ts: int,
+        end_ts: int,
+        limit: int = 100,
+        max_pages: int = 20,
+    ) -> list[dict]:
+        """Fetch paginated billing rows through the official VastAI SDK.
 
-        # 2. Fetch Charges (Usage)
-        try:
-            # Filters format according to research: select_filters={"when":{"gte":...}}
-            filters = json.dumps({"when": {"gte": cutoff}})
-            url_chg = "https://console.vast.ai/api/v0/charges/"
-            resp = requests.get(url_chg, params={"api_key": self.api_key, "select_filters": filters}, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                results["charges"] = data if isinstance(data, list) else data.get("charges", [])
-        except Exception: pass
-        
-        return results
+        The SDK maps this to the current REST endpoints:
+        - charges: GET /api/v0/charges/ with a `day` select_filter
+        - invoices: GET /api/v1/invoices/ with a `when` select_filter
+        """
+        rows: list[dict] = []
+        next_token = None
+        for _ in range(max_pages):
+            kwargs: dict[str, Any] = {
+                "charges": charges,
+                "start_date": start_ts,
+                "end_date": end_ts,
+                "latest_first": True,
+                "limit": max(1, min(limit, 100)),
+            }
+            if charges:
+                kwargs["format"] = "tree"
+            if next_token:
+                kwargs["next_token"] = next_token
+
+            raw = self._call("show_invoices_v1", **kwargs)
+            data = _normalize_response(raw)
+            if isinstance(data, dict) and data.get("success") is False:
+                raise VastNetworkError(str(data.get("msg") or data.get("error") or data))
+
+            rows.extend(_results_from_response(data))
+            if not isinstance(data, dict):
+                break
+            next_token = data.get("next_token")
+            if not next_token:
+                break
+        return rows
+
+    def fetch_financial_data(self, days: int = 30) -> dict:
+        """Fetch invoices and charges used by Analytics.
+
+        Live resources already flow through `show_user` and `show_instances`.
+        This deep sync uses the VastAI SDK's current billing wrapper so the app
+        gets itemized GPU, storage and bandwidth charges plus credit/top-up
+        invoices without maintaining raw HTTP endpoint glue in the UI layer.
+        """
+        days = max(1, min(int(days), 90))
+        end_ts = int(time.time())
+        start_ts = end_ts - (days * 24 * 3600)
+
+        charges = self._fetch_billing_pages(
+            charges=True, start_ts=start_ts, end_ts=end_ts
+        )
+        invoices = self._fetch_billing_pages(
+            charges=False, start_ts=start_ts, end_ts=end_ts
+        )
+        return {
+            "invoices": invoices,
+            "charges": charges,
+            "sync": {
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "days": days,
+                "charge_count": len(charges),
+                "invoice_count": len(invoices),
+            },
+        }

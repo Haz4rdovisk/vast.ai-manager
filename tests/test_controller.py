@@ -1,6 +1,7 @@
 """AppController owns all worker lifecycles. Tests pin the public contract
 the shell will rely on. VastService/SSHService are mocked; workers aren't
 started (we test wiring, not threading)."""
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import pytest
 from app.controller import AppController
@@ -50,6 +51,20 @@ def test_controller_tunnel_state_tracking(store):
     c = AppController(store)
     c._on_tunnel_status(123, TunnelStatus.CONNECTED.value, "ok")
     assert c.tunnel_states[123] == TunnelStatus.CONNECTED
+
+
+def test_today_spend_uses_live_tracker_when_billing_has_no_today(store):
+    c = AppController(store)
+    c.analytics_store._billing_events = [
+        {
+            "kind": "charge",
+            "ts": (datetime.now() - timedelta(days=1)).isoformat(),
+            "amount": 1.0,
+        }
+    ]
+    c.tracker._total = 0.42
+
+    assert c.today_spend() == 0.42
 
 
 def test_controller_shutdown_stops_everything(store):

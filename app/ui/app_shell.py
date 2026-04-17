@@ -56,6 +56,8 @@ class AppShell(QWidget):
         self._ssh = ssh_service
         self.analytics_store = analytics_store
         self._controller = None
+        self._current_view = ""
+        self._analytics_api_sync_pending = False
         
         self._host: str = ""
         self._port: int = 0
@@ -153,8 +155,12 @@ class AppShell(QWidget):
     def _switch(self, key: str):
         v = self._views.get(key)
         if v is not None:
+            entering_analytics = key == "analytics" and self._current_view != "analytics"
             self.stack.setCurrentWidget(v)
             self.title_bar.setPageTitle(_VIEW_LABELS.get(key, key.title()))
+            self._current_view = key
+            if entering_analytics:
+                self._request_analytics_api_sync()
 
     def _go(self, key: str):
         self.nav.set_active(key)
@@ -181,6 +187,7 @@ class AppShell(QWidget):
         controller.instances_refreshed.connect(self.hardware.sync_instances)
         # Sync analytics
         controller.instances_refreshed.connect(self._sync_analytics)
+        controller.refresh_failed.connect(lambda *_: setattr(self, "_analytics_api_sync_pending", False))
 
         # Settings wiring
         self.settings_view.load_config(controller.config)
@@ -188,7 +195,6 @@ class AppShell(QWidget):
 
         # Wire persistent analytics store from controller
         self.analytics.set_store(controller.analytics_store)
-        self.analytics.sync_requested.connect(controller.request_deep_sync)
         
         # Models connections
         self.models.back_requested.connect(lambda: self._go("dashboard"))
@@ -198,10 +204,20 @@ class AppShell(QWidget):
         self.nav.set_active("instances")
 
     def _sync_analytics(self, instances, user_info):
+        self._analytics_api_sync_pending = False
         self.analytics.sync(
             instances, user_info,
             self._controller.today_spend() if self._controller else 0.0,
         )
+
+    def _request_analytics_api_sync(self):
+        if self._controller is None or self._controller.vast is None:
+            return
+        if self._analytics_api_sync_pending:
+            return
+        self._analytics_api_sync_pending = True
+        self._controller.log_line.emit("Sincronizando Analytics com a API da Vast.ai...")
+        self._controller.request_deep_sync()
 
     def _on_settings_saved(self, cfg):
         """Handle settings save from the inline view."""

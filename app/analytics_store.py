@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 
 _LOG_PATH = Path.home() / ".vastai-app" / "analytics.json"
@@ -39,6 +39,8 @@ class AnalyticsStore:
         self._entries: list[dict] = []
         self._last_recharge_val = 0.0
         self._last_recharge_ts: float = 0.0
+        self._billing_summary: dict = {}
+        self._billing_events: list[dict] = []
         self._last_write: datetime | None = None
         self._load()
 
@@ -58,11 +60,15 @@ class AnalyticsStore:
                 self._entries = data.get("entries", [])
                 self._last_recharge_val = data.get("last_recharge_val", 0.0)
                 self._last_recharge_ts = data.get("last_recharge_ts", 0.0)
+                self._billing_summary = data.get("billing_summary", {})
+                self._billing_events = data.get("billing_events", [])
             # Se for o formato antigo (list)
             elif isinstance(data, list):
                 self._entries = data
                 self._last_recharge_val = 0.0
                 self._last_recharge_ts = 0.0
+                self._billing_summary = {}
+                self._billing_events = []
             else:
                 self._entries = []
                 
@@ -87,7 +93,9 @@ class AnalyticsStore:
             payload = {
                 "entries": self._entries,
                 "last_recharge_val": self._last_recharge_val,
-                "last_recharge_ts": self._last_recharge_ts
+                "last_recharge_ts": self._last_recharge_ts,
+                "billing_summary": self._billing_summary,
+                "billing_events": self._billing_events,
             }
             self._path.write_text(
                 json.dumps(payload, separators=(",", ":")),
@@ -123,109 +131,151 @@ class AnalyticsStore:
         self._last_write = now
         self._save()
 
-    def import_history(self, invoices: list[dict], charges: list[dict], current_balance: float):
-        """Backfill history by reverse-calculating balance from both top-ups and usage."""
-        # Standardize and Combine
-        raw_items = []
+    def import_history(
+        self,
+        invoices: list[dict],
+        charges: list[dict],
+        current_balance: float,
+        sync_meta: dict | None = None,
+    ) -> dict:
+        """Backfill balance history from Vast invoices and charge records.
+
+        Vast billing gives us two different streams: invoices/top-ups and
+        itemized charges. We walk them backwards from the current balance so
+        the local dashboard can draw a real balance timeline even before many
+        live snapshots have accumulated.
+        """
+        events: list[dict] = []
+        summary = _empty_summary(sync_meta)
+
         for inv in invoices:
-            ts = inv.get("timestamp") or inv.get("when")
-            if not ts: continue
-            
-            # Detect top-up
-            amount_cents = inv.get("amount_cents")
-            amount_raw = inv.get("amount")
-            if amount_cents is not None:
-                amt = abs(float(amount_cents)) / 100.0
-                is_topup = (amount_cents < 0) or inv.get("is_credit", False)
-            else:
-                try: amt = float(amount_raw if amount_raw is not None else 0)
-                except: amt = 0.0
-                type_str = str(inv.get("type", "")).lower()
-                is_topup = type_str in ["deposit", "payment", "credit"] or (type_str != "charge" and amt > 0)
-            
-            raw_items.append({"ts": ts, "amt": amt, "is_topup": is_topup})
+            ts = _timestamp(inv, ("end", "start", "timestamp", "when", "paid_on"))
+            credit = _invoice_credit_amount(inv)
+            if ts is None or credit <= 0:
+                continue
+            events.append({
+                "ts": ts,
+                "amount": credit,
+                "kind": "credit",
+                "rate": 0.0,
+            })
+            summary["credits"] += credit
+            summary["invoice_count"] += 1
+            if ts > self._last_recharge_ts:
+                self._last_recharge_ts = ts
+                self._last_recharge_val = credit
 
         for chg in charges:
-            ts = chg.get("timestamp") or chg.get("when")
-            amt = float(chg.get("amount") or 0)
-            rate = float(chg.get("rate") or 0)
-            if ts and amt > 0:
-                raw_items.append({"ts": ts, "amt": amt, "rate": rate, "is_topup": False})
+            ts = _timestamp(chg, ("end", "start", "day", "timestamp", "when"))
+            amount = _positive_amount(chg.get("amount"))
+            if ts is None or amount <= 0:
+                continue
 
-        if not raw_items:
-            return
+            cats = _charge_categories(chg)
+            if not any(cats.values()):
+                cats[_charge_category(chg)] += amount
 
-        # Sort newest first
-        raw_items.sort(key=lambda x: x["ts"], reverse=True)
-        
-        running_balance = current_balance
-        historic_entries = []
-        
-        for item in raw_items:
-            ts, amt, rate, is_topup = item["ts"], item["amt"], item.get("rate", 0.0), item["is_topup"]
+            start_ts = _timestamp(chg, ("start",))
+            duration_h = ((ts - start_ts) / 3600.0) if start_ts and ts > start_ts else 0.0
+            rate = (amount / duration_h) if duration_h > 0 else _positive_amount(chg.get("rate"))
+            source = str(chg.get("source") or chg.get("instance_id") or chg.get("description") or "unknown")
+
+            events.append({
+                "ts": ts,
+                "amount": amount,
+                "kind": "charge",
+                "rate": rate,
+                "categories": cats,
+                "source": source,
+            })
+            summary["charges"] += amount
+            summary["charge_count"] += 1
+            for key, value in cats.items():
+                summary["categories"][key] = round(summary["categories"].get(key, 0.0) + value, 4)
+            summary["sources"][source] = round(summary["sources"].get(source, 0.0) + amount, 4)
+
+        self._billing_events = [
+            {
+                "ts": datetime.fromtimestamp(float(item["ts"])).isoformat(timespec="seconds"),
+                "amount": round(float(item["amount"]), 4),
+                "kind": item["kind"],
+                "source": item.get("source", "unknown"),
+                "categories": item.get("categories", {}),
+            }
+            for item in events
+            if item.get("kind") == "charge"
+        ]
+
+        if not events:
+            self._billing_summary = _finalize_summary(summary)
+            self._save()
+            return self._billing_summary
+
+        events.sort(key=lambda x: x["ts"], reverse=True)
+
+        running_balance = float(current_balance)
+        historic_entries: list[dict] = []
+        for item in events:
+            ts = float(item["ts"])
             dt = datetime.fromtimestamp(ts)
-            iso = dt.isoformat()
-            
-            # Capture state AFTER (going backwards)
+            amount = float(item["amount"])
+            rate = max(0.0, float(item.get("rate") or 0.0))
+            cats = item.get("categories") or {}
+
             historic_entries.append(asdict(CostSnapshot(
-                ts=iso, balance=running_balance,
-                burn_total=rate, burn_gpu=rate, burn_storage=0.0, burn_network=0.0, instances=[]
+                ts=dt.isoformat(timespec="seconds"),
+                balance=round(running_balance, 4),
+                burn_total=round(rate, 4),
+                burn_gpu=round(cats.get("gpu", rate if item["kind"] == "charge" else 0.0), 4),
+                burn_storage=round(cats.get("storage", 0.0), 4),
+                burn_network=round(cats.get("network", 0.0), 4),
+                instances=[],
             )))
 
-            # Detect recharge for fuel tank metadata
-            if is_topup and ts > self._last_recharge_ts:
-                self._last_recharge_ts = ts
-                self._last_recharge_val = amt
+            if item["kind"] == "credit":
+                running_balance -= amount
+            else:
+                running_balance += amount
 
-            # Apply reverse math
-            if is_topup: running_balance -= amt
-            else: running_balance += amt
-
-            # Capture state BEFORE (the "step")
             historic_entries.append(asdict(CostSnapshot(
-                ts=(dt - timedelta(seconds=1)).isoformat(),
-                balance=running_balance,
-                burn_total=0.0, burn_gpu=0.0, burn_storage=0.0, burn_network=0.0, instances=[]
+                ts=(dt - timedelta(seconds=1)).isoformat(timespec="seconds"),
+                balance=round(running_balance, 4),
+                burn_total=0.0,
+                burn_gpu=0.0,
+                burn_storage=0.0,
+                burn_network=0.0,
+                instances=[],
             )))
 
-        # Merge unique points
         unique = {p["ts"]: p for p in (historic_entries + self._entries)}
-        sorted_keys = sorted(unique.keys())
-        self._entries = [unique[k] for k in sorted_keys]
+        self._entries = [unique[k] for k in sorted(unique.keys())]
+        self._billing_summary = _finalize_summary(summary)
         self._save()
-        self.log_line.emit(f"✓ Timeline reconstruída: {len(self._entries)} pontos")
+        return self._billing_summary
 
     # ── Queries ─────────────────────────────────────────────────────────
 
     def balance_timeline(self, hours: int = 24) -> list[tuple[str, float]]:
         """Return (timestamp, balance) pairs for the last N hours."""
-        if not self._entries:
-            return []
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        cutoff = datetime.now() - timedelta(hours=hours)
         return [
             (e["ts"], e["balance"])
-            for e in self._entries
-            if e.get("ts", "") >= cutoff
+            for e in self._entries_since(cutoff, include_anchor=True)
+            if "balance" in e
         ]
 
     def burn_rate_timeline(self, hours: int = 24) -> list[tuple[str, float]]:
         """Return (timestamp, burn_rate) pairs for the last N hours."""
-        if not self._entries:
-            return []
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        cutoff = datetime.now() - timedelta(hours=hours)
         return [
             (e["ts"], e.get("burn_total", 0.0))
-            for e in self._entries
-            if e.get("ts", "") >= cutoff
+            for e in self._entries_since(cutoff, include_anchor=True)
         ]
 
     def period_spend(self, days: int = 1) -> float:
         """Return total consumption (balance drops only) within the last N days."""
-        if not self._entries:
-            return 0.0
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        period = [e for e in self._entries if e.get("ts", "") >= cutoff]
-        
+        cutoff = datetime.now() - timedelta(days=days)
+        period = self._entries_since(cutoff, include_anchor=True)
         spend = 0.0
         for i in range(1, len(period)):
             p, c = period[i-1]["balance"], period[i]["balance"]
@@ -234,44 +284,125 @@ class AnalyticsStore:
         return round(spend, 4)
 
     def today_spend(self) -> float:
-        return self.period_spend(1)
+        start = datetime.combine(datetime.now().date(), datetime.min.time())
+        return self._charge_spend_since(start, fallback_days=1)
 
     def week_spend(self) -> float:
-        return self.period_spend(7)
+        today = datetime.now().date()
+        week_start = today - timedelta(days=today.weekday())
+        start = datetime.combine(week_start, datetime.min.time())
+        return self._charge_spend_since(start, fallback_days=7)
 
     def month_spend(self) -> float:
-        return self.period_spend(30)
+        today = datetime.now().date()
+        start = datetime(today.year, today.month, 1)
+        return self._charge_spend_since(start, fallback_days=30)
 
     def daily_spend_history(self, days: int = 7) -> list[tuple[str, float]]:
         """Return a list of (date_str, spend_usd) pairs aggregated by calendar day."""
-        if not self._entries:
-            return []
-            
-        cutoff = (datetime.now() - timedelta(days=days)).date()
-        
-        # 1. Group snapshots by date
-        from collections import defaultdict
-        by_day = defaultdict(list)
-        for e in self._entries:
-            dt = datetime.fromisoformat(e["ts"]).date()
-            if dt >= cutoff:
-                by_day[dt].append(e)
-                
-        # 2. For each day, calculate spend as the sum of balance drops
-        # (This correctly ignore deposits/top-ups)
-        results = []
-        sorted_dates = sorted(by_day.keys())
-        for d in sorted_dates:
-            entries = by_day[d]
-            day_spend = 0.0
-            for i in range(1, len(entries)):
-                prev_bal = entries[i-1]["balance"]
-                curr_bal = entries[i]["balance"]
-                if curr_bal < prev_bal:
-                    day_spend += (prev_bal - curr_bal)
-            results.append((d.strftime("%d %b"), round(day_spend, 3)))
-            
-        return results
+        days = max(1, int(days))
+        today = datetime.now().date()
+        start_day = today - timedelta(days=days - 1)
+        buckets = {
+            start_day + timedelta(days=i): 0.0
+            for i in range(days)
+        }
+        if self._billing_events:
+            for event in self._charge_events_since(datetime.combine(start_day, datetime.min.time())):
+                dt = _parse_ts(event.get("ts"))
+                if dt is None:
+                    continue
+                day = dt.date()
+                if day in buckets:
+                    buckets[day] += float(event.get("amount") or 0.0)
+            return [(day.strftime("%d %b"), round(value, 3)) for day, value in buckets.items()]
+
+        entries = self._entries_since(
+            datetime.combine(start_day, datetime.min.time()),
+            include_anchor=True,
+        )
+        for prev, curr in zip(entries, entries[1:]):
+            drop = prev.get("balance", 0.0) - curr.get("balance", 0.0)
+            if drop <= 0:
+                continue
+            curr_dt = _parse_ts(curr.get("ts"))
+            if curr_dt is None:
+                continue
+            day = curr_dt.date()
+            if day in buckets:
+                buckets[day] += drop
+        return [(day.strftime("%d %b"), round(value, 3)) for day, value in buckets.items()]
+
+    def spend_buckets(self, hours: int = 24, bucket_count: int = 8) -> list[tuple[str, float]]:
+        """Return balance-drop spend in evenly sized buckets for short ranges."""
+        hours = max(1, int(hours))
+        bucket_count = max(1, int(bucket_count))
+        end = datetime.now()
+        start = end - timedelta(hours=hours)
+        bucket_seconds = (end - start).total_seconds() / bucket_count
+        values = [0.0 for _ in range(bucket_count)]
+
+        if self._billing_events:
+            for event in self._charge_events_since(start):
+                dt = _parse_ts(event.get("ts"))
+                if dt is None:
+                    continue
+                idx = int((dt - start).total_seconds() // bucket_seconds)
+                idx = max(0, min(bucket_count - 1, idx))
+                values[idx] += float(event.get("amount") or 0.0)
+            labels = []
+            for i, value in enumerate(values):
+                bucket_start = start + timedelta(seconds=bucket_seconds * i)
+                labels.append((bucket_start.strftime("%H:%M"), round(value, 3)))
+            return labels
+
+        entries = self._entries_since(start, include_anchor=True)
+        for prev, curr in zip(entries, entries[1:]):
+            drop = prev.get("balance", 0.0) - curr.get("balance", 0.0)
+            if drop <= 0:
+                continue
+            curr_dt = _parse_ts(curr.get("ts"))
+            if curr_dt is None or curr_dt < start:
+                continue
+            idx = int((curr_dt - start).total_seconds() // bucket_seconds)
+            idx = max(0, min(bucket_count - 1, idx))
+            values[idx] += drop
+
+        labels = []
+        for i, value in enumerate(values):
+            bucket_start = start + timedelta(seconds=bucket_seconds * i)
+            labels.append((bucket_start.strftime("%H:%M"), round(value, 3)))
+        return labels
+
+    def _entries_since(self, cutoff: datetime, include_anchor: bool = False) -> list[dict]:
+        parsed = []
+        for entry in self._entries:
+            dt = _parse_ts(entry.get("ts"))
+            if dt is not None:
+                parsed.append((dt, entry))
+        parsed.sort(key=lambda item: item[0])
+        out = [entry for dt, entry in parsed if dt >= cutoff]
+        if include_anchor:
+            anchor = next((entry for dt, entry in reversed(parsed) if dt < cutoff), None)
+            if anchor is not None:
+                out.insert(0, anchor)
+        return out
+
+    def _charge_spend_since(self, start: datetime, fallback_days: int) -> float:
+        charges = [float(event.get("amount") or 0.0) for event in self._charge_events_since(start)]
+        if charges or self._billing_events:
+            return round(sum(charges), 4)
+        return self.period_spend(fallback_days)
+
+    def _charge_events_since(self, start: datetime) -> list[dict]:
+        out = []
+        for event in self._billing_events:
+            if event.get("kind") != "charge":
+                continue
+            dt = _parse_ts(event.get("ts"))
+            if dt is not None and dt >= start:
+                out.append(event)
+        return out
 
     @property
     def entry_count(self) -> int:
@@ -282,3 +413,156 @@ class AnalyticsStore:
         if self._entries:
             return self._entries[-1].get("balance")
         return None
+
+    @property
+    def billing_summary(self) -> dict:
+        return dict(self._billing_summary)
+
+    @property
+    def has_billing_events(self) -> bool:
+        return bool(self._billing_events)
+
+
+def _empty_summary(sync_meta: dict | None = None) -> dict:
+    return {
+        "synced_at": datetime.now().isoformat(timespec="seconds"),
+        "range_days": int((sync_meta or {}).get("days") or 30),
+        "charge_count": 0,
+        "invoice_count": 0,
+        "charges": 0.0,
+        "credits": 0.0,
+        "categories": {"gpu": 0.0, "storage": 0.0, "network": 0.0, "other": 0.0},
+        "sources": {},
+    }
+
+
+def _finalize_summary(summary: dict) -> dict:
+    sources = summary.pop("sources", {})
+    top_sources = sorted(
+        ({"source": source, "amount": amount} for source, amount in sources.items()),
+        key=lambda item: item["amount"],
+        reverse=True,
+    )[:5]
+    summary["top_sources"] = top_sources
+    summary["charges"] = round(summary["charges"], 4)
+    summary["credits"] = round(summary["credits"], 4)
+    summary["net"] = round(summary["charges"] - summary["credits"], 4)
+    summary["categories"] = {
+        key: round(float(value), 4)
+        for key, value in summary.get("categories", {}).items()
+    }
+    return summary
+
+
+def _to_float(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _positive_amount(v: Any) -> float:
+    amount = _to_float(v)
+    if amount is None:
+        return 0.0
+    return abs(amount)
+
+
+def _timestamp(row: dict, keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        raw = row.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        text = str(raw).strip()
+        if not text:
+            continue
+        if text.replace(".", "", 1).isdigit():
+            return float(text)
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_ts(raw: Any) -> datetime | None:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, (int, float)):
+        return datetime.fromtimestamp(float(raw))
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.replace(".", "", 1).isdigit():
+        return datetime.fromtimestamp(float(text))
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except ValueError:
+        return None
+
+
+def _invoice_credit_amount(row: dict) -> float:
+    amount_cents = _to_float(row.get("amount_cents"))
+    if amount_cents is not None:
+        amount = abs(amount_cents) / 100.0
+        if amount_cents < 0 or row.get("is_credit"):
+            return amount
+
+    amount = _to_float(row.get("amount"))
+    if amount is None:
+        return 0.0
+    type_text = " ".join(
+        str(row.get(k, "")).lower()
+        for k in ("type", "source", "description")
+    )
+    is_credit = (
+        amount < 0
+        or row.get("is_credit")
+        or any(token in type_text for token in (
+            "credit", "deposit", "payment", "stripe", "coinbase",
+            "bitpay", "crypto.com", "paypal", "wise", "transfer",
+        ))
+    )
+    return abs(amount) if is_credit else 0.0
+
+
+def _charge_categories(row: dict) -> dict[str, float]:
+    out = {"gpu": 0.0, "storage": 0.0, "network": 0.0, "other": 0.0}
+
+    def visit(item: dict):
+        children = item.get("items")
+        if isinstance(children, list) and children:
+            for child in children:
+                if isinstance(child, dict):
+                    visit(child)
+            return
+        amount = _positive_amount(item.get("amount"))
+        if amount <= 0:
+            return
+        out[_charge_category(item)] += amount
+
+    visit(row)
+    return {k: round(v, 4) for k, v in out.items()}
+
+
+def _charge_category(row: dict) -> str:
+    text = " ".join(
+        str(row.get(k, "")).lower()
+        for k in ("type", "source", "description")
+    )
+    if any(token in text for token in ("storage", "disk", "volume")):
+        return "storage"
+    if any(token in text for token in ("bandwidth", "upload", "download", "network", "inet")):
+        return "network"
+    if any(token in text for token in ("gpu", "instance", "compute", "rental")):
+        return "gpu"
+    return "other"
