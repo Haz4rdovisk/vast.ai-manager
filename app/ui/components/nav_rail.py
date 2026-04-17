@@ -8,10 +8,7 @@ from app import theme as t
 NAV_ITEMS = [
     ("instances",  "Instances",    "\u2630"),
     ("dashboard",  "Dashboard",    "\u25C8"),
-    ("discover",   "Discover",     "\u2726"),
-    ("models",     "Models",       "\u25A4"),
-    ("configure",  "Configure",    "\u2699"),
-    ("monitor",    "Monitor",      "\u25F4"),
+    ("hardware",   "Hardware",     "\u231B"),
 ]
 
 

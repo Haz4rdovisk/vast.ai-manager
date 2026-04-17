@@ -1,10 +1,10 @@
-"""Discover view \u2014 LLMfit-powered model recommendations from the remote instance."""
+"""Discover view — LLMfit-powered model recommendations from the remote instance."""
 from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QScrollArea, QPushButton, QLineEdit,
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Qt
 from app import theme as t
 from app.ui.components.primitives import GlassCard, SectionHeader, StatusPill
 
@@ -21,6 +21,7 @@ USE_CASES = [
 class DiscoverView(QWidget):
     download_requested = Signal(str, str)  # model name, best_quant
     refresh_requested = Signal(str, str)   # use_case, search
+    back_requested = Signal()              # back to dashboard
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -30,8 +31,25 @@ class DiscoverView(QWidget):
         root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
         root.setSpacing(t.SPACE_5)
 
+        # 1. Breadcrumb / Context header
+        breadcrumb = QHBoxLayout()
+        breadcrumb.setSpacing(t.SPACE_2)
+        
+        back_btn = QPushButton("\u2190  Back")
+        back_btn.setProperty("variant", "ghost")
+        back_btn.setFixedWidth(80)
+        back_btn.clicked.connect(self.back_requested.emit)
+        breadcrumb.addWidget(back_btn)
+        
+        self.ctx_lbl = QLabel("Dashboard > Discover Models")
+        self.ctx_lbl.setStyleSheet(f"color: {t.TEXT_MID}; font-weight: 500;")
+        breadcrumb.addWidget(self.ctx_lbl)
+        breadcrumb.addStretch()
+        root.addLayout(breadcrumb)
+
+        # 2. Hero Header
         head = QHBoxLayout()
-        head.addWidget(SectionHeader("LLMFIT", "Discover Models"))
+        head.addWidget(SectionHeader("LLMFIT", "Model Recommendations"))
         head.addStretch()
 
         self.search_input = QLineEdit()
@@ -68,38 +86,75 @@ class DiscoverView(QWidget):
         self.scroll.setWidget(self.list_host)
         root.addWidget(self.scroll, 1)
 
+        # Store connections
+        self.store.instance_changed.connect(self._on_instance_changed)
         self.store.remote_models_changed.connect(self._render)
         self.store.setup_status_changed.connect(self._update_status)
+        self.store.instance_state_updated.connect(lambda iid, _: self._check_busy(iid))
+
+    def _check_busy(self, iid: int):
+        if iid == self.store.selected_instance_id:
+            busy = "discover" in self.store.get_state(iid).busy_keys
+            self.refresh_btn.setEnabled(not busy)
+            self.search_input.setEnabled(not busy)
+            self.filter.setEnabled(not busy)
+
+    def _on_instance_changed(self, iid: int):
+        if iid:
+            self.ctx_lbl.setText(f"Dashboard > Instance #{iid} > Discover Models")
+        else:
+            self.ctx_lbl.setText("Dashboard > Discover Models")
 
     def _refresh(self):
+        # Prevent rapid parallel requests
+        iid = self.store.selected_instance_id
+        if iid and "discover" in self.store.get_state(iid).busy_keys:
+            return
+
         uc = self.filter.currentData() or "all"
         search = self.search_input.text().strip()
         self.refresh_requested.emit(uc, search)
 
     def _update_status(self, s):
         if s.llmfit_serving:
-            self.status_lbl.setText(f"LLMfit active \u2714  \u00b7  Showing models ranked for this instance's hardware.")
+            self.status_lbl.setText(f"LLMfit active \u2714  \u00b7  Showing models ranked for this machine's specific hardware.")
             self.status_lbl.setStyleSheet(f"color: {t.OK};")
         else:
-            self.status_lbl.setText("LLMfit not running. Go to Dashboard \u2192 Setup first.")
+            self.status_lbl.setText("LLMfit not running. Please install and start it from the Dashboard setup section.")
             self.status_lbl.setStyleSheet(f"color: {t.WARN};")
 
-    def _render(self, models):
+    def _render(self, models: list[RemoteModel]):
+        # Guard against None
+        if models is None:
+            models = []
+            
+        # Clear existing
         while self.list_lay.count():
-            w = self.list_lay.takeAt(0).widget()
-            if w:
-                w.deleteLater()
+            item = self.list_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
         if not models:
-            lbl = QLabel("No models found. Try a different filter or install LLMfit first.")
+            iid = self.store.selected_instance_id
+            st = self.store.get_state(iid) if iid else None
+            is_busy = st and ("discover" in st.busy_keys or "setup" in st.busy_keys or "probe" in st.busy_keys)
+            
+            if is_busy:
+                msg = "Searching for model recommendations matching your hardware..."
+                if st and "setup" in st.busy_keys:
+                    msg = "Waking up Model Advisor (LLMfit)... almost there."
+                lbl = QLabel(msg)
+            else:
+                lbl = QLabel("No models found matching your hardware profile. Try a different filter.")
+                
             lbl.setProperty("role", "muted")
+            lbl.setAlignment(Qt.AlignCenter)
             self.list_lay.addWidget(lbl)
             self.list_lay.addStretch()
             return
 
         for m in models:
             card = GlassCard()
-            # Header row: name + fit pill
             header = QHBoxLayout()
             title = QLabel(m.name)
             title.setProperty("role", "title")
@@ -109,38 +164,23 @@ class DiscoverView(QWidget):
             header.addWidget(StatusPill(m.fit_label or m.fit_level.upper(), level))
             card.body().addLayout(header)
 
-            # Meta row
             meta_parts = []
-            if m.provider:
-                meta_parts.append(m.provider)
+            if m.provider: meta_parts.append(m.provider)
             meta_parts.append(f"{m.params_b:.1f}B")
-            if m.best_quant:
-                meta_parts.append(m.best_quant)
-            if m.use_case:
-                meta_parts.append(m.use_case)
-            if m.estimated_tps:
-                meta_parts.append(f"~{m.estimated_tps:.0f} tok/s")
-            if m.memory_required_gb:
-                meta_parts.append(f"~{m.memory_required_gb:.1f} GB")
+            if m.best_quant: meta_parts.append(m.best_quant)
+            if m.use_case: meta_parts.append(m.use_case)
+            if m.estimated_tps: meta_parts.append(f"~{m.estimated_tps:.0f} tok/s")
             meta = QLabel("  \u00b7  ".join(meta_parts))
             meta.setProperty("role", "muted")
             card.body().addWidget(meta)
 
-            # Score bar
             score_row = QHBoxLayout()
-            score_lbl = QLabel(f"Score: {m.score:.0f}")
+            score_lbl = QLabel(f"Rank Score: {m.score:.0f}")
             score_lbl.setStyleSheet(f"color: {t.ACCENT}; font-weight: bold;")
             score_row.addWidget(score_lbl)
-
-            if m.run_mode:
-                run = QLabel(f"Run: {m.run_mode.upper()}")
-                run.setProperty("role", "muted")
-                score_row.addWidget(run)
-
             score_row.addStretch()
 
-            # Download button
-            dl_btn = QPushButton("Download to Instance")
+            dl_btn = QPushButton("One-Click Download")
             dl_btn.setEnabled(m.fit_level != "too_tight")
             dl_btn.clicked.connect(
                 lambda _=False, name=m.name, q=m.best_quant:
@@ -151,5 +191,3 @@ class DiscoverView(QWidget):
             self.list_lay.addWidget(card)
 
         self.list_lay.addStretch()
-        self.status_lbl.setText(f"{len(models)} models ranked for this instance.")
-        self.status_lbl.setStyleSheet(f"color: {t.OK};")

@@ -59,6 +59,7 @@ class AppController(QObject):
         self.list_worker:   ListWorker | None    = None
         self.action_worker: ActionWorker | None  = None
         self.tunnel_starter:TunnelStarter | None = None
+        self._on_passphrase_success: callable | None = None
 
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self._on_timer_tick)
@@ -158,14 +159,23 @@ class AppController(QObject):
     def _on_refreshed(self, instances: list, user):
         self.last_instances = instances
         self.last_user = user
+        
+        # Force disconnect metadata for non-running instances
+        from app.models import InstanceState, TunnelStatus
         for inst in instances:
             self.tracker.update(inst)
+            if inst.state != InstanceState.RUNNING:
+                if self.tunnel_states.get(inst.id) != TunnelStatus.DISCONNECTED:
+                    self.tunnel_states[inst.id] = TunnelStatus.DISCONNECTED
+                    self.tunnel_status_changed.emit(inst.id, TunnelStatus.DISCONNECTED, "instance-not-running")
+
         self._check_tunnels_health()
         self._sync_live_workers(instances)
+        self.log_line.emit(f"✓ Dados sincronizados ({len(instances)} instâncias)")
         self.instances_refreshed.emit(instances, user)
 
     def _on_refresh_failed(self, kind: str, message: str):
-        self.log_line.emit(f"Erro ({kind}): {message}")
+        self.log_line.emit(f"✗ Erro ao sincronizar: {message}")
         self.refresh_failed.emit(kind, message)
         if kind == "auth":
             self.toast_requested.emit("API key inválida", "error", 3000)
@@ -182,6 +192,7 @@ class AppController(QObject):
         if iid in self._pending_start:
             return False
         if self.config.auto_connect_on_activate and not self._has_usable_passphrase():
+            self._on_passphrase_success = lambda: self.activate(iid)
             self.passphrase_needed.emit()
             return False
         self._pending_start.add(iid)
@@ -205,6 +216,7 @@ class AppController(QObject):
         if iid in self._pending_tunnel:
             return
         if not self._has_usable_passphrase():
+            self._on_passphrase_success = lambda: self.connect_tunnel(iid)
             self.passphrase_needed.emit()
             return
         self._pending_tunnel.add(iid)
@@ -267,6 +279,16 @@ class AppController(QObject):
         if not self.ssh.is_passphrase_required():
             return True
         return self.ssh.passphrase_cache is not None
+
+    def set_ssh_passphrase(self, pwd: str):
+        """Cache passphrase and resume pending action."""
+        self.ssh.set_passphrase(pwd)
+        if self._on_passphrase_success:
+            callback = self._on_passphrase_success
+            self._on_passphrase_success = None
+            callback()
+        # Also kick off metrics that were blocked
+        self._trigger_refresh.emit()
 
     def _sync_live_workers(self, instances: list):
         if not self._has_usable_passphrase():

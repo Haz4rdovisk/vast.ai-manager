@@ -36,6 +36,9 @@ LIVE = "#19C37D"  # "alive / tunneled" indicator
 RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_XL = 6, 10, 14, 20
 SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6, SPACE_7 = 4, 8, 12, 16, 24, 32, 48
 
+TITLEBAR_HEIGHT = 38
+TITLEBAR_BG = BG_BASE
+
 
 # ---- Semantic color helpers --------------------------------------------------
 def metric_color(percent: float | None) -> str:
@@ -188,7 +191,10 @@ QFrame#nav-rail QPushButton[role="nav-item"][active="true"] {{
     border-left: 2px solid {ACCENT};
 }}
 
-QScrollArea {{ border: none; background: transparent; }}
+QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{
+    border: none;
+    background-color: {BG_DEEP};
+}}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: {BORDER_MED}; border-radius: 4px; min-height: 28px; }}
 QScrollBar::handle:vertical:hover {{ background: {ACCENT}; }}
@@ -206,8 +212,31 @@ QCheckBox::indicator:checked {{
     border-color: {ACCENT};
 }}
 
-QMessageBox {{ background-color: {SURFACE_1}; }}
 QMessageBox QLabel {{ color: {TEXT}; }}
+
+/* Title Bar */
+QWidget#title-bar {{
+    background-color: {TITLEBAR_BG};
+    border-bottom: 1px solid {BORDER_LOW};
+}}
+QPushButton#title-btn, QPushButton#title-btn-close {{
+    background-color: transparent;
+    color: {TEXT_MID};
+    border: none;
+    border-radius: 0;
+    width: 46px;
+    height: {TITLEBAR_HEIGHT}px;
+    padding: 0;
+    font-size: 11pt;
+}}
+QPushButton#title-btn:hover {{
+    background-color: {SURFACE_1};
+    color: {TEXT_HI};
+}}
+QPushButton#title-btn-close:hover {{
+    background-color: {ERR};
+    color: white;
+}}
 """
 
 # ---- Back-compat aliases (Phase 0 transition) --------------------------------

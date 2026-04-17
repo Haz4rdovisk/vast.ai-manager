@@ -17,13 +17,24 @@ class RemoteSystem:
     """Hardware info from LLMfit /api/v1/system or SSH probing."""
     cpu_name: str = ""
     cpu_cores: int = 0
+    cpu_usage_pct: float = 0.0
     ram_total_gb: float = 0.0
     ram_available_gb: float = 0.0
+    ram_usage_pct: float = 0.0
     has_gpu: bool = False
     gpu_name: str | None = None
     gpu_vram_gb: float | None = None
+    gpu_usage_pct: float = 0.0
+    gpu_vram_usage_pct: float = 0.0
+    gpu_temp: float = 0.0
     gpu_count: int = 0
     backend: str = ""
+    disk_total_gb: float = 0.0
+    disk_used_gb: float = 0.0
+    disk_usage_pct: float = 0.0
+    net_rx_kbps: float = 0.0
+    net_tx_kbps: float = 0.0
+    uptime_seconds: int = 0
     gpus: list[RemoteGPU] = field(default_factory=list)
 
 
@@ -102,6 +113,7 @@ class LabInstanceState:
     gguf: list[RemoteGGUF] = field(default_factory=list)
     setup: SetupStatus = field(default_factory=SetupStatus)
     server_params: ServerParams = field(default_factory=ServerParams)
+    model_configs: dict[str, ServerParams] = field(default_factory=dict)
     busy_keys: set[str] = field(default_factory=set)
 
 

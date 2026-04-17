@@ -31,6 +31,10 @@ class LabStore(QObject):
             self.instance_states[iid] = LabInstanceState(iid=iid)
         return self.instance_states[iid]
 
+    def all_instance_ids(self) -> list[int]:
+        """Return IDs of all managed instances."""
+        return list(self.instance_states.keys())
+
     def set_instance(self, iid: int | None):
         """Focus the UI (other than Dashboard) on a specific instance."""
         self.selected_instance_id = iid
@@ -89,6 +93,11 @@ class LabStore(QObject):
         self.instance_state_updated.emit(iid, st)
         if iid == self.selected_instance_id:
             self.server_params_changed.emit(params)
+
+    def save_model_config(self, iid: int, path: str, params: ServerParams):
+        st = self.get_state(iid)
+        st.model_configs[path] = params
+        self.instance_state_updated.emit(iid, st)
 
     def set_instance_busy(self, iid: int, key: str, busy: bool):
         st = self.get_state(iid)

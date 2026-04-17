@@ -27,46 +27,99 @@ class RemoteProbeWorker(QThread):
 
     def run(self):
         try:
-            # 1. Probe setup status
-            ok, output = self.ssh.run_script(self.host, self.port, script_check_setup())
+            from app.lab.services.remote_setup import script_master_probe
+            # Run one unified script
+            ok, output = self.ssh.run_script(self.host, self.port, script_master_probe())
             if not ok:
                 self.failed.emit(f"SSH probe failed: {output[:200]}")
                 return
-            info = parse_probe_output(output)
-            status = SetupStatus(
-                llmfit_installed=info.get("LLMFIT_INSTALLED") == "yes",
-                llmfit_serving=info.get("LLMFIT_SERVING") == "yes",
-                llamacpp_installed=info.get("LLAMACPP_INSTALLED") == "yes",
-                llamacpp_path=info.get("LLAMACPP_PATH", ""),
-                llama_server_running=info.get("LLAMA_RUNNING") == "yes",
-                llama_server_model=info.get("LLAMA_MODEL", ""),
-                model_count=int(info.get("MODEL_COUNT", "0") or "0"),
-                probed=True,
-            )
-            self.setup_ready.emit(status)
 
-            # 2. List GGUF files
-            ok2, output2 = self.ssh.run_script(self.host, self.port, script_list_models())
-            if ok2:
-                raw_models = parse_model_list(output2)
+            # Parse blocks
+            blocks = {}
+            current_block = None
+            block_content = []
+            
+            for line in output.splitlines():
+                if line.endswith("_START===") and line.startswith("==="):
+                    current_block = line.strip("=").replace("_START", "")
+                    block_content = []
+                    continue
+                if line.endswith("_END===") and line.startswith("==="):
+                    if current_block:
+                        blocks[current_block] = "\n".join(block_content)
+                    current_block = None
+                    continue
+                if current_block:
+                    block_content.append(line)
+
+            # 1. Process Setup status
+            setup_out = blocks.get("SETUP", "")
+            if setup_out:
+                info = parse_probe_output(setup_out)
+                status = SetupStatus(
+                    llmfit_installed=info.get("LLMFIT_INSTALLED") == "yes",
+                    llmfit_serving=info.get("LLMFIT_SERVING") == "yes",
+                    llamacpp_installed=info.get("LLAMACPP_INSTALLED") == "yes",
+                    llamacpp_path=info.get("LLAMACPP_PATH", ""),
+                    llama_server_running=info.get("LLAMA_RUNNING") == "yes",
+                    llama_server_model=info.get("LLAMA_MODEL", ""),
+                    model_count=int(info.get("MODEL_COUNT", "0") or "0"),
+                    probed=True,
+                )
+                self.setup_ready.emit(status)
+
+            # 2. Process GGUF models
+            models_out = blocks.get("MODELS", "")
+            if models_out:
+                raw_models = parse_model_list("===MODELS_START===\n" + models_out + "\n===MODELS_END===")
                 gguf_list = [RemoteGGUF(**m) for m in raw_models]
                 self.gguf_ready.emit(gguf_list)
 
-            # 3. If llmfit is serving, query it for system + model recommendations
-            if status.llmfit_serving:
-                ok3, output3 = self.ssh.run_script(
-                    self.host, self.port, build_system_query())
-                if ok3:
-                    data = parse_json_output(output3)
-                    if data:
-                        self.system_ready.emit(parse_system(data))
+            # 3. Process LLMfit System Recommendation
+            sys_out = blocks.get("SYSTEM", "")
+            if sys_out:
+                data = parse_json_output(sys_out)
+                if data:
+                    self.system_ready.emit(parse_system(data))
 
-                ok4, output4 = self.ssh.run_script(
-                    self.host, self.port, build_models_query())
-                if ok4:
-                    data = parse_json_output(output4)
-                    if data:
-                        self.models_ready.emit(parse_models(data))
+            # 4. Process LLMfit Model Recommendations
+            rec_out = blocks.get("RECOMMEND", "")
+            if rec_out:
+                data = parse_json_output(rec_out)
+                if data:
+                    self.models_ready.emit(parse_models(data))
+
+            # 5. Process Raw Telemetry (High Priority Fallback for Gauges)
+            tel_out = blocks.get("TELEMETRY", "")
+            if tel_out:
+                info = parse_probe_output(tel_out)
+                # Helper to merge with existing system info if any
+                def _safe_float(k):
+                    v = info.get(k, "0").replace("%", "").strip()
+                    return float(v) if v and v[0].isdigit() or v.startswith(".") else 0.0
+
+                # If system_ready wasn't emitted by LLMfit, we emit a basic one now
+                # In a real app, we'd merge these. For now, let's update specific fields.
+                # Actually, the store handles the update if we emit a system object.
+                sys = RemoteSystem(
+                    cpu_cores=int(_safe_float("CPU_CORES")),
+                    cpu_usage_pct=_safe_float("CPU_LOAD"),
+                    ram_total_gb=_safe_float("RAM_TOTAL_MB") / 1024,
+                    ram_usage_pct=_safe_float("RAM_PERCENT"),
+                    gpu_usage_pct=_safe_float("GPU_LOAD"),
+                    gpu_name=info.get("GPU_NAME", "GPU"),
+                    gpu_temp=_safe_float("GPU_TEMP"),
+                    gpu_vram_usage_pct=_safe_float("VRAM_PERCENT"),
+                    gpu_vram_gb=_safe_float("VRAM_TOTAL_MB") / 1024,
+                    disk_total_gb=_safe_float("DISK_TOTAL_MB") / 1024,
+                    disk_used_gb=_safe_float("DISK_USED_MB") / 1024,
+                    disk_usage_pct=_safe_float("DISK_PERCENT"),
+                    net_rx_kbps=_safe_float("NET_RX_KBPS"),
+                    net_tx_kbps=_safe_float("NET_TX_KBPS"),
+                    uptime_seconds=int(info.get("UPTIME_SEC", "0")),
+                    has_gpu=info.get("GPU_LOAD") is not None
+                )
+                self.system_ready.emit(sys)
 
         except Exception as e:
             self.failed.emit(str(e))

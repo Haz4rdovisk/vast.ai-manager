@@ -3,11 +3,10 @@ All functions return shell script strings — the caller runs them via SSHServic
 from __future__ import annotations
 
 
-def script_check_setup() -> str:
-    """Probe what's installed on the instance. Outputs structured markers."""
+def script_master_probe() -> str:
+    """Unified probe for status, health and models in one SSH call."""
     return r"""
-echo "===PROBE_START==="
-
+echo "===SETUP_START==="
 # Check llmfit
 if command -v llmfit &>/dev/null; then
     echo "LLMFIT_INSTALLED=yes"
@@ -17,9 +16,140 @@ else
     echo "LLMFIT_INSTALLED=no"
 fi
 
-# Check if llmfit serve is running
-if pgrep -f "llmfit serve" &>/dev/null; then
+# Check if llmfit serve is responding via API
+if curl -sf http://127.0.0.1:8787/health &>/dev/null; then
     echo "LLMFIT_SERVING=yes"
+    SERVING=1
+elif pgrep -f "llmfit serve" &>/dev/null; then
+    echo "LLMFIT_SERVING=starting"
+    SERVING=0
+else
+    echo "LLMFIT_SERVING=no"
+    SERVING=0
+fi
+
+# Check llama.cpp
+LLAMA_PATH=""
+if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
+    LLAMA_PATH="/opt/llama.cpp/build/bin/llama-server"
+elif command -v llama-server &>/dev/null; then
+    LLAMA_PATH=$(which llama-server)
+fi
+
+if [ -n "$LLAMA_PATH" ]; then
+    echo "LLAMACPP_INSTALLED=yes"
+    echo "LLAMACPP_PATH=$LLAMA_PATH"
+else
+    echo "LLAMACPP_INSTALLED=no"
+    echo "LLAMACPP_PATH="
+fi
+
+# Check if llama-server is running
+if pgrep -f "llama-server" &>/dev/null; then
+    echo "LLAMA_RUNNING=yes"
+    LLAMA_MODEL=$(pgrep -fa "llama-server" | grep -oP '(?<=-m )\S+' | head -1)
+    echo "LLAMA_MODEL=$LLAMA_MODEL"
+else
+    echo "LLAMA_RUNNING=no"
+    echo "LLAMA_MODEL="
+fi
+
+# Count GGUF models
+MODEL_COUNT=$(find /workspace /models /root -type f -name '*.gguf' 2>/dev/null | wc -l)
+echo "MODEL_COUNT=$MODEL_COUNT"
+echo "===SETUP_END==="
+
+echo "===MODELS_START==="
+find /workspace /models /root -type f -name '*.gguf' 2>/dev/null | while read f; do
+    SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+    echo "GGUF|$f|$SIZE"
+done
+echo "===MODELS_END==="
+
+if [ "$SERVING" -eq 1 ]; then
+    echo "===SYSTEM_START==="
+    curl -s http://127.0.0.1:8787/system || echo "{}"
+    echo "===SYSTEM_END==="
+    
+    echo "===RECOMMEND_START==="
+    curl -s http://127.0.0.1:8787/models || echo "[]"
+    echo "===RECOMMEND_END==="
+fi
+
+echo "===TELEMETRY_START==="
+# 1. CPU Load & Cores
+IDLE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+echo "CPU_LOAD=$IDLE"
+echo "CPU_CORES=$(nproc 2>/dev/null || echo 0)"
+
+# 2. RAM Usage
+read TOTAL USED <<< $(free -m | awk '/Mem:/ {print $2, $3}')
+PERCENT=$(awk "BEGIN {print ($USED/$TOTAL)*100}")
+echo "RAM_TOTAL_MB=$TOTAL"
+echo "RAM_USED_MB=$USED"
+echo "RAM_PERCENT=$PERCENT"
+
+# 3. GPU Metrics (if available)
+if command -v nvidia-smi &>/dev/null; then
+    METRICS=$(nvidia-smi --query-gpu=utilization.gpu,utilization.memory,temperature.gpu,memory.total,memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
+    if [ -n "$METRICS" ]; then
+        IFS=', ' read GPU_UTIL VRAM_UTIL TEMP VRAM_TOTAL VRAM_USED <<< "$METRICS"
+        echo "GPU_LOAD=$GPU_UTIL"
+        echo "GPU_TEMP=$TEMP"
+        GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+        echo "GPU_NAME=${GPU_NAME:-GPU}"
+        echo "VRAM_TOTAL_MB=$VRAM_TOTAL"
+        echo "VRAM_USED_MB=$VRAM_USED"
+        VRAM_PCT=$(awk "BEGIN {print ($VRAM_USED/$VRAM_TOTAL)*100}")
+        echo "VRAM_PERCENT=$VRAM_PCT"
+    fi
+fi
+
+# 4. Disk Usage (/workspace as reference)
+read D_TOT D_USED D_PCT <<< $(df -m /workspace 2>/dev/null | tail -1 | awk '{print $2, $3, $5}' | sed 's/%//')
+echo "DISK_TOTAL_MB=${D_TOT:-0}"
+echo "DISK_USED_MB=${D_USED:-0}"
+echo "DISK_PERCENT=${D_PCT:-0}"
+
+# 5. Network Throughput (1s delta)
+IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
+if [ -n "$IFACE" ]; then
+    R1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
+    T1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
+    sleep 1
+    R2=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
+    T2=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
+    echo "NET_RX_KBPS=$(( (R2 - R1) / 1024 ))"
+    echo "NET_TX_KBPS=$(( (T2 - T1) / 1024 ))"
+else
+    echo "NET_RX_KBPS=0"
+    echo "NET_TX_KBPS=0"
+fi
+
+# 6. Uptime
+echo "UPTIME_SEC=$(awk '{print int($1)}' /proc/uptime)"
+echo "===TELEMETRY_END==="
+"""
+
+
+def script_check_setup() -> str:
+    """Probe what's installed on the instance. Outputs structured markers."""
+    return r"""
+echo "===SETUP_START==="
+# Check llmfit
+if command -v llmfit &>/dev/null; then
+    echo "LLMFIT_INSTALLED=yes"
+    LLMFIT_VER=$(llmfit --version 2>/dev/null | head -1)
+    echo "LLMFIT_VERSION=$LLMFIT_VER"
+else
+    echo "LLMFIT_INSTALLED=no"
+fi
+
+# Check if llmfit serve is responding via API
+if curl -sf http://127.0.0.1:8787/health &>/dev/null; then
+    echo "LLMFIT_SERVING=yes"
+elif pgrep -f "llmfit serve" &>/dev/null; then
+    echo "LLMFIT_SERVING=starting"
 else
     echo "LLMFIT_SERVING=no"
 fi
@@ -53,8 +183,7 @@ fi
 # Count GGUF models
 MODEL_COUNT=$(find /workspace /models /root -type f -name '*.gguf' 2>/dev/null | wc -l)
 echo "MODEL_COUNT=$MODEL_COUNT"
-
-echo "===PROBE_END==="
+echo "===SETUP_END==="
 """
 
 
@@ -80,21 +209,32 @@ llmfit --version 2>/dev/null || echo "INSTALL_LLMFIT_FAILED"
 
 
 def script_start_llmfit_serve() -> str:
-    """Start llmfit serve in background."""
+    """Start llmfit serve in background with extreme persistence."""
     return r"""
 # Kill existing llmfit serve if running
 pkill -f "llmfit serve" 2>/dev/null
 sleep 1
-# Start in background
-nohup llmfit serve --host 0.0.0.0 --port 8787 --no-dashboard > /tmp/llmfit-serve.log 2>&1 &
-sleep 3
-# Verify it started
-if curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1; then
-    echo "LLMFIT_SERVE_OK"
+
+# Start in background using setsid + disown (and try screen if available)
+if command -v screen &>/dev/null; then
+    screen -dmS llmfit llmfit serve --host 0.0.0.0 --port 8787 --no-dashboard
 else
-    echo "LLMFIT_SERVE_FAIL"
-    cat /tmp/llmfit-serve.log 2>/dev/null | tail -20
+    setsid llmfit serve --host 0.0.0.0 --port 8787 --no-dashboard > /tmp/llmfit-serve.log 2>&1 &
+    disown
 fi
+
+# Intelligent health polling instead of fixed sleep
+for i in {1..10}; do
+    if curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1; then
+        echo "LLMFIT_SERVE_OK"
+        exit 0
+    fi
+    sleep 1
+done
+
+echo "LLMFIT_SERVE_FAIL"
+echo "--- Last 20 lines of LLMfit log ---"
+cat /tmp/llmfit-serve.log 2>/dev/null | tail -20
 """
 
 
@@ -105,7 +245,13 @@ echo "Installing llama.cpp with CUDA..."
 apt-get update -qq && apt-get install -y -qq cmake build-essential git 2>/dev/null
 
 if [ -d /opt/llama.cpp ]; then
-    cd /opt/llama.cpp && git pull
+    cd /opt/llama.cpp
+    PULL_OUT=$(git pull 2>&1)
+    if echo "$PULL_OUT" | grep -q "Already up to date" && [ -f build/bin/llama-server ]; then
+        echo "LLAMACPP_ALREADY_UP_TO_DATE"
+        echo "INSTALL_LLAMACPP_DONE"
+        exit 0
+    fi
 else
     git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp
 fi
@@ -215,4 +361,42 @@ ss -lnt 'sport = :11434' 2>/dev/null || netstat -lnt 2>/dev/null | grep 11434 ||
 echo
 echo "=== tail -{lines} /tmp/llama-server.log ==="
 tail -{lines} /tmp/llama-server.log 2>/dev/null || echo "(no log file)"
+"""
+
+
+def script_check_remote_updates() -> str:
+    """Check for pending updates on remote components."""
+    return r"""
+echo "===UPDATE_CHECK_START==="
+
+# 1. Check Llama.cpp updates
+if [ -d /opt/llama.cpp ]; then
+    cd /opt/llama.cpp
+    git fetch &>/dev/null
+    BEHIND=$(git rev-list HEAD..origin/master --count 2>/dev/null || echo 0)
+    echo "LLAMACPP_BEHIND=$BEHIND"
+else
+    echo "LLAMACPP_BEHIND=999"
+fi
+
+# 2. Check LLMfit updates
+if command -v llmfit &>/dev/null; then
+    # Simple check: compare local version with latest available on pypi/github (conceptually)
+    # For now, we'll check if a refresh is 'forced' by the installer logic or just check git if it was git-installed
+    # Improving: check the repo version vs local specifically if it's a clone
+    if [ -d /root/llmfit ]; then
+        cd /root/llmfit
+        git fetch &>/dev/null
+        LLMFIT_BEHIND=$(git rev-list HEAD..origin/master --count 2>/dev/null || echo 0)
+        echo "LLMFIT_BEHIND=$LLMFIT_BEHIND"
+    else
+        # If it was pip installed, we can't easily check without a slow pip check. 
+        # But we can assume 'no' for now or 'yes' if we want to be safe.
+        echo "LLMFIT_BEHIND=0"
+    fi
+else
+    echo "LLMFIT_BEHIND=999"
+fi
+
+echo "===UPDATE_CHECK_END==="
 """

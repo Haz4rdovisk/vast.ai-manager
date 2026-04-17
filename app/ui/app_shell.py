@@ -15,6 +15,7 @@ from app.lab.views.discover_view import DiscoverView
 from app.lab.views.models_view import ModelsView
 from app.controller import AppController
 from app.ui.views.instances_view import InstancesView
+from app.lab.views.hardware_view import HardwareView
 from app.lab.views.configure_view import ConfigureView
 from app.lab.views.monitor_view import MonitorView
 from app.lab.workers.remote_probe import RemoteProbeWorker
@@ -23,6 +24,8 @@ from app.lab.services.remote_llmfit import (
     build_models_query, parse_models, parse_json_output,
 )
 from app.lab.services.remote_setup import script_fetch_log
+from app.ui.dialogs import UpdateSelectionDialog
+from app.ui.components.title_bar import TitleBar
 
 
 class AppShell(QWidget):
@@ -39,6 +42,7 @@ class AppShell(QWidget):
         self._port: int = 0
         
         self._probe_workers: dict[int, RemoteProbeWorker] = {}
+        self._probe_callbacks: dict[int, callable] = {}
         self._setup_workers: dict[int, RemoteSetupWorker] = {}
         self._controller: AppController | None = None
 
@@ -46,13 +50,27 @@ class AppShell(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # 1. Left Sidebar (Full Height)
         self.nav = NavRail(self)
         self.nav.selected.connect(self._switch)
         root.addWidget(self.nav)
 
+        # 2. Right Side Content (Header + Views)
+        self.right_container = QWidget()
+        self.right_lay = QVBoxLayout(self.right_container)
+        self.right_lay.setContentsMargins(0, 0, 0, 0)
+        self.right_lay.setSpacing(0)
+        
+        # Add TitleBar to the right header
+        self.title_bar = TitleBar(self.window())
+        self.right_lay.addWidget(self.title_bar)
+        
+        # Stacked Widget for views
         self.stack = QStackedWidget(self)
         self._views: dict[str, QWidget] = {}
-        root.addWidget(self.stack, 1)
+        self.right_lay.addWidget(self.stack, 1)
+        
+        root.addWidget(self.right_container, 1)
 
         # --- Dashboard ---
         self.dashboard = DashboardView(self.store, self)
@@ -68,19 +86,15 @@ class AppShell(QWidget):
         self._add_view("discover", self.discover)
         self.discover.refresh_requested.connect(self._refresh_llmfit_models)
         self.discover.download_requested.connect(self._download_model_by_name)
+        self.discover.back_requested.connect(lambda: self._go("dashboard"))
 
         # --- Models ---
-        self.models_view = ModelsView(self.store, self)
-        self._add_view("models", self.models_view)
-        self.models_view.load_requested.connect(self._load_model)
-        self.models_view.delete_requested.connect(self._delete_model)
-        self.models_view.rescan_requested.connect(self._manual_probe)
-        self.models_view.navigate_requested.connect(self._go)
-
-        # --- Configure ---
-        self.configure = ConfigureView(self.store, self)
-        self._add_view("configure", self.configure)
-        self.configure.launch_requested.connect(self._launch_server)
+        self.models = ModelsView(self.store, self)
+        self._add_view("models", self.models)
+        self.models.delete_requested.connect(self._delete_model)
+        self.models.rescan_requested.connect(self._manual_probe)
+        self.models.navigate_requested.connect(self._go)
+        self.models.launch_requested.connect(self._launch_server)
 
         # --- Monitor ---
         self.monitor = MonitorView(self.store, self)
@@ -88,7 +102,9 @@ class AppShell(QWidget):
         self.monitor.stop_requested.connect(self._stop_server)
         self.monitor.restart_requested.connect(self._restart_server)
         self.monitor.fetch_log_requested.connect(self._fetch_log)
-        self.monitor.navigate_requested.connect(self._go)
+        # --- Hardware ---
+        self.hardware = HardwareView(self.store, self)
+        self._add_view("hardware", self.hardware)
 
         self._switch("dashboard")
 
@@ -126,17 +142,24 @@ class AppShell(QWidget):
         
         # Proactive: listen to tunnel status
         controller.tunnel_status_changed.connect(self._on_tunnel_status_changed)
-        # Sync dashboard with current active instances
+        # Sync dashboard and hardware with current active instances
         controller.instances_refreshed.connect(self.dashboard.sync_instances)
+        controller.instances_refreshed.connect(self.hardware.sync_instances)
+        
+        # Models connections
+        self.models.back_requested.connect(lambda: self._go("dashboard"))
         
         # Landing view
         self._switch("instances")
         self.nav.set_active("instances")
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
+        # Notify dashboard UI
+        self.dashboard.update_tunnel_status(iid, status)
+        
         if status == TunnelStatus.CONNECTED.value:
             # Automatic probe!
-            QTimer.singleShot(500, lambda: self._probe_instance(iid))
+            self._probe_instance(iid)
 
     def _on_open_lab_from_card(self, iid: int):
         """User clicked "Abrir no Lab" on an instance card. Select the instance
@@ -152,6 +175,14 @@ class AppShell(QWidget):
             self._probe_instance(iid)
         elif action == "setup_all":
             self._run_setup("all", iid=iid)
+        elif action == "discover":
+            self.select_instance(iid)
+            self._go("discover")
+            # Auto-refresh models if needed
+            self._refresh_llmfit_models("all", "")
+        elif action == "models":
+            self.select_instance(iid)
+            self._go("models")
 
     # --- Instance selection ---
 
@@ -176,7 +207,10 @@ class AppShell(QWidget):
 
     # --- Remote probe ---
 
-    def _probe_instance(self, iid: int):
+    def _probe_instance(self, iid: int, callback: callable | None = None):
+        if callback:
+            self._probe_callbacks[iid] = callback
+            
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst or not inst.ssh_host or not inst.ssh_port:
             return
@@ -193,8 +227,19 @@ class AppShell(QWidget):
         worker.models_ready.connect(lambda m: self.store.set_remote_models(iid, m))
         worker.gguf_ready.connect(lambda g: self.store.set_remote_gguf(iid, g))
         
-        worker.finished.connect(lambda: self.store.set_instance_busy(iid, "probe", False))
+        worker.finished.connect(lambda: self._on_probe_done(iid))
         worker.start()
+
+    def _on_probe_done(self, iid: int):
+        self.store.set_instance_busy(iid, "probe", False)
+        
+        # Execute pending callback if any
+        callback = self._probe_callbacks.pop(iid, None)
+        if callback:
+            QTimer.singleShot(100, callback)
+            
+        # Cleanup worker ref after small delay to be safe
+        QTimer.singleShot(100, lambda: self._probe_workers.pop(iid, None))
 
     # --- Remote setup ---
 
@@ -211,11 +256,29 @@ class AppShell(QWidget):
         if iid in self._setup_workers and self._setup_workers[iid].isRunning():
             return
 
+        st = self.store.get_state(iid)
+        is_installed = st.setup.llmfit_installed and st.setup.llamacpp_installed
+        
         if what == "all":
-            self._chain_setup(["install_llmfit", "start_llmfit", "install_llamacpp"], iid)
-            return
+            if is_installed:
+                self._show_update_dialog(iid)
+                return
+            else:
+                self._chain_setup(["install_llmfit", "start_llmfit", "install_llamacpp"], iid)
+                return
 
         self._run_single_setup(what if what != "llamacpp" else "install_llamacpp", iid=iid)
+
+    def _show_update_dialog(self, iid: int):
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst: return
+        
+        dlg = UpdateSelectionDialog(iid, self._ssh, inst.ssh_host, inst.ssh_port, self)
+        if dlg.exec():
+            actions = dlg.get_selection()
+            if actions:
+                # User confirmed components - start real setup
+                self._chain_setup(actions, iid)
 
     def _chain_setup(self, actions: list[str], iid: int):
         if not actions:
@@ -243,18 +306,19 @@ class AppShell(QWidget):
         else:
             self._probe_instance(iid)
 
-    def _run_single_setup(self, action: str, iid: int, **kwargs):
+    def _run_single_setup(self, action: str, iid: int, callback: callable | None = None, **kwargs):
         self.store.set_instance_busy(iid, "setup", True)
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, action, **kwargs)
         self._setup_workers[iid] = worker
-        worker.finished.connect(lambda ok, out: self._on_setup_done(ok, out, iid))
+        worker.finished.connect(lambda ok, out: self._on_setup_done(ok, out, iid, callback))
         worker.start()
 
-    def _on_setup_done(self, ok: bool, output: str, iid: int):
+    def _on_setup_done(self, ok: bool, output: str, iid: int, callback: callable | None = None):
         self.store.set_instance_busy(iid, "setup", False)
         if ok:
-            self._probe_instance(iid)
+            # Chain the callback through the probe to ensure store sync
+            self._probe_instance(iid, callback=callback)
         else:
             self._controller.log_line.emit(f"#{iid} Setup failed: {output[:100]}")
 
@@ -263,6 +327,19 @@ class AppShell(QWidget):
     def _refresh_llmfit_models(self, use_case: str, search: str):
         iid = self.store.selected_instance_id
         if not iid or not self._ssh: return
+        st = self.store.get_state(iid)
+        
+        # Proactive Warmup: Start LLMfit if it's installed but not serving
+        if not st.setup.llmfit_serving and st.setup.llmfit_installed:
+            self._controller.log_line.emit(f"#{iid}: Acordando Model Advisor (LLMfit)...")
+            self._run_single_setup("start_llmfit", iid, 
+                                 callback=lambda: self._perform_llmfit_query(use_case, search))
+            return
+
+        self._perform_llmfit_query(use_case, search)
+
+    def _perform_llmfit_query(self, use_case: str, search: str):
+        iid = self.store.selected_instance_id
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst or not inst.ssh_host: return
 
@@ -277,10 +354,21 @@ class AppShell(QWidget):
 
     def _on_llmfit_models_done(self, ok: bool, output: str, iid: int):
         self.store.set_instance_busy(iid, "discover", False)
+        # Cleanup worker ref
+        QTimer.singleShot(100, lambda: self._setup_workers.pop(iid, None))
+
         if ok:
-            data = parse_json_output(output)
-            if data:
-                self.store.set_remote_models(iid, parse_models(data))
+            try:
+                data = parse_json_output(output)
+                if data:
+                    models = parse_models(data)
+                    self.store.set_remote_models(iid, models)
+                else:
+                    self._controller.log_line.emit(f"#{iid} LLMfit returned invalid data format.")
+            except Exception as e:
+                self._controller.log_line.emit(f"#{iid} Error parsing LLMfit data: {str(e)}")
+        else:
+            self._controller.log_line.emit(f"#{iid} LLMfit query failed: {output[:300]}")
 
     # --- Download model ---
 
@@ -290,8 +378,11 @@ class AppShell(QWidget):
     # --- Model operations ---
 
     def _load_model(self, path: str):
-        self.configure.select_model(path)
-        self._go("configure")
+        # We don't switch to a separate view anymore, just make sure we are on models view
+        self._go("models")
+        # The models view should probably auto-expand this path
+        self.models._expanded_path = path
+        self.models._render(self.store.get_state(self.store.selected_instance_id).gguf if self.store.selected_instance_id else [])
 
     def _delete_model(self, path: str):
         iid = self.store.selected_instance_id

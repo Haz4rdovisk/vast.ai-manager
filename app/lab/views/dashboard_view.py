@@ -20,6 +20,7 @@ class DashboardView(QWidget):
         super().__init__(parent)
         self.store = store
         self.cards: dict[int, InstanceDashboardCard] = {}
+        self.tunnel_statuses: dict[int, str] = {}
         self._last_instances: list[Instance] = []
 
         root = QVBoxLayout(self)
@@ -80,8 +81,9 @@ class DashboardView(QWidget):
                 self.list_lay.insertWidget(self.list_lay.count() - 1, card)
                 self.cards[inst.id] = card
                 
-                # Immediate initial render
-                self._update_card(inst.id)
+        # Update ALL cards (new and existing) with the fresh data
+        for iid in list(self.cards.keys()):
+            self._update_card(iid)
         
         self.empty_card.setVisible(not self.cards)
 
@@ -93,18 +95,24 @@ class DashboardView(QWidget):
         card = self.cards.get(iid)
         if not card: return
         
-        # Find raw instance for SSH status hint
         inst = next((i for i in self._last_instances if i.id == iid), None)
-        # We need to know the tunnel status. Dashboard view doesn't have it directly.
-        # But AppShell/Controller do. 
-        # For simplicity, we'll assume if it's in sync_instances with host/port, it's alive-ish.
-        # Better: AppShell should handle this. Or we check store? 
-        # Let's just pass empty for now or use the state.
-        
-        # Actually, let's assume if sync_instances called it, it's 'connected' for now
-        # until the next refresh cycle.
         st = self.store.get_state(iid)
-        card.update_state(st, "connected", gpu_name_hint=inst.gpu_name if inst else "")
+        
+        from app.models import InstanceState
+        if not inst or inst.state != InstanceState.RUNNING:
+            status = "disconnected"
+        else:
+            # Use the actual tunnel status reported by controller
+            status = self.tunnel_statuses.get(iid, "disconnected")
+            # If the controller says we are disconnected, we respect that regardless of 'probed' state.
+
+        card.update_state(st, status, fallback_gpu=inst.gpu_name if inst else "")
+
+    def update_tunnel_status(self, iid: int, status: str):
+        """External entry point to update a specific card's SSH status."""
+        self.tunnel_statuses[iid] = status
+        if iid in self.cards:
+            self._update_card(iid)
 
     def _navigate_to_instance(self, iid: int, view_key: str):
         self.instance_action_requested.emit(iid, "select")

@@ -70,7 +70,7 @@ class InstanceDashboardCard(GlassCard):
         self.metrics_lay = QHBoxLayout()
         self.llmfit_tile = MetricTile("LLMfit", "\u2014")
         self.llama_tile = MetricTile("llama.cpp", "\u2014")
-        self.server_tile = MetricTile("Server", "\u2014")
+        self.server_tile = MetricTile("Files", "\u2014")
         self.metrics_lay.addWidget(self.llmfit_tile)
         self.metrics_lay.addWidget(self.llama_tile)
         self.metrics_lay.addWidget(self.server_tile)
@@ -91,15 +91,19 @@ class InstanceDashboardCard(GlassCard):
         self.setup_btn = QPushButton("\u26A1 Setup Everything")
         self.setup_btn.clicked.connect(lambda: self.setup_all_requested.emit(self.iid))
         
-        self.focus_btn = QPushButton("\u25C9 Focus in Lab")
-        self.focus_btn.clicked.connect(lambda: self.select_requested.emit(self.iid))
+        self.discover_btn = QPushButton("\u2726 Discover Models")
+        self.discover_btn.clicked.connect(lambda: self.navigate_requested.emit(self.iid, "discover"))
+
+        self.models_btn = QPushButton("\u2630 Installed Models")
+        self.models_btn.clicked.connect(lambda: self.navigate_requested.emit(self.iid, "models"))
         
         self.monitor_btn = QPushButton("\u25F4 Monitor")
         self.monitor_btn.setProperty("variant", "ghost")
         self.monitor_btn.clicked.connect(lambda: self.navigate_requested.emit(self.iid, "monitor"))
 
         action_bar.addWidget(self.setup_btn)
-        action_bar.addWidget(self.focus_btn)
+        action_bar.addWidget(self.discover_btn)
+        action_bar.addWidget(self.models_btn)
         action_bar.addWidget(self.monitor_btn)
         action_bar.addStretch()
         self.body_lay.addLayout(action_bar)
@@ -113,46 +117,118 @@ class InstanceDashboardCard(GlassCard):
         if self._expanded:
             self.select_requested.emit(self.iid)
 
-    def update_state(self, st: LabInstanceState, ssh_status: str, gpu_name_hint: str = ""):
+    def update_state(self, st: LabInstanceState, ssh_status: str, fallback_gpu: str = ""):
         # Header updates
         sys = st.system
-        gpu = sys.gpu_name or gpu_name_hint or "Unknown GPU"
+        # Keep global naming consistent: Prioritize Vast.ai name for title, hardware details below.
+        gpu = fallback_gpu or sys.gpu_name or "Remote Instance"
         self.gpu_lbl.setText(gpu)
         
         # SSH Status
-        level = "live" if ssh_status == "connected" else ("warn" if ssh_status == "connecting" else "err")
-        self.ssh_pill.set_status(f"SSH {ssh_status.title()}", level)
-        self.health_dot.set_level("live" if st.setup.probed and ssh_status == "connected" else "unknown")
+        # Connection Status & Health Dot
+        is_connecting = ssh_status == "connecting"
+        is_connected = ssh_status == "connected"
+        is_failed = ssh_status == "failed"
+        
+        pill_text = f"SSH {ssh_status.title()}"
+        if ssh_status == "disconnected":
+            pill_text = "SSH Offline"
+        
+        pill_level = "live" if is_connected else ("info" if is_connecting else "err")
+        self.ssh_pill.set_status(pill_text, pill_level)
 
-        # Metrics
+        if is_connected:
+            dot_level = "live" if st.setup.probed else "info"
+        elif is_connecting:
+            dot_level = "info" # Blue for waiting
+        else:
+            # Stopped or failed
+            dot_level = "err" if is_failed else "warn"
+        self.health_dot.set_level(dot_level)
+
+        # --- State Logic ---
+        is_probing = "probe" in st.busy_keys
+        is_setting_up = "setup" in st.busy_keys
+        is_updating = "update_check" in st.busy_keys
+        # Unified "Syncing" state: Haven't probed yet, or currently probing.
+        is_syncing = (not st.setup.probed or is_probing) and is_connected
+        is_busy = is_probing or is_setting_up or is_updating
+        
+        # Metrics Mapping
         s = st.setup
-        self.llmfit_tile.set_value(
-            "READY" if s.llmfit_serving else ("INSTALLED" if s.llmfit_installed else "MISSING"),
-            "model advisor"
-        )
-        self.llama_tile.set_value(
-            "READY" if s.llamacpp_installed else "MISSING",
-            "inference engine"
-        )
-        self.server_tile.set_value(
-            "RUNNING" if s.llama_server_running else "STOPPED",
-            s.llama_server_model[:20] + "..." if len(s.llama_server_model) > 20 else (s.llama_server_model or "no model")
-        )
+        if is_syncing:
+            val_llmfit = "SYNCING..."
+            val_llama = "SYNCING..."
+            val_files = "SYNCING..."
+            level_llmfit = "info"
+            level_llama = "info"
+        else:
+            val_llmfit = "READY" if s.llmfit_serving else ("INSTALLED" if s.llmfit_installed else "MISSING")
+            val_llama = "READY" if s.llamacpp_installed else "MISSING"
+            val_files = str(s.model_count)
+            level_llmfit = "live" if s.llmfit_serving else ("info" if s.llmfit_installed else "warn")
+            level_llama = "live" if s.llamacpp_installed else "warn"
+
+        self.llmfit_tile.set_value(val_llmfit, "model advisor")
+        # Reuse tile level if I had a set_level, but MetricTile is simple. 
+        # For now I'll just change the text.
+        self.llama_tile.set_value(val_llama, "inference engine")
+        self.server_tile.set_value(val_files, "GGUF files found")
 
         # HW Specs
         parts = []
         if sys.cpu_name:
             parts.append(f"CPU: {sys.cpu_name} ({sys.cpu_cores} cores)")
         if sys.ram_total_gb:
-            parts.append(f"RAM: {sys.ram_total_gb:.0f}GB total")
-        if sys.gpu_name:
-            vram = f"{sys.gpu_vram_gb:.0f}GB" if sys.gpu_vram_gb else "?"
-            parts.append(f"GPU: {sys.gpu_name} ({vram} VRAM) x{sys.gpu_count}")
+            parts.append(f"RAM: {sys.ram_total_gb:.0f}GB")
         
-        self.hw_lbl.setText("  \u2022  ".join(parts) if parts else "Pending probe for hardware details...")
+        # If we have VRAM info, show it
+        if sys.gpu_vram_gb:
+            parts.append(f"VRAM: {sys.gpu_vram_gb:.0f}GB")
         
-        # Busy states
-        is_busy = bool(st.busy_keys)
-        self.setup_btn.setEnabled(not is_busy)
-        if is_busy:
-            self.gpu_lbl.setText(f"{gpu} (Working...)")
+        if not parts:
+            if ssh_status == "connected":
+                self.hw_lbl.setText("Probing remote hardware details...")
+            else:
+                self.hw_lbl.setText("Connect SSH to see full hardware specs.")
+        else:
+            self.hw_lbl.setText("  \u2022  ".join(parts))
+        
+        # Connection Guard: Only allow expansion if connected
+        is_connected = ssh_status == "connected"
+        self.expand_btn.setEnabled(is_connected)
+        if not is_connected and self._expanded:
+            self.toggle_expanded() # Close if connection drops
+        
+        # Busy & Ready states
+        is_installed = st.setup.llmfit_installed and st.setup.llamacpp_installed
+        
+        # Setup Button Logic
+        if is_updating:
+            self.setup_btn.setText("\u21BB CHECKING UPDATES...")
+            self.setup_btn.setEnabled(False)
+        elif is_syncing:
+            self.setup_btn.setText("\u21BB SYNCING...")
+            self.setup_btn.setEnabled(False)
+        elif is_setting_up:
+            self.setup_btn.setText("\u26A1 SETTING UP...")
+            self.setup_btn.setEnabled(False)
+        elif is_installed:
+            self.setup_btn.setText("\u21BB Check for updates")
+            self.setup_btn.setEnabled(not is_busy)
+        else:
+            self.setup_btn.setText("\u26A1 Setup Everything")
+            self.setup_btn.setEnabled(not is_busy)
+
+        # Features Guard: Strictly need installation confirmed and not syncing
+        can_use_features = is_installed and not is_busy and not is_syncing
+        self.discover_btn.setEnabled(can_use_features)
+        self.models_btn.setEnabled(can_use_features)
+        self.monitor_btn.setEnabled(can_use_features)
+
+        if is_updating:
+            self.gpu_lbl.setText(f"{gpu} (Checking updates...)")
+        elif is_syncing:
+            self.gpu_lbl.setText(f"{gpu} (Syncing...)")
+        elif is_setting_up:
+            self.gpu_lbl.setText(f"{gpu} (Updating...)")
