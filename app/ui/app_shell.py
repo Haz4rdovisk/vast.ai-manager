@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QStackedWidget, QLabel, QVBoxLayout, QMessageBox,
 )
 from PySide6.QtCore import Qt, Slot
-from app.lab import theme as t
+from app import theme as t
 from app.ui.components.nav_rail import NavRail, NAV_ITEMS
 from app.lab.state.store import LabStore
 from app.lab.state.models import RemoteGGUF, ServerParams

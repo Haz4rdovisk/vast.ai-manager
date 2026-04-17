@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
 )
 from PySide6.QtCore import Signal
-from app.lab import theme as t
+from app import theme as t
 from app.ui.components.primitives import GlassCard, SectionHeader, MetricTile, StatusPill
 
 
