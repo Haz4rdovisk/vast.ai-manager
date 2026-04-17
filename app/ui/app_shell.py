@@ -88,6 +88,13 @@ class AppShell(QWidget):
         self._controller: AppController | None = None
         self._switch("dashboard")
 
+        from PySide6.QtGui import QShortcut, QKeySequence
+        QShortcut(QKeySequence("Ctrl+R"), self,
+                  activated=lambda: self._controller and self._controller.request_refresh())
+        QShortcut(QKeySequence("Ctrl+,"), self,
+                  activated=lambda: self.window().open_settings()
+                                     if hasattr(self.window(), "open_settings") else None)
+
     # --- View management ---
 
     def _add_view(self, key: str, widget: QWidget):
