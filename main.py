@@ -3,15 +3,13 @@ import sys
 from PySide6.QtWidgets import QApplication
 from app.config import ConfigStore
 from app import theme
-from app.lab import theme as lab_theme
 from app.ui.main_window import MainWindow
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Vast.ai Manager")
-    # Cloud + Lab stylesheets concatenated — Lab rules are scoped under #lab-shell.
-    app.setStyleSheet(theme.STYLESHEET + "\n" + lab_theme.STYLESHEET)
+    app.setStyleSheet(theme.STYLESHEET)
 
     store = ConfigStore()
     win = MainWindow(store)

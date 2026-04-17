@@ -209,3 +209,17 @@ QCheckBox::indicator:checked {{
 QMessageBox {{ background-color: {SURFACE_1}; }}
 QMessageBox QLabel {{ color: {TEXT}; }}
 """
+
+# ---- Back-compat aliases (Phase 0 transition) --------------------------------
+# These keep the existing Cloud UI code importable during Phases 1-4.
+# Removed once Cloud widgets are replaced.
+TEXT_SECONDARY = TEXT_MID
+SUCCESS = OK
+WARNING = WARN
+DANGER = ERR
+BG = BG_DEEP
+CARD_BG = SURFACE_1
+CARD_BORDER = BORDER_MED
+ACCENT_HOVER = ACCENT_HI
+LOG_BG = BG_DEEP
+
