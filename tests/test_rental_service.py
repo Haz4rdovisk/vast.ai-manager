@@ -1,0 +1,58 @@
+from unittest.mock import MagicMock
+from app.services.rental_service import RentalService
+from app.models_rental import OfferQuery, RentRequest
+
+
+def test_search_offers_calls_sdk_with_query_dict():
+    fake_sdk = MagicMock()
+    fake_sdk.search_offers.return_value = [
+        {"id": 1, "ask_contract_id": 1, "machine_id": 2, "gpu_name": "RTX 4090",
+         "num_gpus": 1, "gpu_ram": 24564, "dph_total": 0.4}
+    ]
+    svc = RentalService(api_key="k")
+    svc._sdk = fake_sdk  # inject
+    offers = svc.search_offers(OfferQuery(gpu_names=["RTX 4090"]))
+    assert len(offers) == 1
+    assert offers[0].gpu_name == "RTX 4090"
+    _, kwargs = fake_sdk.search_offers.call_args
+    assert kwargs["query"]["gpu_name"] == {"eq": "RTX 4090"}
+    assert kwargs["type"] == "on-demand"
+    assert kwargs["order"] == "score-"
+    assert kwargs["storage"] == 10.0
+
+
+def test_search_templates():
+    fake_sdk = MagicMock()
+    fake_sdk.search_templates.return_value = [
+        {"id": 1, "hash_id": "abc", "name": "PyTorch 2.3",
+         "image": "pytorch/pytorch:2.3-cuda12"}
+    ]
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    tpls = svc.search_templates()
+    assert tpls[0].name == "PyTorch 2.3"
+
+
+def test_create_instance_happy_path():
+    fake_sdk = MagicMock()
+    fake_sdk.create_instance.return_value = {"success": True, "new_contract": 555}
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    res = svc.rent(RentRequest(
+        offer_id=10, image="pytorch/pytorch:latest", disk_gb=25, label="x"
+    ))
+    assert res.ok
+    assert res.new_contract_id == 555
+    fake_sdk.create_instance.assert_called_once()
+    kwargs = fake_sdk.create_instance.call_args.kwargs
+    assert kwargs["id"] == 10
+    assert kwargs["image"] == "pytorch/pytorch:latest"
+    assert kwargs["disk"] == 25
+    assert kwargs["label"] == "x"
+
+
+def test_create_instance_failure():
+    fake_sdk = MagicMock()
+    fake_sdk.create_instance.return_value = {"success": False, "msg": "out of stock"}
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    res = svc.rent(RentRequest(offer_id=1, image="img"))
+    assert not res.ok
+    assert "out of stock" in res.message
