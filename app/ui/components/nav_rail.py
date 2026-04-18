@@ -15,6 +15,7 @@ from app import theme as t
 NAV_ITEMS = [
     # ── CLOUD ──
     ("instances",  "Instances",   "instances", "CLOUD"),
+    ("store",      "Store",       "store",     "CLOUD"),
     ("analytics",  "Analytics",   "analytics", "CLOUD"),
     # ── AI LAB ──
     ("dashboard",  "Dashboard",   "dashboard", "AI LAB"),
@@ -69,6 +70,24 @@ class NavIcon(QWidget):
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(5.5, 6.5), 0.9, 0.9)
         p.drawEllipse(QPointF(5.5, 13.5), 0.9, 0.9)
+
+    def _draw_store(self, p: QPainter):
+        # Shopping bag: body with rounded corners + curved handle + dot accent
+        # Body
+        p.drawRoundedRect(QRectF(3.5, 7.5, 13, 10), 1.6, 1.6)
+        # Handle (U-shape)
+        path = QPainterPath()
+        path.moveTo(7, 7.5)
+        path.cubicTo(7, 4, 13, 4, 13, 7.5)
+        p.drawPath(path)
+        # Tiny accent dot (stock indicator)
+        p.setBrush(QBrush(self._color))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPointF(10, 13), 1.1, 1.1)
+        # Restore pen for any subsequent drawing
+        pen = QPen(self._color, 1.6)
+        pen.setCapStyle(Qt.RoundCap); pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
 
     def _draw_analytics(self, p: QPainter):
         # Three ascending bars
