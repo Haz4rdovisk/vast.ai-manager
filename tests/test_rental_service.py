@@ -56,3 +56,41 @@ def test_create_instance_failure():
     res = svc.rent(RentRequest(offer_id=1, image="img"))
     assert not res.ok
     assert "out of stock" in res.message
+
+
+import pytest
+from app.services.vast_service import VastAuthError, VastNetworkError
+
+
+def test_call_translates_auth_error():
+    fake_sdk = MagicMock()
+    fake_sdk.show_ssh_keys.side_effect = Exception("401 Unauthorized")
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    with pytest.raises(VastAuthError):
+        svc.list_ssh_keys()
+
+
+def test_call_translates_invalid_api_key_as_auth_error():
+    fake_sdk = MagicMock()
+    fake_sdk.show_ssh_keys.side_effect = Exception("Invalid API key")
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    with pytest.raises(VastAuthError):
+        svc.list_ssh_keys()
+
+
+def test_call_translates_network_error():
+    fake_sdk = MagicMock()
+    fake_sdk.show_ssh_keys.side_effect = Exception("connection reset")
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    with pytest.raises(VastNetworkError):
+        svc.list_ssh_keys()
+
+
+def test_rent_success_with_status_msg():
+    """SDK sometimes returns {"success": True, "new_contract": ..., "msg": "..."}"""
+    fake_sdk = MagicMock()
+    fake_sdk.create_instance.return_value = {"success": True, "new_contract": 77, "msg": "created"}
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    res = svc.rent(RentRequest(offer_id=1, image="img"))
+    assert res.ok
+    assert res.new_contract_id == 77

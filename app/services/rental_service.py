@@ -27,7 +27,7 @@ class RentalService:
             return getattr(sdk, name)(**kwargs)
         except Exception as e:
             msg = str(e).lower()
-            if "401" in msg or "unauthori" in msg or "forbidden" in msg:
+            if "401" in msg or "unauthori" in msg or "forbidden" in msg or "invalid api key" in msg:
                 raise VastAuthError(str(e)) from e
             raise VastNetworkError(str(e)) from e
 
@@ -120,11 +120,16 @@ class RentalService:
             kwargs["cancel_unavail"] = True
 
         raw = self._call("create_instance", **kwargs) or {}
-        ok = bool(raw.get("success", True)) and "error" not in raw and "msg" not in raw
-        # The SDK sometimes returns {"success": True, "new_contract": <id>}
-        new_id = raw.get("new_contract") or raw.get("contract_id") or raw.get("new_contract_id")
-        if raw.get("success") is False:
+        # Vast SDK returns either {"success": bool, ...} or {"new_contract": id, ...} without success.
+        # Only treat as failure when success is explicitly False OR no success key AND error/msg present.
+        explicit = raw.get("success")
+        if explicit is True:
+            ok = True
+        elif explicit is False:
             ok = False
+        else:
+            ok = "error" not in raw and "msg" not in raw
+        new_id = raw.get("new_contract") or raw.get("contract_id") or raw.get("new_contract_id")
         msg = str(raw.get("msg") or raw.get("error") or ("created" if ok else "unknown"))
         return RentResult(ok=ok, new_contract_id=int(new_id) if new_id else None,
                           message=msg, raw=raw)
