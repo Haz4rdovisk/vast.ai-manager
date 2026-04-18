@@ -15,6 +15,12 @@ from app.workers.llama_probe import LlamaReadyProbe
 from datetime import datetime, timedelta
 from app.billing import DailySpendTracker, burn_rate_breakdown
 from app.analytics_store import AnalyticsStore, CostSnapshot
+from app.services.rental_service import RentalService
+from app.workers.offer_search_worker import OfferSearchWorker
+from app.workers.template_worker import TemplateListWorker
+from app.workers.ssh_key_worker import SshKeyWorker
+from app.workers.rent_worker import RentCreateWorker
+from app.models_rental import OfferQuery, RentRequest
 
 
 class AppController(QObject):
@@ -28,6 +34,22 @@ class AppController(QObject):
     log_line            = Signal(str)            # log message
     passphrase_needed   = Signal()               # shell must prompt
     toast_requested     = Signal(str, str, int)  # msg, level, duration_ms
+
+    # ---- Store signals ----
+    offers_refreshed = Signal(list, object)      # list[Offer], OfferQuery
+    offers_failed    = Signal(str, str)
+    templates_refreshed = Signal(list)           # list[Template]
+    ssh_keys_refreshed  = Signal(list)           # list[SshKey]
+    ssh_key_created     = Signal(object)         # SshKey
+    rent_done   = Signal(object)                 # RentResult
+    rent_failed = Signal(str, str)
+
+    # ---- Store triggers (cross-thread) ----
+    _trigger_search_offers = Signal(object)      # OfferQuery
+    _trigger_refresh_templates = Signal(str)
+    _trigger_refresh_ssh_keys  = Signal()
+    _trigger_create_ssh_key    = Signal(str)
+    _trigger_rent              = Signal(object)  # RentRequest
 
     # ---- Internal triggers (Qt cross-thread signals) ----
     _trigger_refresh = Signal()
@@ -58,6 +80,13 @@ class AppController(QObject):
         self._live_workers:   dict[int, LiveMetricsWorker] = {}
         self._model_watchers: dict[int, ModelWatcher] = {}
         self._llama_probes:   dict[int, LlamaReadyProbe] = {}
+
+        self.rental: RentalService | None = None
+        self.store_thread = QThread()
+        self.offer_worker: OfferSearchWorker | None = None
+        self.template_worker: TemplateListWorker | None = None
+        self.ssh_key_worker: SshKeyWorker | None = None
+        self.rent_worker: RentCreateWorker | None = None
 
         self.list_thread   = QThread()
         self.action_thread = QThread()
@@ -129,6 +158,39 @@ class AppController(QObject):
         if not self.config.api_key:
             return
         self.vast = VastService(self.config.api_key)
+        # RentalService shares the api_key; the SDK manages its own client.
+        self.rental = RentalService(api_key=self.config.api_key)
+        if not self.store_thread.isRunning():
+            self.offer_worker = OfferSearchWorker(self.rental)
+            self.template_worker = TemplateListWorker(self.rental)
+            self.ssh_key_worker = SshKeyWorker(self.rental)
+            self.rent_worker = RentCreateWorker(self.rental)
+            for w in (self.offer_worker, self.template_worker,
+                      self.ssh_key_worker, self.rent_worker):
+                w.moveToThread(self.store_thread)
+            # Triggers → worker slots
+            self._trigger_search_offers.connect(self.offer_worker.search)
+            self._trigger_refresh_templates.connect(self.template_worker.refresh)
+            self._trigger_refresh_ssh_keys.connect(self.ssh_key_worker.refresh)
+            self._trigger_create_ssh_key.connect(self.ssh_key_worker.create)
+            self._trigger_rent.connect(self.rent_worker.rent)
+            # Worker signals → controller re-emits
+            self.offer_worker.results.connect(self.offers_refreshed)
+            self.offer_worker.failed.connect(self.offers_failed)
+            self.template_worker.results.connect(self.templates_refreshed)
+            self.template_worker.failed.connect(self.offers_failed)
+            self.ssh_key_worker.listed.connect(self.ssh_keys_refreshed)
+            self.ssh_key_worker.created.connect(self.ssh_key_created)
+            self.ssh_key_worker.failed.connect(self.offers_failed)
+            self.rent_worker.done.connect(self.rent_done)
+            self.rent_worker.failed.connect(self.rent_failed)
+            self.store_thread.start()
+        else:
+            # Service rebuilt — rebind api_key on existing workers
+            self.offer_worker.service = self.rental
+            self.template_worker.service = self.rental
+            self.ssh_key_worker.service = self.rental
+            self.rent_worker.service = self.rental
         self._destroy_workers()
 
         self.list_thread = QThread()
@@ -169,6 +231,9 @@ class AppController(QObject):
             probe.stop(); probe.wait(2000)
         if self.ssh is not None:
             self.ssh.stop_all()
+        if self.store_thread.isRunning():
+            self.store_thread.quit()
+            self.store_thread.wait(2000)
         self._destroy_workers()
 
     def _destroy_workers(self):
@@ -291,6 +356,29 @@ class AppController(QObject):
         """Force a deep history scan on the next refresh."""
         self._force_next_backfill = True
         self._trigger_refresh.emit()
+
+    # ---- Store API ----
+    def search_offers(self, query: OfferQuery) -> None:
+        if self.rental is None:
+            self.offers_failed.emit("auth", "API key not configured"); return
+        self._trigger_search_offers.emit(query)
+
+    def refresh_templates(self, q: str = "") -> None:
+        if self.rental is None: return
+        self._trigger_refresh_templates.emit(q)
+
+    def refresh_ssh_keys(self) -> None:
+        if self.rental is None: return
+        self._trigger_refresh_ssh_keys.emit()
+
+    def create_ssh_key(self, public_key: str) -> None:
+        if self.rental is None: return
+        self._trigger_create_ssh_key.emit(public_key)
+
+    def rent(self, req: RentRequest) -> None:
+        if self.rental is None:
+            self.rent_failed.emit("auth", "API key not configured"); return
+        self._trigger_rent.emit(req)
 
     # ---- Actions ----
     def _find_instance(self, iid: int) -> Instance | None:
