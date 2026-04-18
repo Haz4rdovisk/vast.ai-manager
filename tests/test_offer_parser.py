@@ -40,3 +40,18 @@ def test_parse_missing_fields_safe():
     assert o.cpu_ram_gb is None
     assert o.verified is False
     assert o.country is None
+
+
+def test_parse_country_edge_cases():
+    # Single-segment geolocation → country should be None (not echoed back)
+    o = parse_offer({"id": 1, "ask_contract_id": 1, "machine_id": 2, "gpu_name": "X", "num_gpus": 1, "dph_total": 0, "geolocation": "France"})
+    assert o.country is None
+    assert o.geolocation == "France"
+
+    # Empty string → None
+    o = parse_offer({"id": 1, "ask_contract_id": 1, "machine_id": 2, "gpu_name": "X", "num_gpus": 1, "dph_total": 0, "geolocation": ""})
+    assert o.country is None
+
+    # Trailing-comma geolocation → None
+    o = parse_offer({"id": 1, "ask_contract_id": 1, "machine_id": 2, "gpu_name": "X", "num_gpus": 1, "dph_total": 0, "geolocation": "Paris,"})
+    assert o.country is None

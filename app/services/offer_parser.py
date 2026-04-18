@@ -18,9 +18,12 @@ def _i(v: Any) -> int | None:
 
 
 def _country(geo: str | None) -> str | None:
-    if not geo or "," not in geo:
-        return geo
-    return geo.rsplit(",", 1)[-1].strip()
+    if not geo:
+        return None
+    if "," not in geo:
+        return None
+    candidate = geo.rsplit(",", 1)[-1].strip()
+    return candidate or None
 
 
 def parse_offer(raw: dict) -> Offer:
