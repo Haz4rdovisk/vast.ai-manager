@@ -12,6 +12,7 @@ from app.workers.tunnel_starter import TunnelStarter
 from app.workers.live_metrics import LiveMetricsWorker
 from app.workers.model_watcher import ModelWatcher
 from app.workers.llama_probe import LlamaReadyProbe
+from datetime import datetime, timedelta
 from app.billing import DailySpendTracker, burn_rate_breakdown
 from app.analytics_store import AnalyticsStore, CostSnapshot
 
@@ -71,12 +72,56 @@ class AppController(QObject):
 
     # ---- Convenience ----
     def today_spend(self) -> float:
-        """Real persistent today spend from analytics store."""
+        """Persistent charges (window-aware) + live extrapolation from the
+        last charge's end timestamp to now, using current running dph.
+        Ensures the tile ticks up in real time between Vast billing lumps."""
         stored = self.analytics_store.today_spend()
-        live = self.tracker.today_spend()
-        if self.analytics_store.has_billing_events:
-            return stored if stored > 0 else live
-        return stored if stored > 0 else live
+        if not self.analytics_store.has_billing_events:
+            # No charge data yet — use the live daily tracker alone.
+            return self.tracker.today_spend()
+        live = self._live_overlay_since(
+            datetime.combine(datetime.now().date(), datetime.min.time())
+        )
+        return round(stored + live, 4)
+
+    def week_spend(self) -> float:
+        stored = self.analytics_store.week_spend()
+        if not self.analytics_store.has_billing_events:
+            return stored
+        now = datetime.now()
+        start = datetime.combine(
+            now.date() - timedelta(days=now.weekday()),
+            datetime.min.time(),
+        )
+        return round(stored + self._live_overlay_since(start), 4)
+
+    def month_spend(self) -> float:
+        stored = self.analytics_store.month_spend()
+        if not self.analytics_store.has_billing_events:
+            return stored
+        now = datetime.now()
+        start = datetime(now.year, now.month, 1)
+        return round(stored + self._live_overlay_since(start), 4)
+
+    def _live_overlay_since(self, window_start: datetime) -> float:
+        """Extrapolate spend from max(last_charge_end, window_start) → now
+        at the current running dph. Zero if no running instances or if the
+        last charge is already in the future (clock skew guard)."""
+        instances = getattr(self, "last_instances", None) or []
+        dph = sum(
+            float(getattr(i, "dph", 0.0) or 0.0)
+            for i in instances
+            if getattr(i, "state", None) == InstanceState.RUNNING
+        )
+        if dph <= 0:
+            return 0.0
+        last_end = self.analytics_store.last_charge_end()
+        start = max(last_end, window_start) if last_end else window_start
+        now = datetime.now()
+        if now <= start:
+            return 0.0
+        hours = (now - start).total_seconds() / 3600.0
+        return dph * hours
 
     # ---- Lifecycle ----
     def bootstrap(self):

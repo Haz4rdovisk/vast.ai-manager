@@ -148,11 +148,18 @@ class AnalyticsStore:
         events: list[dict] = []
         summary = _empty_summary(sync_meta)
 
+        min_ts = None
+        max_ts = None
+
         for inv in invoices:
             ts = _timestamp(inv, ("end", "start", "timestamp", "when", "paid_on"))
             credit = _invoice_credit_amount(inv)
             if ts is None or credit <= 0:
                 continue
+            
+            if min_ts is None or ts < min_ts: min_ts = ts
+            if max_ts is None or ts > max_ts: max_ts = ts
+
             events.append({
                 "ts": ts,
                 "amount": credit,
@@ -170,6 +177,9 @@ class AnalyticsStore:
             amount = _positive_amount(chg.get("amount"))
             if ts is None or amount <= 0:
                 continue
+            
+            if min_ts is None or ts < min_ts: min_ts = ts
+            if max_ts is None or ts > max_ts: max_ts = ts
 
             cats = _charge_categories(chg)
             if not any(cats.values()):
@@ -194,16 +204,33 @@ class AnalyticsStore:
                 summary["categories"][key] = round(summary["categories"].get(key, 0.0) + value, 4)
             summary["sources"][source] = round(summary["sources"].get(source, 0.0) + amount, 4)
 
-        self._billing_events = [
-            {
-                "ts": datetime.fromtimestamp(float(item["ts"])).isoformat(timespec="seconds"),
-                "amount": round(float(item["amount"]), 4),
-                "kind": item["kind"],
+        summary["coverage_start"] = min_ts
+        summary["coverage_end"] = max_ts
+
+        def _persist_event(item):
+            ts_end = float(item["ts"])
+            amount = round(float(item["amount"]), 4)
+            rate = max(0.0, float(item.get("rate") or 0.0))
+            kind = item["kind"]
+            # Credits are instantaneous (no span); charges span [ts - amount/rate, ts].
+            if kind == "charge" and rate > 0 and amount > 0:
+                duration_h = amount / rate
+                ts_start = ts_end - duration_h * 3600.0
+            else:
+                ts_start = ts_end
+            return {
+                "ts": datetime.fromtimestamp(ts_end).isoformat(timespec="seconds"),
+                "ts_start": datetime.fromtimestamp(ts_start).isoformat(timespec="seconds"),
+                "amount": amount,
+                "rate": round(rate, 6),
+                "kind": kind,
                 "source": item.get("source", "unknown"),
                 "categories": item.get("categories", {}),
             }
-            for item in events
-            if item.get("kind") == "charge"
+
+        self._billing_events = [
+            _persist_event(item) for item in events
+            if item.get("kind") in ("charge", "credit")
         ]
 
         if not events:
@@ -255,6 +282,54 @@ class AnalyticsStore:
 
     # ── Queries ─────────────────────────────────────────────────────────
 
+    def smoothed_balance_timeline(self, hours: int = 24, current_balance: float = 0.0,
+                                  live_dph: float = 0.0, live_since: datetime | None = None) -> list[tuple[str, float]]:
+        """Reconstruct a smooth balance timeline by walking backward from current_balance.
+        Instead of using the 'cliff' snapshots from the log, it uses _spend_in_window
+        which redistributes lump charges across their time span.
+        """
+        now = datetime.now()
+        start = now - timedelta(hours=hours)
+        
+        # Sampling: ~144 points for 24h (every 10 minutes)
+        # Cap at 288 points max to avoid performance issues
+        points_count = min(288, max(24, int(hours * 6)))
+        step_s = (now - start).total_seconds() / points_count
+        
+        # We need credits too for reconstruction
+        credits = [ev for ev in self._billing_events if ev.get("kind") == "credit"]
+        
+        out = []
+        for i in range(points_count + 1):
+            t = start + timedelta(seconds=step_s * i)
+            if t > now: t = now
+            
+            # balance(t) = balance(now) + spend_in_[t, now] - credits_in_[t, now]
+            # _spend_in_window handles the distribution of lumps.
+            spend = self._spend_in_window(t, now, fallback_days=max(1, hours // 24 + 1))
+            
+            # Live overlay part for spending between last charge and now
+            # Note: _spend_in_window only looks at billing events (past).
+            # We add live extrapolation for the gap between last charge and current time.
+            live_spend = 0.0
+            if live_dph > 0 and live_since is not None:
+                l_start = max(t, live_since)
+                l_end = now
+                if l_end > l_start:
+                    live_spend = (live_dph / 3600.0) * (l_end - l_start).total_seconds()
+            
+            # Credits (top-ups) between t and now
+            topups = 0.0
+            for c in credits:
+                c_dt = _parse_ts(c.get("ts"))
+                if c_dt and t <= c_dt <= now:
+                    topups += float(c.get("amount") or 0.0)
+            
+            val = current_balance + spend + live_spend - topups
+            out.append((t.isoformat(timespec="seconds"), round(val, 4)))
+            
+        return out
+
     def balance_timeline(self, hours: int = 24) -> list[tuple[str, float]]:
         """Return (timestamp, balance) pairs for the last N hours."""
         cutoff = datetime.now() - timedelta(hours=hours)
@@ -273,9 +348,13 @@ class AnalyticsStore:
         ]
 
     def period_spend(self, days: int = 1) -> float:
-        """Return total consumption (balance drops only) within the last N days."""
+        """Return total consumption (balance drops only) within the last N days.
+        Caps the anchor age to avoid using snapshots from weeks ago for a 24h metric.
+        """
         cutoff = datetime.now() - timedelta(days=days)
-        period = self._entries_since(cutoff, include_anchor=True)
+        # Cap anchor age at 2x the period window
+        max_age = float(days * 2 * 86400)
+        period = self._entries_since(cutoff, include_anchor=True, max_anchor_age_s=max_age)
         spend = 0.0
         for i in range(1, len(period)):
             p, c = period[i-1]["balance"], period[i]["balance"]
@@ -284,19 +363,31 @@ class AnalyticsStore:
         return round(spend, 4)
 
     def today_spend(self) -> float:
-        start = datetime.combine(datetime.now().date(), datetime.min.time())
-        return self._charge_spend_since(start, fallback_days=1)
+        now = datetime.now()
+        start = datetime.combine(now.date(), datetime.min.time())
+        return self._spend_in_window(start, now, fallback_days=1)
 
     def week_spend(self) -> float:
-        today = datetime.now().date()
-        week_start = today - timedelta(days=today.weekday())
+        now = datetime.now()
+        week_start = now.date() - timedelta(days=now.weekday())
         start = datetime.combine(week_start, datetime.min.time())
-        return self._charge_spend_since(start, fallback_days=7)
+        return self._spend_in_window(start, now, fallback_days=7)
 
     def month_spend(self) -> float:
-        today = datetime.now().date()
-        start = datetime(today.year, today.month, 1)
-        return self._charge_spend_since(start, fallback_days=30)
+        now = datetime.now()
+        start = datetime(now.year, now.month, 1)
+        return self._spend_in_window(start, now, fallback_days=30)
+
+    def last_charge_end(self) -> datetime | None:
+        """Latest end timestamp among charge events (for live-overlay bounds)."""
+        latest = None
+        for ev in self._billing_events:
+            if ev.get("kind") != "charge":
+                continue
+            dt = _parse_ts(ev.get("ts"))
+            if dt is not None and (latest is None or dt > latest):
+                latest = dt
+        return latest
 
     def daily_spend_history(self, days: int = 7) -> list[tuple[str, float]]:
         """Return a list of (date_str, spend_usd) pairs aggregated by calendar day."""
@@ -308,13 +399,41 @@ class AnalyticsStore:
             for i in range(days)
         }
         if self._billing_events:
-            for event in self._charge_events_since(datetime.combine(start_day, datetime.min.time())):
-                dt = _parse_ts(event.get("ts"))
-                if dt is None:
+            window_start = datetime.combine(start_day, datetime.min.time())
+            window_end = datetime.combine(
+                today + timedelta(days=1), datetime.min.time()
+            )
+            for event in self._billing_events:
+                if event.get("kind") != "charge":
                     continue
-                day = dt.date()
-                if day in buckets:
-                    buckets[day] += float(event.get("amount") or 0.0)
+                c_start, c_end, _rate = self._charge_span(event)
+                if c_start is None or c_end is None:
+                    continue
+                amount = float(event.get("amount") or 0.0)
+                if amount <= 0:
+                    continue
+                if c_end <= c_start:
+                    if window_start <= c_end < window_end:
+                        day = c_end.date()
+                        if day in buckets:
+                            buckets[day] += amount
+                    continue
+                ovl_start = max(c_start, window_start)
+                ovl_end = min(c_end, window_end)
+                if ovl_end <= ovl_start:
+                    continue
+                span_s = (c_end - c_start).total_seconds()
+                rate_per_s = amount / span_s
+                cursor = ovl_start
+                while cursor < ovl_end:
+                    day = cursor.date()
+                    next_midnight = datetime.combine(
+                        day + timedelta(days=1), datetime.min.time()
+                    )
+                    slice_end = min(next_midnight, ovl_end)
+                    if day in buckets:
+                        buckets[day] += (slice_end - cursor).total_seconds() * rate_per_s
+                    cursor = slice_end
             return [(day.strftime("%d %b"), round(value, 3)) for day, value in buckets.items()]
 
         entries = self._entries_since(
@@ -333,8 +452,14 @@ class AnalyticsStore:
                 buckets[day] += drop
         return [(day.strftime("%d %b"), round(value, 3)) for day, value in buckets.items()]
 
-    def spend_buckets(self, hours: int = 24, bucket_count: int = 8) -> list[tuple[str, float]]:
-        """Return balance-drop spend in evenly sized buckets for short ranges."""
+    def spend_buckets(self, hours: int = 24, bucket_count: int = 8,
+                      live_dph: float = 0.0,
+                      live_since: datetime | None = None
+                      ) -> list[tuple[str, float]]:
+        """Return balance-drop spend in evenly sized buckets for short ranges.
+        If ``live_dph > 0`` and ``live_since`` is given, extrapolate spend at
+        that rate across ``[live_since, now]`` and fold it into the buckets so
+        the chart ticks live between charge lumps."""
         hours = max(1, int(hours))
         bucket_count = max(1, int(bucket_count))
         end = datetime.now()
@@ -343,13 +468,56 @@ class AnalyticsStore:
         values = [0.0 for _ in range(bucket_count)]
 
         if self._billing_events:
-            for event in self._charge_events_since(start):
-                dt = _parse_ts(event.get("ts"))
-                if dt is None:
+            # Redistribute each charge uniformly across its [c_start, c_end] span,
+            # so a single lump posted at 18:42 covering 35h spreads across the
+            # overlapping buckets instead of piling into one bar.
+            for event in self._billing_events:
+                if event.get("kind") != "charge":
                     continue
-                idx = int((dt - start).total_seconds() // bucket_seconds)
-                idx = max(0, min(bucket_count - 1, idx))
-                values[idx] += float(event.get("amount") or 0.0)
+                c_start, c_end, _rate = self._charge_span(event)
+                if c_start is None or c_end is None:
+                    continue
+                amount = float(event.get("amount") or 0.0)
+                if amount <= 0:
+                    continue
+                if c_end <= c_start:
+                    # Point charge — drop into its bucket if inside window.
+                    if start <= c_end <= end:
+                        idx = int((c_end - start).total_seconds() // bucket_seconds)
+                        idx = max(0, min(bucket_count - 1, idx))
+                        values[idx] += amount
+                    continue
+                ovl_start = max(c_start, start)
+                ovl_end = min(c_end, end)
+                if ovl_end <= ovl_start:
+                    continue
+                span_s = (c_end - c_start).total_seconds()
+                rate_per_s = amount / span_s
+                # Walk the overlap in per-bucket slices.
+                cursor = ovl_start
+                while cursor < ovl_end:
+                    idx = int((cursor - start).total_seconds() // bucket_seconds)
+                    idx = max(0, min(bucket_count - 1, idx))
+                    bucket_end = start + timedelta(seconds=bucket_seconds * (idx + 1))
+                    slice_end = min(bucket_end, ovl_end)
+                    values[idx] += (slice_end - cursor).total_seconds() * rate_per_s
+                    cursor = slice_end
+
+            # Live overlay: extrapolate from the last charge forward at dph.
+            if live_dph > 0 and live_since is not None:
+                live_end = end
+                live_start = max(live_since, start)
+                if live_end > live_start:
+                    rate_per_s = live_dph / 3600.0
+                    cursor = live_start
+                    while cursor < live_end:
+                        idx = int((cursor - start).total_seconds() // bucket_seconds)
+                        idx = max(0, min(bucket_count - 1, idx))
+                        bucket_end = start + timedelta(seconds=bucket_seconds * (idx + 1))
+                        slice_end = min(bucket_end, live_end)
+                        values[idx] += (slice_end - cursor).total_seconds() * rate_per_s
+                        cursor = slice_end
+
             labels = []
             for i, value in enumerate(values):
                 bucket_start = start + timedelta(seconds=bucket_seconds * i)
@@ -374,7 +542,8 @@ class AnalyticsStore:
             labels.append((bucket_start.strftime("%H:%M"), round(value, 3)))
         return labels
 
-    def _entries_since(self, cutoff: datetime, include_anchor: bool = False) -> list[dict]:
+    def _entries_since(self, cutoff: datetime, include_anchor: bool = False,
+                       max_anchor_age_s: float | None = None) -> list[dict]:
         parsed = []
         for entry in self._entries:
             dt = _parse_ts(entry.get("ts"))
@@ -385,14 +554,54 @@ class AnalyticsStore:
         if include_anchor:
             anchor = next((entry for dt, entry in reversed(parsed) if dt < cutoff), None)
             if anchor is not None:
+                if max_anchor_age_s is not None:
+                    anchor_dt = _parse_ts(anchor.get("ts"))
+                    if anchor_dt and (cutoff - anchor_dt).total_seconds() > max_anchor_age_s:
+                        return out
                 out.insert(0, anchor)
         return out
 
-    def _charge_spend_since(self, start: datetime, fallback_days: int) -> float:
-        charges = [float(event.get("amount") or 0.0) for event in self._charge_events_since(start)]
-        if charges or self._billing_events:
-            return round(sum(charges), 4)
-        return self.period_spend(fallback_days)
+    def _charge_span(self, event: dict) -> tuple[datetime | None, datetime | None, float]:
+        """Return (start, end, rate) for a charge event. Falls back to a
+        point-in-time span at `ts` when rate/start are missing (old data)."""
+        end = _parse_ts(event.get("ts"))
+        start = _parse_ts(event.get("ts_start"))
+        rate = float(event.get("rate") or 0.0)
+        if start is None and end is not None and rate > 0:
+            amount = float(event.get("amount") or 0.0)
+            if amount > 0:
+                start = end - timedelta(hours=amount / rate)
+        if start is None:
+            start = end
+        return start, end, rate
+
+    def _spend_in_window(self, start: datetime, end: datetime,
+                         fallback_days: int) -> float:
+        """Sum charge amounts, redistributing each charge uniformly across
+        [charge.start, charge.end]. Handles the 'Vast posts one lump covering
+        many hours' case: a charge spanning yesterday→today only contributes
+        its today portion to today_spend."""
+        if not self._billing_events:
+            return self.period_spend(fallback_days)
+        total = 0.0
+        for event in self._billing_events:
+            if event.get("kind") != "charge":
+                continue
+            c_start, c_end, _rate = self._charge_span(event)
+            if c_start is None or c_end is None or c_end <= c_start:
+                # Point event — count it if ts falls in window
+                if c_end is not None and start <= c_end <= end:
+                    total += float(event.get("amount") or 0.0)
+                continue
+            overlap_start = max(c_start, start)
+            overlap_end = min(c_end, end)
+            if overlap_end <= overlap_start:
+                continue
+            span_s = (c_end - c_start).total_seconds()
+            ovl_s = (overlap_end - overlap_start).total_seconds()
+            amount = float(event.get("amount") or 0.0)
+            total += amount * (ovl_s / span_s)
+        return round(total, 4)
 
     def _charge_events_since(self, start: datetime) -> list[dict]:
         out = []
@@ -433,6 +642,8 @@ def _empty_summary(sync_meta: dict | None = None) -> dict:
         "credits": 0.0,
         "categories": {"gpu": 0.0, "storage": 0.0, "network": 0.0, "other": 0.0},
         "sources": {},
+        "coverage_start": None,
+        "coverage_end": None,
     }
 
 
@@ -451,6 +662,15 @@ def _finalize_summary(summary: dict) -> dict:
         key: round(float(value), 4)
         for key, value in summary.get("categories", {}).items()
     }
+    
+    # Format range dates if they exist
+    if summary.get("coverage_start"):
+        dt = _parse_ts(summary["coverage_start"])
+        if dt: summary["coverage_start_label"] = dt.strftime("%b %d")
+    if summary.get("coverage_end"):
+        dt = _parse_ts(summary["coverage_end"])
+        if dt: summary["coverage_end_label"] = dt.strftime("%b %d")
+        
     return summary
 
 

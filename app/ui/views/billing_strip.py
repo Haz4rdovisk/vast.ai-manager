@@ -6,7 +6,7 @@ from PySide6.QtCore import Signal
 from app import theme as t
 from app.billing import BurnRateTracker, autonomy_hours, format_autonomy, total_burn_rate
 from app.models import AppConfig, Instance, UserInfo
-from app.ui.components.primitives import GlassCard
+from app.ui.components.primitives import GlassCard, VDivider
 
 
 class BillingStrip(GlassCard):
@@ -33,7 +33,7 @@ class BillingStrip(GlassCard):
         )
         row.addWidget(self.bal_lbl)
 
-        row.addWidget(_dot())
+        row.addWidget(VDivider())
 
         # Burn rate
         self.burn_lbl = QLabel("$0.00/h")
@@ -43,7 +43,7 @@ class BillingStrip(GlassCard):
         )
         row.addWidget(self.burn_lbl)
 
-        row.addWidget(_dot())
+        row.addWidget(VDivider())
 
         # Autonomy
         self.auto_lbl = QLabel("\u2014")
@@ -99,9 +99,3 @@ class BillingStrip(GlassCard):
                 f"color: {color}; font-size: 18px; font-weight: 700;"
                 f" font-family: {t.FONT_MONO};"
             )
-
-
-def _dot():
-    lbl = QLabel("\u00b7")
-    lbl.setStyleSheet(f"color: {t.TEXT_LOW}; font-size: 16px; font-weight: 900;")
-    return lbl

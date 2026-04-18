@@ -76,9 +76,8 @@ class HardwareCard(GlassCard):
         lay.addLayout(footer)
 
     def _wrap(self, widget):
-        # Apenas um container invisível para manter a formatação
         container = QFrame()
-        container.setStyleSheet("background: transparent; border: none;")
+        container.setAttribute(Qt.WA_TranslucentBackground)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(widget)
@@ -116,7 +115,9 @@ class HardwareCard(GlassCard):
         # Temp with dynamic color
         temp_c = t.temp_color(sys.gpu_temp)
         self.temp_lbl.setText(f"GPU Temp: {sys.gpu_temp:.0f}\u00b0C")
-        self.temp_lbl.setStyleSheet(f"color: {temp_c};")
+        self.temp_lbl.setStyleSheet(
+            f"color: {temp_c}; font-size: {t.FONT_SIZE_SMALL}px; font-weight: 600;"
+        )
 
         h = sys.uptime_seconds // 3600
         m = (sys.uptime_seconds % 3600) // 60

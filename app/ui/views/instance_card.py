@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from app import theme as t
 from app.models import Instance, InstanceState, TunnelStatus
-from app.ui.components.primitives import GlassCard, StatusPill
+from app.ui.components.primitives import GlassCard, StatusPill, Badge, Divider
 
 
 STATE_LABELS = {
@@ -81,14 +81,6 @@ class _Bar(QWidget):
         )
 
 
-# ── Separator ───────────────────────────────────────────────────────────────
-class _Sep(QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(1)
-        self.setStyleSheet(f"background: {t.BORDER_LOW};")
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 class InstanceCard(GlassCard):
     activate_requested      = Signal(int)
@@ -114,12 +106,7 @@ class InstanceCard(GlassCard):
         zone_a.addWidget(self.state_pill)
         zone_a.addStretch()
 
-        self.gpu_lbl = QLabel("")
-        self.gpu_lbl.setStyleSheet(
-            f"color: {t.TEXT_MID}; font-family: {t.FONT_MONO};"
-            f" font-size: 10pt; background: {t.SURFACE_3};"
-            f" border-radius: {t.RADIUS_PILL}px; padding: 4px 12px;"
-        )
+        self.gpu_lbl = Badge("", mono=True)
         zone_a.addWidget(self.gpu_lbl)
 
         self.cost_lbl = QLabel("")
@@ -145,17 +132,14 @@ class InstanceCard(GlassCard):
         self.details_lbl = QLabel("")
         self.details_lbl.setWordWrap(True)
         self.details_lbl.setStyleSheet(
-            f"color: {t.TEXT_LOW}; font-size: 10px;"
+            f"color: {t.TEXT_LOW}; font-size: {t.FONT_SIZE_LABEL}px;"
         )
         self._lay.addWidget(self.details_lbl)
 
-        self._lay.addWidget(_Sep())
+        self._lay.addWidget(Divider())
 
         # ── ZONE C: Live Data (visible only when CONNECTED) ────────────
-        self.metrics_container = QFrame()
-        self.metrics_container.setStyleSheet(
-            "QFrame { background: transparent; border: none; }"
-        )
+        self.metrics_container = QWidget()
         mc = QVBoxLayout(self.metrics_container)
         mc.setContentsMargins(0, t.SPACE_2, 0, t.SPACE_2)
         mc.setSpacing(t.SPACE_2)
@@ -177,10 +161,7 @@ class InstanceCard(GlassCard):
         self._lay.addWidget(self.metrics_container)
 
         # Endpoint row
-        self.endpoint_wrap = QFrame()
-        self.endpoint_wrap.setStyleSheet(
-            "QFrame { background: transparent; border: none; }"
-        )
+        self.endpoint_wrap = QWidget()
         er = QHBoxLayout(self.endpoint_wrap)
         er.setContentsMargins(0, 0, 0, 0)
         self.endpoint_lbl = QLabel("")
@@ -198,18 +179,12 @@ class InstanceCard(GlassCard):
         self._lay.addWidget(self.endpoint_wrap)
 
         # Model badge
-        self.model_badge = QLabel("")
+        self.model_badge = Badge("", mono=True)
         self.model_badge.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.model_badge.setStyleSheet(
-            f"QLabel {{ background: {t.SURFACE_2}; color: {t.TEXT};"
-            f" border: 1px solid {t.BORDER_MED};"
-            f" border-radius: {t.RADIUS_PILL}px; padding: 5px 14px;"
-            f" font-family: {t.FONT_MONO}; font-size: 10px; }}"
-        )
         self.model_badge.setVisible(False)
         self._lay.addWidget(self.model_badge)
 
-        self._lay.addWidget(_Sep())
+        self._lay.addWidget(Divider())
 
         # ── Actions row ────────────────────────────────────────────────
         actions = QHBoxLayout()

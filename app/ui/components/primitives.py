@@ -91,15 +91,6 @@ class GlassCard(QFrame):
         highlight.setColorAt(1.0, QColor(255, 255, 255, 0))
         p.fillRect(0, 0, w, 60, highlight)
 
-        # Layer 4: Noise texture simulation (stipple pattern)
-        noise_pen = QPen(QColor(255, 255, 255, 3))
-        noise_pen.setWidth(1)
-        p.setPen(noise_pen)
-        # Draw sparse horizontal lines for texture
-        for y in range(0, h, 4):
-            if y % 8 == 0:
-                p.drawLine(0, y, w, y)
-
         # Border
         p.setClipping(False)
         border_color = QColor(124, 92, 255, 40) if self._hover else QColor(255, 255, 255, 16 if self._raised else 10)
@@ -122,6 +113,53 @@ class GlassCard(QFrame):
         """Manual glow toggle (for programmatic use)."""
         self._hover = on
         self.update()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Badge — compact pill label (non-status); and Divider — 1px horizontal rule
+# ═══════════════════════════════════════════════════════════════════════════════
+class Badge(QLabel):
+    """Neutral pill label for compact info (GPU spec, model id, meta tags).
+    Distinct from StatusPill — no leading dot, no level color semantics."""
+
+    def __init__(self, text: str = "", *, mono: bool = False,
+                 accent: bool = False, parent=None):
+        super().__init__(text, parent)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self._mono = mono
+        self._accent = accent
+        self._restyle()
+
+    def _restyle(self):
+        family = t.FONT_MONO if self._mono else t.FONT_DISPLAY
+        fg = t.ACCENT if self._accent else t.TEXT
+        self.setStyleSheet(
+            f"QLabel {{ color: {fg}; background: {t.SURFACE_2};"
+            f" border: 1px solid {t.BORDER_MED};"
+            f" border-radius: {t.RADIUS_PILL}px; padding: 4px 12px;"
+            f" font-family: {family}; font-size: {t.FONT_SIZE_SMALL}px;"
+            f" font-weight: 500; }}"
+        )
+
+
+class Divider(QFrame):
+    """1px horizontal hairline. Use inside cards to separate zones."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(1)
+        self.setStyleSheet(f"background: {t.BORDER_LOW}; border: none;")
+
+
+class VDivider(QLabel):
+    """Inline vertical dot divider (middle dot) for single-line strips."""
+
+    def __init__(self, parent=None):
+        super().__init__("\u00b7", parent)
+        self.setStyleSheet(
+            f"color: {t.TEXT_LOW}; font-size: 16px; font-weight: 700;"
+            f" padding: 0 2px;"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

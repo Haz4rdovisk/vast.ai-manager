@@ -18,14 +18,7 @@ class TitleBar(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        # Page title (centered label)
-        lay.addSpacing(16)
-        self._page_label = QLabel("")
-        self._page_label.setStyleSheet(
-            f"color: {t.TEXT_MID}; font-size: 10pt; font-weight: 500;"
-            f" letter-spacing: 0.5px;"
-        )
-        lay.addWidget(self._page_label)
+        # Control Buttons
         lay.addStretch()
 
         # Control Buttons
@@ -46,8 +39,8 @@ class TitleBar(QWidget):
 
     # ── Public API ──────────────────────────────────────────────────────
     def setPageTitle(self, text: str):
-        """Update the page title shown in the center of the bar."""
-        self._page_label.setText(text)
+        """No-op: titles are now handled by views directly."""
+        pass
 
     # ── Window controls ─────────────────────────────────────────────────
     def _toggle_max(self):

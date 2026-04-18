@@ -326,7 +326,8 @@ class DailySpendChart(QWidget):
                 # Glass Bar
                 grad = QLinearGradient(bx, by, bx, mt + ch)
                 grad.setColorAt(0.0, QColor(t.ACCENT))
-                grad.setColorAt(1.0, QColor(124, 92, 255, 40))
+                accent_fade = QColor(t.ACCENT); accent_fade.setAlpha(40)
+                grad.setColorAt(1.0, accent_fade)
                 p.setBrush(grad)
                 p.setPen(Qt.NoPen)
                 p.drawRoundedRect(rect, 4, 4)
@@ -401,9 +402,9 @@ class CostComposition(QWidget):
                    f"${self._total:.3f}/h")
 
         items = [
-            ("GPU Compute", self._gpu, QColor(124, 92, 255)),      # purple
-            ("Storage", self._storage, QColor(90, 138, 255)),       # blue
-            ("Network", self._network, QColor(50, 200, 180)),       # teal
+            ("GPU Compute", self._gpu, QColor(t.ACCENT)),
+            ("Storage", self._storage, QColor(t.ACCENT_END)),
+            ("Network", self._network, QColor(t.LIVE)),
         ]
 
         label_w = 110
@@ -593,8 +594,8 @@ class InstanceCostBars(QWidget):
             gpu_w = bar_w * min(1.0, (dph / self._total)) if self._total > 0 else 0
             if gpu_w > 1:
                 grad = QLinearGradient(bar_x, 0, bar_x + gpu_w, 0)
-                grad.setColorAt(0.0, QColor(124, 92, 255))
-                grad.setColorAt(1.0, QColor(90, 138, 255))
+                grad.setColorAt(0.0, QColor(t.ACCENT))
+                grad.setColorAt(1.0, QColor(t.ACCENT_END))
                 p.setBrush(grad)
                 p.drawRoundedRect(QRectF(bar_x, y + 9, gpu_w, 12), 6, 6)
 
@@ -602,7 +603,8 @@ class InstanceCostBars(QWidget):
             if stor > 0:
                 stor_w = bar_w * (stor / self._total) if self._total > 0 else 0
                 if stor_w > 1:
-                    p.setBrush(QColor(90, 138, 255, 100))
+                    stor_col = QColor(t.ACCENT_END); stor_col.setAlpha(100)
+                    p.setBrush(stor_col)
                     p.drawRoundedRect(
                         QRectF(bar_x + gpu_w, y + 9, stor_w, 12), 6, 6)
 
@@ -764,7 +766,6 @@ class AnalyticsView(QWidget):
         self.line_range_combo.addItems(["1H", "3H", "6H", "12H", "24H", "SINCE RECHARGE"])
         self.line_range_combo.setCurrentIndex(2) # 6H
         self.line_range_combo.setFixedWidth(130)
-        self.line_range_combo.setStyleSheet(self._combo_style())
         self.line_range_combo.currentIndexChanged.connect(self._on_line_range_changed)
         tl_head.addWidget(self.line_range_combo)
 
@@ -790,7 +791,6 @@ class AnalyticsView(QWidget):
         self.range_combo.addItems(["24H", "7D", "30D"])
         self.range_combo.setCurrentIndex(1) # 7D
         self.range_combo.setFixedWidth(80)
-        self.range_combo.setStyleSheet(self._combo_style())
         self.range_combo.currentIndexChanged.connect(self._on_bar_range_changed)
         sb_head.addWidget(self.range_combo)
         
@@ -855,7 +855,8 @@ class AnalyticsView(QWidget):
         billing_card = GlassCard()
         bil = billing_card.body()
         bil.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
-        bil.addWidget(_card_title("Billing"))
+        self.billing_title_lbl = _card_title("Billing")
+        bil.addWidget(self.billing_title_lbl)
         self.billing_grid = QGridLayout()
         self.billing_grid.setHorizontalSpacing(t.SPACE_3)
         self.billing_grid.setVerticalSpacing(t.SPACE_2)
@@ -945,28 +946,10 @@ class AnalyticsView(QWidget):
         self._range_hours = ranges[index]
         self.sync(self._last_instances, self._last_user, self._last_today)
 
-    def _combo_style(self):
-        return f"""
-            QComboBox {{
-                background: {t.SURFACE_3};
-                border: 1px solid {t.SURFACE_1};
-                border-radius: 4px;
-                padding: 2px 8px;
-                color: {t.TEXT_HI};
-                font-size: 10px;
-                font-weight: bold;
-            }}
-            QComboBox::drop-down {{ border: 0; width: 0px; }}
-            QComboBox QAbstractItemView {{
-                background: {t.SURFACE_2};
-                border: 1px solid {t.SURFACE_1};
-                color: {t.TEXT_HI};
-                selection-background-color: {t.ACCENT};
-            }}
-        """
-
     def sync(self, instances: list[Instance], user: UserInfo | None,
-             today_spend: float):
+             today_spend: float,
+             week_spend: float | None = None,
+             month_spend: float | None = None):
         # Security: Prevent crash if widget is being deleted during sync signal
         try:
             if not self.isVisible() and not self.parent():
@@ -998,10 +981,13 @@ class AnalyticsView(QWidget):
         )
         self.util_tile.set_value(_format_percent(_avg(i.gpu_util for i in running_instances)))
 
-        if self._store:
+        if week_spend is None and self._store:
             week_spend = self._store.week_spend()
+        if month_spend is None and self._store:
             month_spend = self._store.month_spend()
+        if week_spend is not None:
             self.week_tile.set_value(f"${week_spend:.2f}")
+        if month_spend is not None:
             self.month_tile.set_value(f"${month_spend:.2f}")
 
         hours = autonomy_hours(balance, display_burn)
@@ -1044,8 +1030,17 @@ class AnalyticsView(QWidget):
                 self.timeline._title = "Balance Evolution"
                 self.timeline_title_lbl.setText(self.timeline._title)
 
+            # Metrics for live extrapolation
+            live_dph = sum(
+                float(getattr(i, "dph", 0.0) or 0.0)
+                for i in running_instances
+            )
+            live_since = self._store.last_charge_end() if self._store else None
+
             if self._mode == "FINANCE":
-                line_data = self._store.balance_timeline(line_hrs)
+                line_data = self._store.smoothed_balance_timeline(
+                    line_hrs, balance, live_dph=live_dph, live_since=live_since
+                )
                 self.timeline.set_data(line_data, t.OK, line_hrs)
                 self.timeline.set_forecast(display_burn)
             else:
@@ -1056,7 +1051,10 @@ class AnalyticsView(QWidget):
             # Historical Bars (Global Range)
             if self._range_hours <= 24:
                 title = "Spend Last 24 Hours"
-                spend_data = self._store.spend_buckets(24, bucket_count=8)
+                spend_data = self._store.spend_buckets(
+                    24, bucket_count=8,
+                    live_dph=live_dph, live_since=live_since,
+                )
             else:
                 days = max(1, self._range_hours // 24)
                 title = f"Daily Spend ({days}D)"
@@ -1197,10 +1195,20 @@ class AnalyticsView(QWidget):
         )
         _set_metric(self.billing_labels, "charges", f"${float(summary.get('charges') or 0.0):.2f}")
         _set_metric(self.billing_labels, "credits", f"${float(summary.get('credits') or 0.0):.2f}", t.OK)
+        
+        # GPU/Storage/Bandwidth labels with context
+        start_lbl = summary.get("coverage_start_label")
+        range_suffix = f" (since {start_lbl})" if start_lbl else ""
+        
         _set_metric(self.billing_labels, "gpu", f"${float(cats.get('gpu') or 0.0):.2f}")
         _set_metric(self.billing_labels, "storage", f"${float(cats.get('storage') or 0.0):.2f}")
         _set_metric(self.billing_labels, "network", f"${float(cats.get('network') or 0.0):.2f}")
         _set_metric(self.billing_labels, "top", top)
+
+        if start_lbl:
+            self.billing_title_lbl.setText(f"Billing (Since {start_lbl})")
+        else:
+            self.billing_title_lbl.setText("Billing")
 
 
 # ── Helpers ──

@@ -167,59 +167,117 @@ QFrame[role="card-raised"] {{
 }}
 
 /* ── Buttons ───────────────────────────────────────────────────────────── */
+/* Primary (default): accent gradient with subtle hairline highlight */
 QPushButton {{
     background-color: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 {ACCENT}, stop:1 {ACCENT_END}
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {ACCENT_HI}, stop:1 {ACCENT}
     );
     color: white;
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: {RADIUS_MD}px;
-    padding: 10px 20px;
+    padding: 9px 18px;
     font-weight: 600;
     font-size: {FONT_SIZE_BODY}px;
+    min-height: 18px;
 }}
 QPushButton:hover {{
     background-color: qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 {ACCENT_HI}, stop:1 #6EA0FF
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {ACCENT_SOFT}, stop:1 {ACCENT_HI}
     );
+    border-color: rgba(255, 255, 255, 0.16);
 }}
 QPushButton:pressed {{
-    background-color: {ACCENT};
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {ACCENT}, stop:1 #4B3ACC
+    );
+    border-color: rgba(0, 0, 0, 0.30);
+    padding-top: 10px;
+    padding-bottom: 8px;
+}}
+QPushButton:focus {{
+    outline: none;
+    border: 1px solid {ACCENT_SOFT};
 }}
 QPushButton:disabled {{
-    background-color: {SURFACE_3};
+    background-color: {SURFACE_2};
     color: {TEXT_LOW};
+    border: 1px solid {BORDER_LOW};
 }}
+
+/* Ghost: transparent with hairline border */
 QPushButton[variant="ghost"] {{
     background-color: transparent;
     color: {TEXT};
     border: 1px solid {BORDER_MED};
 }}
 QPushButton[variant="ghost"]:hover {{
-    background-color: {SURFACE_2};
+    background-color: rgba(255, 255, 255, 0.04);
     border-color: {BORDER_HI};
     color: {TEXT_HI};
 }}
 QPushButton[variant="ghost"]:pressed {{
-    background-color: {SURFACE_3};
+    background-color: rgba(255, 255, 255, 0.02);
+    border-color: {BORDER_MED};
 }}
-QPushButton[variant="danger"] {{
-    background-color: {ERR};
-    border: none;
+QPushButton[variant="ghost"]:focus {{
+    border: 1px solid {ACCENT};
 }}
-QPushButton[variant="danger"]:hover {{
-    background-color: #d63a4d;
+QPushButton[variant="ghost"]:disabled {{
+    color: {TEXT_LOW};
+    border-color: {BORDER_LOW};
+    background: transparent;
 }}
+
+/* Secondary: filled surface with border */
 QPushButton[variant="secondary"] {{
-    background-color: {SURFACE_3};
+    background-color: {SURFACE_2};
     color: {TEXT_HI};
     border: 1px solid {BORDER_MED};
 }}
 QPushButton[variant="secondary"]:hover {{
     background-color: {GLASS_HOVER};
     border-color: {BORDER_HI};
+}}
+QPushButton[variant="secondary"]:pressed {{
+    background-color: {SURFACE_3};
+}}
+QPushButton[variant="secondary"]:focus {{
+    border: 1px solid {ACCENT};
+}}
+
+/* Danger: destructive actions */
+QPushButton[variant="danger"] {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 #F06A7C, stop:1 {ERR}
+    );
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+}}
+QPushButton[variant="danger"]:hover {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 #F4808F, stop:1 #E84C60
+    );
+    border-color: rgba(255, 255, 255, 0.16);
+}}
+QPushButton[variant="danger"]:pressed {{
+    background-color: #C53A4D;
+    border-color: rgba(0, 0, 0, 0.30);
+    padding-top: 10px;
+    padding-bottom: 8px;
+}}
+QPushButton[variant="danger"]:focus {{
+    border: 1px solid #F4808F;
+}}
+
+/* Small size modifier */
+QPushButton[size="sm"] {{
+    padding: 5px 12px;
+    font-size: {FONT_SIZE_SMALL}px;
 }}
 
 /* ── Inputs ─────────────────────────────────────────────────────────────── */
@@ -261,28 +319,11 @@ QTextEdit#console {{
 }}
 
 /* ── NavRail ───────────────────────────────────────────────────────────── */
+/* Entire nav rail is custom-painted; items are custom widgets with their
+   own hover/active rendering. Keep only the frame reset here. */
 QFrame#nav-rail {{
-    background-color: #080B12;
-    border-right: 1px solid {BORDER_LOW};
-}}
-QFrame#nav-rail QPushButton[role="nav-item"] {{
-    background-color: transparent;
-    color: {TEXT_MID};
-    text-align: left;
-    padding: 10px 16px;
+    background: transparent;
     border: none;
-    border-radius: {RADIUS_MD}px;
-    font-weight: 500;
-    font-size: {FONT_SIZE_BODY}px;
-}}
-QFrame#nav-rail QPushButton[role="nav-item"]:hover {{
-    color: {TEXT_HI};
-    background-color: {SURFACE_1};
-}}
-QFrame#nav-rail QPushButton[role="nav-item"][active="true"] {{
-    color: {TEXT_HI};
-    background-color: {SURFACE_2};
-    border-left: 3px solid {ACCENT};
 }}
 
 /* ── Scroll ─────────────────────────────────────────────────────────────── */

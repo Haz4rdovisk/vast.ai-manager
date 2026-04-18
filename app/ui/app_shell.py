@@ -205,9 +205,12 @@ class AppShell(QWidget):
 
     def _sync_analytics(self, instances, user_info):
         self._analytics_api_sync_pending = False
+        ctrl = self._controller
         self.analytics.sync(
             instances, user_info,
-            self._controller.today_spend() if self._controller else 0.0,
+            ctrl.today_spend() if ctrl else 0.0,
+            week_spend=ctrl.week_spend() if ctrl else None,
+            month_spend=ctrl.month_spend() if ctrl else None,
         )
 
     def _request_analytics_api_sync(self):
