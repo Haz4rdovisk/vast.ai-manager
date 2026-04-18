@@ -174,7 +174,9 @@ class AppController(QObject):
             self._trigger_refresh_ssh_keys.connect(self.ssh_key_worker.refresh)
             self._trigger_create_ssh_key.connect(self.ssh_key_worker.create)
             self._trigger_rent.connect(self.rent_worker.rent)
-            # Worker signals → controller re-emits
+            # Worker signals → controller re-emits.
+            # Note: templates/ssh_keys failures share the `offers_failed` bus by design
+            # — the Store surface shows a single failure banner for all rental APIs.
             self.offer_worker.results.connect(self.offers_refreshed)
             self.offer_worker.failed.connect(self.offers_failed)
             self.template_worker.results.connect(self.templates_refreshed)
