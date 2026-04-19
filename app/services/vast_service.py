@@ -13,16 +13,82 @@ class VastNetworkError(Exception):
     pass
 
 
+_RUNNING_STATUSES = {"running"}
+_STOPPED_STATUSES = {"", "stopped", "exited", "offline", "destroyed", "none"}
+_STARTING_STATUSES = {
+    "created",
+    "initializing",
+    "loading",
+    "pending",
+    "provisioning",
+    "pulling",
+    "queued",
+    "scheduling",
+    "starting",
+}
+_SCHEDULING_STATUSES = {"pending", "queued", "scheduling"}
+
+
+def _normalize_status(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _first_status(raw: dict, *keys: str) -> str:
+    for key in keys:
+        value = raw.get(key)
+        if value is not None and str(value).strip():
+            return _normalize_status(value)
+    return ""
+
+
+def _status_pair(raw: dict) -> tuple[str, str]:
+    actual = _first_status(
+        raw,
+        "actual_status",
+        "cur_state",
+        "current_state",
+        "container_state",
+        "status",
+        "state",
+    )
+    intended = _first_status(
+        raw,
+        "intended_status",
+        "next_state",
+        "desired_status",
+        "target_status",
+        "target_state",
+    )
+    return actual, intended
+
+
+def _is_scheduling_status(
+    actual: str | None,
+    intended: str | None,
+    status_message: str | None = None,
+) -> bool:
+    a = _normalize_status(actual)
+    i = _normalize_status(intended)
+    msg = str(status_message or "").lower()
+    if "schedul" in msg or "gpu is currently in use" in msg:
+        return True
+    if a in _SCHEDULING_STATUSES:
+        return True
+    return i == "running" and a in _STOPPED_STATUSES
+
+
 def _derive_state(actual: str | None, intended: str | None) -> InstanceState:
-    a = (actual or "").lower()
-    i = (intended or "").lower()
+    a = _normalize_status(actual)
+    i = _normalize_status(intended)
+    if not a and not i:
+        return InstanceState.UNKNOWN
     if a == "running":
         return InstanceState.RUNNING
-    if a in ("exited", "stopped", "offline"):
+    if a in _STOPPED_STATUSES:
         if i == "running":
             return InstanceState.STARTING
         return InstanceState.STOPPED
-    if a in ("loading", "scheduling", "created"):
+    if a in _STARTING_STATUSES:
         return InstanceState.STARTING
     if i == "stopped" and a != "running":
         return InstanceState.STOPPING
@@ -116,8 +182,17 @@ def parse_instance(raw: dict) -> Instance:
         ssh_host = raw.get("ssh_host") or raw.get("public_ipaddr") or ""
         ssh_port = _to_int(raw.get("ssh_port")) or 0
 
-    state = _derive_state(raw.get("actual_status"), raw.get("intended_status"))
+    actual_status, intended_status = _status_pair(raw)
+    state = _derive_state(actual_status, intended_status)
     is_running = state == InstanceState.RUNNING
+    normalized_raw = dict(raw)
+    normalized_raw["_normalized_actual_status"] = actual_status
+    normalized_raw["_normalized_intended_status"] = intended_status
+    normalized_raw["_is_scheduling"] = _is_scheduling_status(
+        actual_status,
+        intended_status,
+        status_message,
+    )
 
     # Telemetry only valid while the container is actually running.
     # Vast keeps stale last-known values on stopped/starting instances —
@@ -201,7 +276,7 @@ def parse_instance(raw: dict) -> Instance:
         is_verified=is_verified,
         inet_billed_per_gb=inet_billed_per_gb,
         status_message=status_message,
-        raw=raw,
+        raw=normalized_raw,
     )
 
 

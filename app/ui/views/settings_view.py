@@ -253,6 +253,7 @@ class SettingsView(QWidget):
             port_map=dict(self._config.port_map),
             instance_filters=dict(self._config.instance_filters),
             start_requested_ids=list(self._config.start_requested_ids),
+            start_requested_at=dict(self._config.start_requested_at),
             bulk_confirm_threshold=self._config.bulk_confirm_threshold,
             schema_version=3,
         )

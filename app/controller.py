@@ -291,6 +291,7 @@ class AppController(QObject):
         cfg.port_map = dict(self.config.port_map)
         cfg.instance_filters = dict(self.config.instance_filters)
         cfg.start_requested_ids = list(self.config.start_requested_ids)
+        cfg.start_requested_at = dict(self.config.start_requested_at)
         self.config = cfg
         self.port_allocator = PortAllocator(
             default_port=self.config.default_tunnel_port,
@@ -313,8 +314,20 @@ class AppController(QObject):
         self.config.instance_filters = dict(filters)
         self.config_store.save(self.config)
 
-    def update_start_requested_ids(self, ids: list[int] | set[int]) -> None:
-        self.config.start_requested_ids = sorted({int(iid) for iid in ids})
+    def update_start_requested_ids(
+        self,
+        ids: list[int] | set[int],
+        requested_at: dict[int, float] | None = None,
+    ) -> None:
+        id_set = {int(iid) for iid in ids}
+        requested_at = requested_at or self.config.start_requested_at
+        self.config.start_requested_ids = sorted(id_set)
+        self.config.start_requested_at = {
+            int(iid): float(
+                requested_at.get(iid, requested_at.get(str(iid), 0.0))
+            )
+            for iid in id_set
+        }
         self.config_store.save(self.config)
 
     def _apply_interval(self):

@@ -35,10 +35,14 @@ class ConfigStore:
             raw.setdefault("bulk_confirm_threshold", 1)
             raw["schema_version"] = 3
         raw.setdefault("start_requested_ids", [])
+        raw.setdefault("start_requested_at", {})
         pm = raw.get("port_map") or {}
         raw["port_map"] = {int(k): int(v) for k, v in pm.items()}
         raw["start_requested_ids"] = ConfigStore._coerce_int_list(
             raw.get("start_requested_ids")
+        )
+        raw["start_requested_at"] = ConfigStore._coerce_int_float_map(
+            raw.get("start_requested_at")
         )
         return raw
 
@@ -59,6 +63,18 @@ class ConfigStore:
             except (TypeError, ValueError):
                 continue
         return sorted(out)
+
+    @staticmethod
+    def _coerce_int_float_map(value) -> dict[int, float]:
+        if not isinstance(value, dict):
+            return {}
+        out: dict[int, float] = {}
+        for key, item in value.items():
+            try:
+                out[int(key)] = float(item)
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def save(self, config: AppConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

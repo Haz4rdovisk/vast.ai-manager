@@ -16,12 +16,14 @@ def test_save_then_load_roundtrip(tmp_path):
         api_key="abc123",
         default_tunnel_port=8080,
         start_requested_ids=[2, 1],
+        start_requested_at={1: 10.5, 2: 20},
     )
     store.save(original)
     loaded = store.load()
     assert loaded.api_key == "abc123"
     assert loaded.default_tunnel_port == 8080
     assert loaded.start_requested_ids == [1, 2]
+    assert loaded.start_requested_at == {1: 10.5, 2: 20.0}
 
 
 def test_load_corrupted_file_returns_default(tmp_path):
@@ -50,10 +52,12 @@ def test_load_ignores_unknown_fields(tmp_path):
 def test_start_requested_ids_are_coerced(tmp_path):
     path = tmp_path / "c.json"
     path.write_text(
-        '{"api_key": "k", "start_requested_ids": ["2", 1, "bad", 2]}',
+        '{"api_key": "k", "start_requested_ids": ["2", 1, "bad", 2],'
+        ' "start_requested_at": {"1": "10.5", "bad": 99}}',
         encoding="utf-8",
     )
     store = ConfigStore(path)
     cfg = store.load()
     assert cfg.api_key == "k"
     assert cfg.start_requested_ids == [1, 2]
+    assert cfg.start_requested_at == {1: 10.5}

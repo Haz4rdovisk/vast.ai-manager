@@ -115,5 +115,6 @@ class AppConfig:
     port_map: dict = field(default_factory=dict)
     instance_filters: dict = field(default_factory=dict)
     start_requested_ids: list[int] = field(default_factory=list)
+    start_requested_at: dict = field(default_factory=dict)
     bulk_confirm_threshold: int = 1
     schema_version: int = 3

@@ -1,11 +1,11 @@
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 from app.models import AppConfig, Instance, InstanceState, UserInfo
 from app.services.port_allocator import PortAllocator
 from app.ui.views.instances.instances_view import InstancesView
 
 
-def _inst(iid, state=InstanceState.RUNNING, label=None):
+def _inst(iid, state=InstanceState.RUNNING, label=None, raw=None):
     return Instance(
         id=iid,
         state=state,
@@ -15,6 +15,7 @@ def _inst(iid, state=InstanceState.RUNNING, label=None):
         image="img",
         dph=0.5,
         label=label,
+        raw=raw or {},
     )
 
 
@@ -105,7 +106,7 @@ def test_scheduling_survives_stopped_refresh_after_start(qt_app):
 
     assert view._cards[1].actions.primary.text() == "scheduling..."
     assert 1 in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([1])
+    ctl.update_start_requested_ids.assert_called_with([1], ANY)
 
 
 def test_running_refresh_clears_sticky_scheduling(qt_app):
@@ -118,7 +119,7 @@ def test_running_refresh_clears_sticky_scheduling(qt_app):
 
     assert view._cards[1].actions.primary.text() == "Connect"
     assert 1 not in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([])
+    ctl.update_start_requested_ids.assert_called_with([], {})
 
 
 def test_failed_start_action_clears_sticky_scheduling(qt_app):
@@ -132,7 +133,7 @@ def test_failed_start_action_clears_sticky_scheduling(qt_app):
 
     assert view._cards[1].actions.primary.text() == "Activate"
     assert 1 not in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([])
+    ctl.update_start_requested_ids.assert_called_with([], {})
 
 
 def test_persisted_start_request_restores_scheduling_on_open(qt_app):
@@ -154,4 +155,47 @@ def test_persisted_start_request_clears_when_running_on_open(qt_app):
 
     assert view._cards[1].actions.primary.text() == "Connect"
     assert 1 not in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([])
+    ctl.update_start_requested_ids.assert_called_with([], {})
+
+
+def test_server_scheduling_state_wins_without_local_start_request(qt_app):
+    ctl = _controller()
+    view = InstancesView(ctl)
+
+    view.handle_refresh(
+        [
+            _inst(
+                1,
+                state=InstanceState.STARTING,
+                raw={"actual_status": "exited", "intended_status": "running"},
+            )
+        ],
+        UserInfo(balance=5.0, email=""),
+    )
+
+    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert 1 not in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_not_called()
+
+
+def test_expired_optimistic_start_request_clears_if_server_is_stopped(qt_app, monkeypatch):
+    import app.ui.views.instances.instances_view as module
+
+    monkeypatch.setattr(module.time, "time", lambda: 2_000.0)
+    ctl = _controller(AppConfig(start_requested_ids=[1], start_requested_at={1: 1.0}))
+    view = InstancesView(ctl)
+
+    view.handle_refresh(
+        [
+            _inst(
+                1,
+                state=InstanceState.STOPPED,
+                raw={"actual_status": "exited", "intended_status": "stopped"},
+            )
+        ],
+        UserInfo(balance=5.0, email=""),
+    )
+
+    assert view._cards[1].actions.primary.text() == "Activate"
+    assert 1 not in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_called_with([], {})

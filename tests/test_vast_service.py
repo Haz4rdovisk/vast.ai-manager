@@ -66,6 +66,25 @@ def test_parse_instance_starting():
            "gpu_name": "A100", "num_gpus": 1, "gpu_ram": 40960, "dph_total": 1.10}
     inst = parse_instance(raw)
     assert inst.state == InstanceState.STARTING
+    assert inst.raw["_is_scheduling"] is False
+
+
+def test_parse_instance_scheduling_from_intended_running():
+    raw = {"id": 9, "actual_status": "exited", "intended_status": "running",
+           "gpu_name": "RTX 3090", "num_gpus": 1, "gpu_ram": 24576}
+    inst = parse_instance(raw)
+    assert inst.state == InstanceState.STARTING
+    assert inst.raw["_is_scheduling"] is True
+
+
+def test_parse_instance_uses_cur_and_next_state_fallbacks():
+    raw = {"id": 10, "cur_state": "stopped", "next_state": "running",
+           "gpu_name": "RTX 3090", "num_gpus": 1, "gpu_ram": 24576}
+    inst = parse_instance(raw)
+    assert inst.state == InstanceState.STARTING
+    assert inst.raw["_normalized_actual_status"] == "stopped"
+    assert inst.raw["_normalized_intended_status"] == "running"
+    assert inst.raw["_is_scheduling"] is True
 
 
 def test_parse_user_info():

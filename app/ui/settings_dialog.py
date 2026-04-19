@@ -116,6 +116,7 @@ class SettingsDialog(QDialog):
             port_map=dict(self.config.port_map),
             instance_filters=dict(self.config.instance_filters),
             start_requested_ids=list(self.config.start_requested_ids),
+            start_requested_at=dict(self.config.start_requested_at),
             bulk_confirm_threshold=self.config.bulk_confirm_threshold,
             schema_version=3,
         )

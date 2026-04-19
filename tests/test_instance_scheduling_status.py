@@ -50,3 +50,20 @@ def test_action_bar_uses_default_scheduling_tooltip_when_api_omits_message(qt_ap
     bar = ActionBar(inst, TunnelStatus.DISCONNECTED)
 
     assert "GPU is currently in use" in bar.primary.toolTip()
+
+
+def test_action_bar_detects_scheduling_from_intended_running(qt_app):
+    from app.ui.views.instances.action_bar import ActionBar
+
+    inst = Instance(
+        id=42,
+        state=InstanceState.STARTING,
+        gpu_name="RTX 3090",
+        status_message="success, running vastai/base-image_cuda-12.1.1-auto/jupyter",
+        raw={"actual_status": "exited", "intended_status": "running"},
+    )
+
+    bar = ActionBar(inst, TunnelStatus.DISCONNECTED)
+
+    assert bar.primary.text() == "scheduling..."
+    assert "GPU is currently in use" in bar.primary.toolTip()

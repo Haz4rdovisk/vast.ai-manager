@@ -25,9 +25,48 @@ SCHEDULING_TOOLTIP = (
 )
 
 
-def _is_scheduling(inst: Instance) -> bool:
-    actual = str(inst.raw.get("actual_status") or "").lower()
-    return actual == "scheduling" or "schedule" in str(inst.status_message or "").lower()
+def _status_text(inst: Instance, *keys: str) -> str:
+    for key in keys:
+        value = inst.raw.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return ""
+
+
+def is_scheduling_instance(inst: Instance) -> bool:
+    if inst.raw.get("_is_scheduling") is True:
+        return True
+    actual = _status_text(
+        inst,
+        "_normalized_actual_status",
+        "actual_status",
+        "cur_state",
+        "current_state",
+        "container_state",
+    )
+    intended = _status_text(
+        inst,
+        "_normalized_intended_status",
+        "intended_status",
+        "next_state",
+        "desired_status",
+        "target_status",
+        "target_state",
+    )
+    message = str(inst.status_message or "").lower()
+    if "schedul" in message or "gpu is currently in use" in message:
+        return True
+    if actual in {"pending", "queued", "scheduling"}:
+        return True
+    return intended == "running" and actual in {"", "stopped", "exited", "offline", "none"}
+
+
+def _scheduling_tooltip(inst: Instance) -> str:
+    message = str(inst.status_message or "").strip()
+    low = message.lower()
+    if message and ("schedul" in low or "gpu is currently in use" in low):
+        return message
+    return SCHEDULING_TOOLTIP
 
 
 class ActionBar(QFrame):
@@ -91,11 +130,11 @@ class ActionBar(QFrame):
         tooltip = ""
         disabled_color = BORDER_LOW
         keep_enabled = False
-        if inst.state == InstanceState.STARTING and _is_scheduling(inst):
+        if inst.state == InstanceState.STARTING and is_scheduling_instance(inst):
             label, sig, color = "scheduling...", None, ACCENT
             disabled_color = ACCENT
             keep_enabled = True
-            tooltip = inst.status_message or SCHEDULING_TOOLTIP
+            tooltip = _scheduling_tooltip(inst)
         elif inst.state == InstanceState.STOPPED:
             label, sig, color = "Activate", self.activate_requested, ACCENT
         elif inst.state == InstanceState.STARTING:
