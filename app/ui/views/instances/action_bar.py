@@ -16,7 +16,7 @@ def _separator() -> QFrame:
     return sep
 
 
-_SCHEDULING_FALLBACK = (
+SCHEDULING_TOOLTIP = (
     "Attempting to schedule your instance. Your GPU is currently in use, and\n"
     "your instance will not be able to start until it is free again - which\n"
     "could take anywhere from hours to weeks. You can copy your data directory\n"
@@ -95,7 +95,7 @@ class ActionBar(QFrame):
             label, sig, color = "scheduling...", None, ACCENT
             disabled_color = ACCENT
             keep_enabled = True
-            tooltip = inst.status_message or _SCHEDULING_FALLBACK
+            tooltip = inst.status_message or SCHEDULING_TOOLTIP
         elif inst.state == InstanceState.STOPPED:
             label, sig, color = "Activate", self.activate_requested, ACCENT
         elif inst.state == InstanceState.STARTING:

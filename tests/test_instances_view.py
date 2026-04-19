@@ -52,3 +52,38 @@ def test_card_activate_relay(qt_app):
     view.activate_requested.connect(seen.append)
     view._cards[1].activate_requested.emit(1)
     assert seen == [1]
+    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert "GPU is currently in use" in view._cards[1].actions.primary.toolTip()
+
+
+def test_bulk_start_marks_visible_cards_as_scheduling(qt_app, monkeypatch):
+    import app.ui.views.instances.instances_view as module
+
+    class FakeDialog:
+        class DialogCode:
+            Accepted = 1
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return self.DialogCode.Accepted
+
+        def collect_opts(self):
+            return {"auto_connect": True}
+
+    monkeypatch.setattr(module, "ConfirmBulkDialog", FakeDialog)
+    ctl = _controller()
+    view = InstancesView(ctl)
+    view.handle_refresh(
+        [_inst(1, state=InstanceState.STOPPED), _inst(2, state=InstanceState.STOPPED)],
+        UserInfo(balance=5.0, email=""),
+    )
+    seen = []
+    view.bulk_requested.connect(lambda action, ids, opts: seen.append((action, ids, opts)))
+
+    view._bulk_from_visible("start")
+
+    assert seen == [("start", [1, 2], {"auto_connect": True})]
+    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert view._cards[2].actions.primary.text() == "scheduling..."

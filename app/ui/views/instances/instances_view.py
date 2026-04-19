@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
 
-from app.models import Instance, TunnelStatus, UserInfo
+from app.models import Instance, InstanceState, TunnelStatus, UserInfo
 from app.services.instance_filter import FilterState, apply, gpu_key
 from app.theme import FONT_DISPLAY, TEXT_HI
 from app.ui.components import icons
@@ -14,6 +16,7 @@ from app.ui.views.instances.filter_bar import FilterBar
 from app.ui.views.instances.instance_card import InstanceCard
 from app.ui.views.instances.label_tabs import LabelTabs
 from app.ui.views.instances.log_modal import LogModal
+from app.ui.views.instances.action_bar import SCHEDULING_TOOLTIP
 
 
 class InstancesView(QWidget):
@@ -168,7 +171,7 @@ class InstancesView(QWidget):
             selected=inst.id in self._selected,
             select_mode=self._select_mode,
         )
-        card.activate_requested.connect(self.activate_requested)
+        card.activate_requested.connect(self._on_activate_requested)
         card.deactivate_requested.connect(self.deactivate_requested)
         card.connect_requested.connect(self.connect_requested)
         card.disconnect_requested.connect(self.disconnect_requested)
@@ -215,6 +218,8 @@ class InstancesView(QWidget):
         instances = [inst for inst in self._all if inst.id in id_set]
         dialog = ConfirmBulkDialog(action, instances, parent=self)
         if dialog.exec() == dialog.DialogCode.Accepted:
+            if action == "start":
+                self._mark_start_requested(ids)
             self.bulk_requested.emit(action, ids, dialog.collect_opts())
             if not self._select_mode:
                 self._clear_selection()
@@ -227,6 +232,8 @@ class InstancesView(QWidget):
         instances = [inst for inst in self._all if inst.id in id_set]
         dialog = ConfirmBulkDialog(action, instances, parent=self)
         if dialog.exec() == dialog.DialogCode.Accepted:
+            if action == "start":
+                self._mark_start_requested(ids)
             self.bulk_requested.emit(action, ids, dialog.collect_opts())
 
     def _confirm_single_destroy(self, iid: int) -> None:
@@ -243,6 +250,37 @@ class InstancesView(QWidget):
         text, ok = QInputDialog.getText(self, "Label", f"Label for #{iid}:", text=current)
         if ok:
             self.set_label_requested.emit(iid, text)
+
+    def _on_activate_requested(self, iid: int) -> None:
+        self._mark_start_requested([iid])
+        self.activate_requested.emit(iid)
+
+    def _mark_start_requested(self, ids: list[int]) -> None:
+        id_set = set(ids)
+        updated: list[Instance] = []
+        changed: dict[int, Instance] = {}
+        for inst in self._all:
+            if inst.id in id_set and inst.state != InstanceState.RUNNING:
+                raw = dict(inst.raw)
+                raw["actual_status"] = "scheduling"
+                raw["intended_status"] = "running"
+                next_inst = replace(
+                    inst,
+                    state=InstanceState.STARTING,
+                    status_message=inst.status_message or SCHEDULING_TOOLTIP,
+                    raw=raw,
+                )
+                updated.append(next_inst)
+                changed[inst.id] = next_inst
+            else:
+                updated.append(inst)
+        self._all = updated
+        for iid, inst in changed.items():
+            card = self._cards.get(iid)
+            if card is not None:
+                card.update_instance(
+                    inst, self._tunnels.get(iid, TunnelStatus.DISCONNECTED)
+                )
 
     def _on_log_line(self, line: str) -> None:
         self._log_history.append(line)
