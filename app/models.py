@@ -114,5 +114,6 @@ class AppConfig:
     estimated_network_cost_per_hour: float = 0.0
     port_map: dict = field(default_factory=dict)
     instance_filters: dict = field(default_factory=dict)
+    start_requested_ids: list[int] = field(default_factory=list)
     bulk_confirm_threshold: int = 1
     schema_version: int = 3

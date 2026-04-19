@@ -40,7 +40,10 @@ class InstancesView(QWidget):
         self._all: list[Instance] = []
         self._cards: dict[int, InstanceCard] = {}
         self._selected: set[int] = set()
-        self._start_requested_ids: set[int] = set()
+        self._start_requested_ids: set[int] = {
+            int(iid)
+            for iid in getattr(controller.config, "start_requested_ids", []) or []
+        }
         self._select_mode = False
         self._log_history: list[str] = []
         self._tunnels: dict[int, TunnelStatus] = {}
@@ -260,6 +263,7 @@ class InstancesView(QWidget):
         self.activate_requested.emit(iid)
 
     def _with_sticky_scheduling(self, instances: list[Instance]) -> list[Instance]:
+        before = set(self._start_requested_ids)
         alive = {inst.id for inst in instances}
         self._start_requested_ids &= alive
         out: list[Instance] = []
@@ -272,11 +276,16 @@ class InstancesView(QWidget):
                     out.append(self._as_scheduling(inst))
             else:
                 out.append(inst)
+        if self._start_requested_ids != before:
+            self._persist_start_requested_ids()
         return out
 
     def _mark_start_requested(self, ids: list[int]) -> None:
         id_set = set(ids)
+        before = set(self._start_requested_ids)
         self._start_requested_ids.update(id_set)
+        if self._start_requested_ids != before:
+            self._persist_start_requested_ids()
         updated: list[Instance] = []
         changed: dict[int, Instance] = {}
         for inst in self._all:
@@ -306,8 +315,16 @@ class InstancesView(QWidget):
         )
 
     def _clear_start_requested(self, ids: list[int]) -> None:
+        before = set(self._start_requested_ids)
         for iid in ids:
             self._start_requested_ids.discard(iid)
+        if self._start_requested_ids != before:
+            self._persist_start_requested_ids()
+
+    def _persist_start_requested_ids(self) -> None:
+        updater = getattr(self._controller, "update_start_requested_ids", None)
+        if callable(updater):
+            updater(sorted(self._start_requested_ids))
 
     def _on_action_done(self, iid: int, action: str, ok: bool, _msg: str) -> None:
         if action == "start" and not ok:

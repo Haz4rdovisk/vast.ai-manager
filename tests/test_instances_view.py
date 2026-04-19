@@ -18,9 +18,15 @@ def _inst(iid, state=InstanceState.RUNNING, label=None):
     )
 
 
-def _controller():
-    ctl = MagicMock(last_instances=[], last_user=None, config=AppConfig(), tunnel_states={})
+def _controller(config=None):
+    ctl = MagicMock(
+        last_instances=[],
+        last_user=None,
+        config=config or AppConfig(),
+        tunnel_states={},
+    )
     ctl.port_allocator = PortAllocator(11434, {}, lambda _m: None)
+    ctl.update_start_requested_ids = MagicMock()
     return ctl
 
 
@@ -99,6 +105,7 @@ def test_scheduling_survives_stopped_refresh_after_start(qt_app):
 
     assert view._cards[1].actions.primary.text() == "scheduling..."
     assert 1 in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_called_with([1])
 
 
 def test_running_refresh_clears_sticky_scheduling(qt_app):
@@ -111,6 +118,7 @@ def test_running_refresh_clears_sticky_scheduling(qt_app):
 
     assert view._cards[1].actions.primary.text() == "Connect"
     assert 1 not in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_called_with([])
 
 
 def test_failed_start_action_clears_sticky_scheduling(qt_app):
@@ -124,3 +132,26 @@ def test_failed_start_action_clears_sticky_scheduling(qt_app):
 
     assert view._cards[1].actions.primary.text() == "Activate"
     assert 1 not in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_called_with([])
+
+
+def test_persisted_start_request_restores_scheduling_on_open(qt_app):
+    ctl = _controller(AppConfig(start_requested_ids=[1]))
+    view = InstancesView(ctl)
+
+    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
+
+    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert 1 in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_not_called()
+
+
+def test_persisted_start_request_clears_when_running_on_open(qt_app):
+    ctl = _controller(AppConfig(start_requested_ids=[1]))
+    view = InstancesView(ctl)
+
+    view.handle_refresh([_inst(1, state=InstanceState.RUNNING)], UserInfo(balance=5.0, email=""))
+
+    assert view._cards[1].actions.primary.text() == "Connect"
+    assert 1 not in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_called_with([])

@@ -252,6 +252,7 @@ class SettingsView(QWidget):
             estimated_network_cost_per_hour=self._config.estimated_network_cost_per_hour,
             port_map=dict(self._config.port_map),
             instance_filters=dict(self._config.instance_filters),
+            start_requested_ids=list(self._config.start_requested_ids),
             bulk_confirm_threshold=self._config.bulk_confirm_threshold,
             schema_version=3,
         )

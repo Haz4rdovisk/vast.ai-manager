@@ -34,9 +34,31 @@ class ConfigStore:
             raw.setdefault("instance_filters", {})
             raw.setdefault("bulk_confirm_threshold", 1)
             raw["schema_version"] = 3
+        raw.setdefault("start_requested_ids", [])
         pm = raw.get("port_map") or {}
         raw["port_map"] = {int(k): int(v) for k, v in pm.items()}
+        raw["start_requested_ids"] = ConfigStore._coerce_int_list(
+            raw.get("start_requested_ids")
+        )
         return raw
+
+    @staticmethod
+    def _coerce_int_list(value) -> list[int]:
+        if value is None:
+            return []
+        if isinstance(value, (str, bytes)):
+            value = [value]
+        out: set[int] = set()
+        try:
+            iterator = iter(value)
+        except TypeError:
+            iterator = iter([value])
+        for item in iterator:
+            try:
+                out.add(int(item))
+            except (TypeError, ValueError):
+                continue
+        return sorted(out)
 
     def save(self, config: AppConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

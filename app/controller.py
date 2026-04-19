@@ -290,6 +290,7 @@ class AppController(QObject):
         changed_key = cfg.api_key != self.config.api_key
         cfg.port_map = dict(self.config.port_map)
         cfg.instance_filters = dict(self.config.instance_filters)
+        cfg.start_requested_ids = list(self.config.start_requested_ids)
         self.config = cfg
         self.port_allocator = PortAllocator(
             default_port=self.config.default_tunnel_port,
@@ -310,6 +311,10 @@ class AppController(QObject):
 
     def update_instance_filters(self, filters: dict) -> None:
         self.config.instance_filters = dict(filters)
+        self.config_store.save(self.config)
+
+    def update_start_requested_ids(self, ids: list[int] | set[int]) -> None:
+        self.config.start_requested_ids = sorted({int(iid) for iid in ids})
         self.config_store.save(self.config)
 
     def _apply_interval(self):

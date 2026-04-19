@@ -115,6 +115,7 @@ class SettingsDialog(QDialog):
             estimated_network_cost_per_hour=self.config.estimated_network_cost_per_hour,
             port_map=dict(self.config.port_map),
             instance_filters=dict(self.config.instance_filters),
+            start_requested_ids=list(self.config.start_requested_ids),
             bulk_confirm_threshold=self.config.bulk_confirm_threshold,
             schema_version=3,
         )
