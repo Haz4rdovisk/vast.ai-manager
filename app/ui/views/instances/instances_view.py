@@ -40,6 +40,7 @@ class InstancesView(QWidget):
         self._all: list[Instance] = []
         self._cards: dict[int, InstanceCard] = {}
         self._selected: set[int] = set()
+        self._start_requested_ids: set[int] = set()
         self._select_mode = False
         self._log_history: list[str] = []
         self._tunnels: dict[int, TunnelStatus] = {}
@@ -49,6 +50,9 @@ class InstancesView(QWidget):
         controller.log_line.connect(self._on_log_line)
         controller.tunnel_status_changed.connect(self._on_tunnel_status)
         controller.live_metrics.connect(self._on_live_metrics)
+        controller.action_done.connect(self._on_action_done)
+        if hasattr(controller, "bulk_done"):
+            controller.bulk_done.connect(self._on_bulk_done)
 
     def _build(self) -> None:
         outer = QVBoxLayout(self)
@@ -110,7 +114,7 @@ class InstancesView(QWidget):
         outer.addWidget(self.bulk_bar)
 
     def handle_refresh(self, instances: list[Instance], user: UserInfo) -> None:
-        self._all = list(instances)
+        self._all = self._with_sticky_scheduling(list(instances))
         self.title.setText(f"My Instances ({len(self._all)})")
 
         gpus = sorted({gpu_key(inst) for inst in self._all})
@@ -255,21 +259,29 @@ class InstancesView(QWidget):
         self._mark_start_requested([iid])
         self.activate_requested.emit(iid)
 
+    def _with_sticky_scheduling(self, instances: list[Instance]) -> list[Instance]:
+        alive = {inst.id for inst in instances}
+        self._start_requested_ids &= alive
+        out: list[Instance] = []
+        for inst in instances:
+            if inst.id in self._start_requested_ids:
+                if inst.state == InstanceState.RUNNING:
+                    self._start_requested_ids.discard(inst.id)
+                    out.append(inst)
+                else:
+                    out.append(self._as_scheduling(inst))
+            else:
+                out.append(inst)
+        return out
+
     def _mark_start_requested(self, ids: list[int]) -> None:
         id_set = set(ids)
+        self._start_requested_ids.update(id_set)
         updated: list[Instance] = []
         changed: dict[int, Instance] = {}
         for inst in self._all:
             if inst.id in id_set and inst.state != InstanceState.RUNNING:
-                raw = dict(inst.raw)
-                raw["actual_status"] = "scheduling"
-                raw["intended_status"] = "running"
-                next_inst = replace(
-                    inst,
-                    state=InstanceState.STARTING,
-                    status_message=inst.status_message or SCHEDULING_TOOLTIP,
-                    raw=raw,
-                )
+                next_inst = self._as_scheduling(inst)
                 updated.append(next_inst)
                 changed[inst.id] = next_inst
             else:
@@ -281,6 +293,33 @@ class InstancesView(QWidget):
                 card.update_instance(
                     inst, self._tunnels.get(iid, TunnelStatus.DISCONNECTED)
                 )
+
+    def _as_scheduling(self, inst: Instance) -> Instance:
+        raw = dict(inst.raw)
+        raw["actual_status"] = "scheduling"
+        raw["intended_status"] = "running"
+        return replace(
+            inst,
+            state=InstanceState.STARTING,
+            status_message=inst.status_message or SCHEDULING_TOOLTIP,
+            raw=raw,
+        )
+
+    def _clear_start_requested(self, ids: list[int]) -> None:
+        for iid in ids:
+            self._start_requested_ids.discard(iid)
+
+    def _on_action_done(self, iid: int, action: str, ok: bool, _msg: str) -> None:
+        if action == "start" and not ok:
+            self._clear_start_requested([iid])
+        elif action in ("stop", "destroy"):
+            self._clear_start_requested([iid])
+
+    def _on_bulk_done(self, action: str, ok: list, fail: list) -> None:
+        if action == "start":
+            self._clear_start_requested(fail)
+        elif action in ("stop", "destroy"):
+            self._clear_start_requested(ok + fail)
 
     def _on_log_line(self, line: str) -> None:
         self._log_history.append(line)

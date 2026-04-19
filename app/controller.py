@@ -31,6 +31,7 @@ class AppController(QObject):
     refresh_failed      = Signal(str, str)       # kind, message
     tunnel_status_changed = Signal(int, str, str)  # iid, status, message
     action_done         = Signal(int, str, bool, str)  # iid, action, ok, msg
+    bulk_done           = Signal(str, list, list)       # action, ok_ids, fail_ids
     live_metrics        = Signal(int, dict)      # iid, payload
     model_changed       = Signal(int, str)       # iid, model_id
     log_line            = Signal(str)            # log message
@@ -529,6 +530,7 @@ class AppController(QObject):
         else:
             self.toast_requested.emit(
                 f"{action} aplicado em {len(ok)} instâncias", "success", 3000)
+        self.bulk_done.emit(action, ok, fail)
         self._trigger_refresh.emit()
 
     def _on_action_done(self, iid: int, action: str, ok: bool, msg: str):

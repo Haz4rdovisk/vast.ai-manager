@@ -87,3 +87,40 @@ def test_bulk_start_marks_visible_cards_as_scheduling(qt_app, monkeypatch):
     assert seen == [("start", [1, 2], {"auto_connect": True})]
     assert view._cards[1].actions.primary.text() == "scheduling..."
     assert view._cards[2].actions.primary.text() == "scheduling..."
+
+
+def test_scheduling_survives_stopped_refresh_after_start(qt_app):
+    ctl = _controller()
+    view = InstancesView(ctl)
+    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
+
+    view._cards[1].activate_requested.emit(1)
+    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
+
+    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert 1 in view._start_requested_ids
+
+
+def test_running_refresh_clears_sticky_scheduling(qt_app):
+    ctl = _controller()
+    view = InstancesView(ctl)
+    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
+
+    view._cards[1].activate_requested.emit(1)
+    view.handle_refresh([_inst(1, state=InstanceState.RUNNING)], UserInfo(balance=5.0, email=""))
+
+    assert view._cards[1].actions.primary.text() == "Connect"
+    assert 1 not in view._start_requested_ids
+
+
+def test_failed_start_action_clears_sticky_scheduling(qt_app):
+    ctl = _controller()
+    view = InstancesView(ctl)
+    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
+
+    view._cards[1].activate_requested.emit(1)
+    view._on_action_done(1, "start", False, "no capacity")
+    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
+
+    assert view._cards[1].actions.primary.text() == "Activate"
+    assert 1 not in view._start_requested_ids
