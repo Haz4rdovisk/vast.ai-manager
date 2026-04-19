@@ -5,6 +5,7 @@ from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -57,7 +58,7 @@ class OfferList(QWidget):
         self.scroll.setFrameShape(QScrollArea.NoFrame)
         self.container = QWidget()
         self.col = QVBoxLayout(self.container)
-        self.col.setContentsMargins(0, 0, 0, 0)
+        self.col.setContentsMargins(0, 0, t.SPACE_4, 0)
         self.col.setSpacing(t.SPACE_3)
         self.col.addStretch()
         self.scroll.setWidget(self.container)
@@ -86,11 +87,12 @@ class OfferList(QWidget):
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
-                f"QPushButton {{ background: transparent; color: {t.TEXT_HI};"
-                f" border: none; border-radius: 0; padding: 8px 9px;"
+                f"QPushButton {{ background: transparent; color: {t.TEXT_MID};"
+                f" border: none; border-bottom: 2px solid transparent;"
+                f" border-radius: 0; padding: 8px 9px;"
                 f" font-size: 13px; font-weight: 850; min-width: 28px; }}"
-                f"QPushButton:hover {{ color: {t.TEXT_HERO}; background: rgba(255,255,255,0.06); }}"
-                f"QPushButton:checked {{ color: {t.BG_VOID}; background: {t.TEXT_HERO}; }}"
+                f"QPushButton:hover {{ color: {t.TEXT_HI}; background: rgba(255,255,255,0.04); }}"
+                f"QPushButton:checked {{ color: {t.ACCENT}; border-bottom: 2px solid {t.ACCENT}; background: transparent; }}"
             )
             btn.clicked.connect(
                 lambda _checked=False, lo=min_count, hi=max_count: self.gpu_count_selected.emit(lo, hi)
@@ -130,17 +132,8 @@ class OfferList(QWidget):
     def _market_select(self, widget: QComboBox, width: int) -> QWidget:
         widget.setMinimumWidth(width)
         widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        widget.setStyleSheet(
-            f"QComboBox {{ background: transparent; color: {t.TEXT_HI};"
-            f" border: none; border-bottom: 1px solid {t.BORDER_HI};"
-            f" border-radius: 0; padding: 6px 24px 7px 0;"
-            f" font-size: 14px; font-weight: 750; }}"
-            f"QComboBox:hover {{ color: {t.TEXT_HERO}; border-bottom-color: {t.ACCENT_SOFT}; }}"
-            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
-            f"QComboBox QAbstractItemView {{ background: {t.SURFACE_2};"
-            f" color: {t.TEXT_HI}; selection-background-color: {t.ACCENT};"
-            f" border: 1px solid {t.BORDER_MED}; }}"
-        )
+        # Clear local style to let global theme (SURFACE_3 rounded chips) take over
+        widget.setStyleSheet("")
         return widget
 
     def set_loading(self) -> None:

@@ -34,6 +34,7 @@ class InstancesView(QWidget):
     open_logs_requested = Signal()
     open_analytics_requested = Signal()
     bulk_requested = Signal(str, list, dict)
+    fix_ssh_requested = Signal(int)
 
     def __init__(self, controller, parent=None) -> None:
         super().__init__(parent)
@@ -219,6 +220,7 @@ class InstancesView(QWidget):
         card.disconnect_requested.connect(self.disconnect_requested)
         card.destroy_requested.connect(self._confirm_single_destroy)
         card.lab_requested.connect(self.open_lab_requested)
+        card.fix_ssh_requested.connect(self.fix_ssh_requested)
         card.log_requested.connect(self._open_log_modal)
         card.label_requested.connect(self._prompt_label)
         card.selection_toggled.connect(self._on_selection_toggled)

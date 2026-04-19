@@ -61,10 +61,10 @@ class NetworkSpeedWidget(QWidget):
         self.title_lbl = QLabel("NETWORK I/O")
         self.title_lbl.setAlignment(Qt.AlignCenter)
         self.title_lbl.setStyleSheet(
-            f"font-size: 10pt; font-weight: 700; color: {t.TEXT_MID};"
+            f"font-size: 8pt; font-weight: 700; color: {t.TEXT_MID};"
         )
         lay.addWidget(self.title_lbl)
-        lay.addSpacing(20)
+        lay.addSpacing(30)
 
     def set_speeds(self, rx_kbps: float, tx_kbps: float):
         self.dl_value.setText(self._format_speed(rx_kbps))

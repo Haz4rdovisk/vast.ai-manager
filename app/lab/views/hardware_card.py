@@ -20,7 +20,7 @@ class HardwareCard(GlassCard):
         self.iid = iid
         self._metric_cols: int | None = None
         self.setMinimumWidth(360)
-        self.setMinimumHeight(340)
+        self.setMinimumHeight(440)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         lay = self.body()
@@ -72,7 +72,7 @@ class HardwareCard(GlassCard):
         content.addLayout(self.metrics_grid, 1)
 
         self.thermo = ThermometerWidget()
-        content.addWidget(self.thermo, 0, Qt.AlignRight | Qt.AlignVCenter)
+        content.addWidget(self.thermo, 0, Qt.AlignRight)
         lay.addLayout(content, 1)
 
         # Footer

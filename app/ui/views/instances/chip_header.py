@@ -4,7 +4,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from app.models import Instance, InstanceState
-from app.theme import FONT_DISPLAY, OK, TEXT_LOW
+from app.theme import FONT_DISPLAY, OK, TEXT_LOW, ERR
 from app.ui.components.primitives import Chip, ChipRow
 
 
@@ -49,21 +49,34 @@ class ChipHeader(QFrame):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
 
-        led_color = OK if inst.state == InstanceState.RUNNING else TEXT_LOW
-        self.gpu_label = QLabel(f"● {inst.num_gpus or 1}× {inst.gpu_name}")
+        self.gpu_label = QLabel()
         font = self.gpu_label.font()
         font.setFamily(FONT_DISPLAY)
         font.setPointSize(11)
         font.setBold(True)
         self.gpu_label.setFont(font)
-        self.gpu_label.setStyleSheet(f"color: {led_color};")
         lay.addWidget(self.gpu_label)
 
-        self.chips = ChipRow(self)
-        lay.addWidget(self.chips, stretch=1)
+        self.chips_row = ChipRow(self)
+        lay.addWidget(self.chips_row)
+        
+        lay.addStretch(1) # Visual separation: Move status to the far right
+        
+        self.status_chip = Chip("OFFLINE")
+        lay.addWidget(self.status_chip)
+        
+        self.update_instance(inst)
 
+    def update_instance(self, inst: Instance):
+        led_color = OK if inst.state == InstanceState.RUNNING else TEXT_LOW
+        self.gpu_label.setText(f"\u25cf {inst.num_gpus or 1}\u00d7 {inst.gpu_name}")
+        self.gpu_label.setStyleSheet(f"color: {led_color};")
+        
+        self.chips_row.clear()
+        self._chips = []
+        
         if inst.is_verified:
-            self._add(Chip("✓ Verified", variant="ok"))
+            self._add(Chip("\u2713 Verified", variant="ok"))
         if inst.public_ip:
             ip = Chip(inst.public_ip, variant="accent", mono=True, clickable=True)
             ip.clicked.connect(self.ip_clicked)
@@ -71,12 +84,35 @@ class ChipHeader(QFrame):
         flag = _FLAGS.get((inst.country or "").upper())
         if flag:
             self._add(Chip(flag))
-        self._add(Chip(f"⏱ {_fmt_uptime(inst.duration_seconds)}"))
+        self._add(Chip(f"\u23f1 {_fmt_uptime(inst.duration_seconds)}"))
         self._add(Chip(_fmt_price(inst.dph), mono=True))
+
+        # Update the dedicated Status Chip on the far right
+        status_variant = "default"
+        status_label = inst.state.value.upper()
+        if inst.state == InstanceState.RUNNING:
+            status_variant, status_label = "ok", "RUNNING"
+        elif inst.state == InstanceState.SCHEDULING:
+            status_variant, status_label = "accent", "SCHEDULING"
+        elif inst.state == InstanceState.STOPPED:
+            status_variant, status_label = "default", "OFFLINE"
+        elif inst.state == InstanceState.STARTING:
+            status_variant, status_label = "accent", "STARTING"
+        elif inst.state == InstanceState.STOPPING:
+            status_variant, status_label = "danger", "STOPPING"
+
+        self.status_chip.label.setText(status_label)
+        from app.ui.components.primitives import _CHIP_VARIANTS
+        bg, border, fg = _CHIP_VARIANTS.get(status_variant, _CHIP_VARIANTS["default"])
+        self.status_chip.label.setStyleSheet(f"color: {fg}; background: transparent;")
+        self.status_chip.setStyleSheet(
+            f"QFrame#chip {{ background: {bg}; border: 1px solid {border};"
+            f" border-radius: 999px; }}"
+        )
 
     def _add(self, chip: Chip) -> None:
         self._chips.append(chip)
-        self.chips.add(chip)
+        self.chips_row.add(chip)
 
     def chip_texts(self) -> list[str]:
         out: list[str] = []

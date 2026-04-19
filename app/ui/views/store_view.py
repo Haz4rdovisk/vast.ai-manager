@@ -111,13 +111,15 @@ class StoreView(QWidget):
     def _on_ssh_keys(self, keys: list[SshKey]) -> None:
         self._ssh_keys = keys
         if self._pending_dialog is not None:
-            self._pending_dialog.set_ssh_keys(keys)
+            pub = self.controller.ssh.get_public_key()
+            self._pending_dialog.set_ssh_keys(keys, local_pub_key=pub)
 
     def _open_rent_dialog(self, offer: Offer) -> None:
         dialog = RentDialog(offer, self)
         self._pending_dialog = dialog
         dialog.set_templates(self._templates)
-        dialog.set_ssh_keys(self._ssh_keys)
+        pub = self.controller.ssh.get_public_key()
+        dialog.set_ssh_keys(self._ssh_keys, local_pub_key=pub)
         dialog.confirmed.connect(self.controller.rent)
         dialog.finished.connect(lambda *_: setattr(self, "_pending_dialog", None))
         self.controller.refresh_templates("")

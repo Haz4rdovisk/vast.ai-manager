@@ -63,11 +63,18 @@ class SettingsDialog(QDialog):
         key_h.setContentsMargins(0, 0, 0, 0)
         self.ssh_key_input = QLineEdit(config.ssh_key_path)
         self.ssh_key_input.setPlaceholderText("(opcional) ex: C:\\Users\\voce\\.ssh\\id_rsa")
+        
+        show_btn = QPushButton("Ver Pública")
+        show_btn.setProperty("variant", "ghost")
+        show_btn.clicked.connect(self._on_show_pub)
+        
         browse_btn = QPushButton("...")
         browse_btn.setFixedWidth(32)
         browse_btn.setProperty("variant", "ghost")
         browse_btn.clicked.connect(self._on_browse_key)
+        
         key_h.addWidget(self.ssh_key_input)
+        key_h.addWidget(show_btn)
         key_h.addWidget(browse_btn)
         form.addRow("Chave SSH privada", key_row)
 
@@ -128,6 +135,22 @@ class SettingsDialog(QDialog):
         )
         if path:
             self.ssh_key_input.setText(path)
+
+    def _on_show_pub(self):
+        from app.services.ssh_service import SSHService
+        from app.ui.dialogs import MessageBox
+        path = self.ssh_key_input.text().strip()
+        svc = SSHService(ssh_key_path=path)
+        if self.parent() and hasattr(self.parent(), "controller"):
+            # Use passphrase from cache if available
+            svc.passphrase_cache = self.parent().controller.ssh.passphrase_cache
+            
+        pub = svc.get_public_key()
+        if pub:
+            msg = f"Sua chave pública (copie para o site da Vast.ai):\n\n{pub}"
+            MessageBox.info(self, "Chave SSH Pública", msg)
+        else:
+            MessageBox.error(self, "Erro", "Não foi possível carregar a chave pública. Verifique o caminho da chave privada.")
 
     def _on_test(self):
         cfg = self._current_config()

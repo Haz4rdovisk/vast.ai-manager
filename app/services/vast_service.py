@@ -423,10 +423,12 @@ class VastService:
 
     def set_label(self, instance_id: int, label: str) -> None:
         """Update the user-set label on an instance via the Vast SDK."""
-        if hasattr(self, "client"):
-            self.client.label_instance(id=instance_id, label=label)
-            return
         self._call("label_instance", id=instance_id, label=label)
+
+    def attach_ssh_key(self, instance_id: int, ssh_key: str) -> None:
+        """Attach an SSH public key string to a running instance."""
+        # The SDK uses 'instance_id' for this method specifically.
+        self._call("attach_ssh", instance_id=instance_id, ssh_key=ssh_key)
 
     def destroy_instance(self, instance_id: int) -> None:
         """Permanently destroy an instance via the Vast SDK."""

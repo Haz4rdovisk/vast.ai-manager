@@ -13,7 +13,7 @@ class ThermometerWidget(QWidget):
         super().__init__(parent)
         self._temperature = 0.0
         self._display_temperature = 0.0
-        self.setMinimumSize(84, 230)
+        self.setMinimumSize(84, 340)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         self.anim = QPropertyAnimation(self, b"display_temperature")
@@ -45,10 +45,10 @@ class ThermometerWidget(QWidget):
         low_color = QColor(t.OK)
         high_color = QColor(t.ERR if self._display_temperature >= 80 else t.WARN)
 
-        tube_w = max(12, min(18, int(w * 0.18)))
-        bulb = max(34, min(46, int(w * 0.48)))
-        top = 20
-        bottom = h - 72
+        tube_w = max(14, min(22, int(w * 0.22)))
+        bulb = max(38, min(52, int(w * 0.54)))
+        top = 26
+        bottom = h - 92
         cx = w / 2
         tube_x = cx - tube_w / 2
         tube_h = max(40, bottom - top)
@@ -57,7 +57,7 @@ class ThermometerWidget(QWidget):
         # Title
         p.setPen(QColor(t.TEXT_MID))
         p.setFont(QFont(t.FONT_DISPLAY, 8, QFont.Bold))
-        p.drawText(QRectF(0, 0, w, 18), Qt.AlignCenter, "GPU TEMP")
+        p.drawText(QRectF(0, 0, w, 22), Qt.AlignCenter, "GPU TEMP")
 
         # Glass tube
         tube = QRectF(tube_x, top, tube_w, tube_h)
@@ -92,5 +92,8 @@ class ThermometerWidget(QWidget):
         # Readout
         p.setPen(color)
         p.setFont(QFont(t.FONT_MONO, 17, QFont.Bold))
-        p.drawText(QRectF(0, h - 34, w, 28), Qt.AlignCenter, f"{self._temperature:.0f}°C")
+        # Readout
+        p.setPen(color)
+        p.setFont(QFont(t.FONT_MONO, 17, QFont.Bold))
+        p.drawText(QRectF(0, h - 44, w, 28), Qt.AlignCenter, f"{self._temperature:.0f}°C")
         p.end()

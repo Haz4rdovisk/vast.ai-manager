@@ -15,6 +15,7 @@ SSH_RETRY_ATTEMPTS = 60              # how many times to retry the ssh -L handsh
 
 class TunnelStarter(QObject):
     status_changed = Signal(int, str, str)  # instance_id, TunnelStatus.value, message
+    fix_requested = Signal(int)             # instance_id (triggers attach_ssh)
 
     def __init__(self, vast: VastService, ssh: SSHService, config: AppConfig):
         super().__init__()
@@ -89,8 +90,20 @@ class TunnelStarter(QObject):
             self.ssh.stop_tunnel(instance_id)
 
             err_lower = last_err.lower()
-            if "permission denied" in err_lower or "incorrect passphrase" in err_lower or "publickey" in err_lower:
-                break  # Fatal auth error, no point in retrying
+            if "permission denied" in err_lower or "publickey" in err_lower:
+                if attempt == 1:
+                    # First attempt failed with auth error — trigger AUTO-FIX
+                    self._emit(instance_id, TunnelStatus.CONNECTING, 
+                               "⚠ Erro de Permissão. Tentando correção automática de chaves...")
+                    self.fix_requested.emit(instance_id)
+                    # Wait 10s for Vast.ai to process the new key
+                    for _ in range(100):
+                        if self.vast is None: break # safety
+                        time.sleep(0.1)
+                    self._emit(instance_id, TunnelStatus.CONNECTING, "Retentando conexão após correção...")
+                    continue
+                else:
+                    break  # Already tried fixing, still failing.
 
             if attempt < SSH_RETRY_ATTEMPTS:
                 if "connection closed by" in err_lower:

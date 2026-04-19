@@ -126,15 +126,35 @@ class RentDialog(QDialog):
                 {"image": tpl.image, "template_hash": tpl.hash_id},
             )
 
-    def set_ssh_keys(self, keys: list[SshKey]) -> None:
+    def set_ssh_keys(self, keys: list[SshKey], local_pub_key: str | None = None) -> None:
         self.ssh_cb.clear()
         if not keys:
             self.ssh_cb.addItem("No SSH keys on account", None)
             return
-        self.ssh_cb.addItem("No SSH key selected", None)
+            
+        self.ssh_cb.addItem("No SSH key selected (uses account defaults)", None)
+        
+        local_match_id = None
+        if local_pub_key:
+            # Match by fingerprint or content (prefix)
+            pub_clean = local_pub_key.strip().split()[:2]
+            for key in keys:
+                k_clean = key.public_key.strip().split()[:2]
+                if pub_clean == k_clean:
+                    local_match_id = key.id
+                    break
+
         for key in keys:
             label = key.label or key.public_key[:38] or f"Key #{key.id}"
+            if key.id == local_match_id:
+                label = f"✓ {label} (Current Local Key)"
             self.ssh_cb.addItem(label, key.id)
+            
+        # If we found a match, pre-select it
+        if local_match_id is not None:
+            idx = self.ssh_cb.findData(local_match_id)
+            if idx >= 0:
+                self.ssh_cb.setCurrentIndex(idx)
 
     def _section(self, text: str) -> QLabel:
         label = QLabel(text)

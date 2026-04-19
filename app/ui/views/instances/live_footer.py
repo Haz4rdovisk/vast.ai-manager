@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QStackedLayout
 
 from app.models import Instance
 from app.theme import ACCENT, BORDER_LOW, FONT_MONO, TEXT, TEXT_LOW
@@ -36,39 +37,75 @@ class _Bar(QFrame):
 
 
 class LiveFooter(QFrame):
-    """Four live metric bars plus a compact status string."""
+    """Ultra-spacious metrics footer for premium cluster management."""
 
     def __init__(self, inst: Instance, parent=None) -> None:
         super().__init__(parent)
-        self._gpu_total = inst.gpu_ram_gb or 0
-        self._ram_total_mb = (inst.ram_total_gb or 0) * 1024
-        self.setStyleSheet(
-            f"LiveFooter {{ border-top: 1px solid {BORDER_LOW}; padding-top: 10px; }}"
+        self.main_lay = QVBoxLayout(self)
+        # Shifted up to reduce the gap with the separator line
+        self.main_lay.setContentsMargins(0, -8, 0, 16) 
+        self.main_lay.setSpacing(0)
+
+        self.stack = QStackedLayout()
+        self.main_lay.addLayout(self.stack)
+
+        # 1. Loading State
+        self.loading_widget = QFrame()
+        load_lay = QVBoxLayout(self.loading_widget)
+        load_lay.setContentsMargins(0, 0, 0, 0)
+        load_lay.setSpacing(2)
+        
+        load_lbl = QLabel("Loading hardware metrics...")
+        lf = load_lbl.font()
+        lf.setPointSize(8)
+        lf.setFamily(FONT_MONO)
+        load_lbl.setFont(lf)
+        load_lbl.setStyleSheet(f"color: {TEXT_LOW};")
+        
+        self.load_bar = QProgressBar()
+        self.load_bar.setRange(0, 0)
+        self.load_bar.setFixedHeight(2)
+        self.load_bar.setTextVisible(False)
+        self.load_bar.setStyleSheet(
+            f"QProgressBar {{ background: transparent; border: none; max-height: 2px; min-height: 2px; border-radius: 1px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 1px; }}"
         )
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 10, 0, 0)
-        outer.setSpacing(6)
+        
+        load_lay.addWidget(load_lbl)
+        load_lay.addWidget(self.load_bar)
+        self.stack.addWidget(self.loading_widget)
+
+        # 2. Metrics State
+        self.metrics_widget = QFrame()
+        met_lay = QVBoxLayout(self.metrics_widget)
+        met_lay.setContentsMargins(0, 0, 0, 0)
+        met_lay.setSpacing(6)
 
         row = QHBoxLayout()
         row.setSpacing(14)
-        self.bars = [_Bar("GPU —"), _Bar("vRAM —"), _Bar("CPU —"), _Bar("RAM —")]
+        self.bars = [_Bar("GPU \u2014"), _Bar("vRAM \u2014"), _Bar("CPU \u2014"), _Bar("RAM \u2014")]
         for bar in self.bars:
             row.addWidget(bar, stretch=1)
-        outer.addLayout(row)
+        met_lay.addLayout(row)
+        self.stack.addWidget(self.metrics_widget)
 
-        self.status = QLabel("—")
-        font = self.status.font()
-        font.setPointSize(8)
-        font.setFamily(FONT_MONO)
-        self.status.setFont(font)
-        self.status.setStyleSheet(f"color: {TEXT};")
-        outer.addWidget(self.status)
+        self._has_data = False
+        self.update_instance(inst)
+
+    def update_instance(self, inst: Instance):
+        self._gpu_total = inst.gpu_ram_gb or 0
+        self._ram_total_mb = (inst.ram_total_gb or 0) * 1024
+        self._cpu_cores = inst.cpu_cores or 1
 
     def apply_metrics(self, metrics: dict) -> None:
+        if not self._has_data:
+            self._has_data = True
+            self.stack.setCurrentWidget(self.metrics_widget)
+
         gpu = metrics.get("gpu_util") or 0
         temp = metrics.get("gpu_temp")
         self.bars[0].set_value(
-            f"GPU {gpu:.0f}%" + (f" {temp:.0f}°C" if temp is not None else ""),
+            f"GPU {gpu:.0f}%" + (f" {temp:.0f}\u00b0C" if temp is not None else ""),
             gpu,
         )
 
@@ -80,10 +117,11 @@ class LiveFooter(QFrame):
             vram_pct,
         )
 
-        load = metrics.get("load1")
+        load = metrics.get("load1") or 0
+        load_pct = (load / self._cpu_cores) * 100
         self.bars[2].set_value(
-            f"CPU load {load:.2f}" if load is not None else "CPU —",
-            min(100, (load or 0) * 25),
+            f"CPU load {load:.2f}" if load else "CPU \u2014",
+            load_pct,
         )
 
         ram_used = metrics.get("ram_used_mb") or 0
@@ -93,12 +131,3 @@ class LiveFooter(QFrame):
             f"RAM {ram_used / 1024:.1f}/{(ram_total or 1) / 1024:.0f}GB",
             ram_pct,
         )
-
-        self.status.setText(
-            f"GPU: {gpu:.0f}% {temp:.0f}°C, RAM: {ram_used / 1024:.1f}GB"
-            if temp is not None
-            else f"GPU: {gpu:.0f}%"
-        )
-
-    def status_text(self) -> str:
-        return self.status.text()

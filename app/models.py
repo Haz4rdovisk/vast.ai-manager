@@ -8,6 +8,7 @@ class InstanceState(str, Enum):
     STARTING = "starting"
     RUNNING = "running"
     STOPPING = "stopping"
+    SCHEDULING = "scheduling"
     UNKNOWN = "unknown"
 
 
@@ -73,6 +74,10 @@ class Instance:
     inet_billed_per_gb: float = 0.0
     status_message: str | None = None
     raw: dict = field(default_factory=dict)
+
+    @property
+    def is_busy(self) -> bool:
+        return self.state in (InstanceState.STARTING, InstanceState.STOPPING, InstanceState.SCHEDULING)
 
 
 @dataclass

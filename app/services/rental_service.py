@@ -126,6 +126,8 @@ class RentalService:
             kwargs["runtype"] = req.runtype
         if req.args is not None:
             kwargs["args"] = req.args
+        if req.ssh_key_id is not None:
+            kwargs["ssh_key"] = req.ssh_key_id
         if req.force:
             kwargs["force"] = True
         if req.cancel_unavail:

@@ -68,7 +68,8 @@ class LabelTabs(QFrame):
             border = f"2px solid {ACCENT}" if tab_key == key else "2px solid transparent"
             btn.setStyleSheet(
                 f"QPushButton {{ color: {color}; background: transparent;"
-                f" border: none; border-bottom: {border}; padding: 6px 10px; }}"
+                f" border: none; border-bottom: {border}; padding: 6px 10px;"
+                f" border-radius: 0; }}"
                 f"QPushButton:hover {{ color: {TEXT}; }}"
             )
 

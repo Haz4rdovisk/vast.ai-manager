@@ -147,6 +147,45 @@ class SSHService:
         except Exception:
             return False
 
+    def get_public_key(self) -> str | None:
+        """Extract public key from the configured private key or default locations."""
+        key_path = self.ssh_key_path
+        if not key_path:
+            # Try default SSH locations
+            for name in ("id_ed25519", "id_rsa", "id_ecdsa"):
+                p = os.path.expanduser(f"~/.ssh/{name}")
+                if os.path.isfile(p):
+                    key_path = p
+                    break
+        
+        if not key_path or not os.path.isfile(key_path):
+            return None
+            
+        # 1. Try reading .pub file directly (fastest, no passphrase needed)
+        pub_path = key_path + ".pub"
+        if os.path.isfile(pub_path):
+            try:
+                with open(pub_path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        
+        # 2. Try ssh-keygen -y (works if not encrypted or passphrase provided)
+        try:
+            pwd = self.passphrase_cache or ""
+            proc = subprocess.run(
+                ["ssh-keygen", "-y", "-P", pwd, "-f", key_path],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            if proc.returncode == 0:
+                return proc.stdout.strip()
+        except Exception:
+            pass
+            
+        return None
+
     def set_passphrase(self, pwd: str):
         self.passphrase_cache = pwd
 
@@ -258,3 +297,43 @@ class SSHService:
             return (res.returncode == 0), out
         except Exception as e:
             return False, str(e)
+    def detect_win_tunnels(self) -> dict[int, str]:
+        """Scans Windows for existing ssh tunnels.
+        Returns map of local_port -> remote_host:port string.
+        """
+        if sys.platform != "win32":
+            return {}
+
+        import re
+        cmd = ["powershell.exe", "-NoProfile", "-Command",
+               "Get-WmiObject Win32_Process -Filter \"name = 'ssh.exe'\" | Select-Object CommandLine | ConvertTo-Json"]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            if res.returncode != 0 or not res.stdout.strip():
+                return {}
+            
+            import json
+            data = json.loads(res.stdout)
+            if isinstance(data, dict):
+                data = [data]
+            
+            results = {} # local_port -> remote_target
+            for item in data:
+                line = item.get("CommandLine", "")
+                if not line or "-L" not in line:
+                    continue
+                
+                # Extract local port and remote target
+                # Pattern: -L (\d+):127.0.0.1:\1
+                m_local = re.search(r"-L\s+(\d+):127\.0\.0\.1:\d+", line)
+                # Pattern: root@([\w\.\-]+) -p (\d+) or similar
+                m_remote = re.search(r"root@([\w\.\-]+)", line)
+                m_port = re.search(r"-p\s+(\d+)", line)
+                
+                if m_local and m_remote and m_port:
+                    l_port = int(m_local.group(1))
+                    r_target = f"{m_remote.group(1)}:{m_port.group(1)}"
+                    results[l_port] = r_target
+            return results
+        except Exception:
+            return {}

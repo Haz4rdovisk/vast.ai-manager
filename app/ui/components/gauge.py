@@ -81,20 +81,20 @@ class GaugeWidget(QWidget):
         # 1. Main Value — 26pt bold
         p.setPen(QColor(t.TEXT_HI))
         p.setFont(QFont(t.FONT_DISPLAY, max(18, int(26 * scale)), QFont.Bold))
-        val_rect = QRectF(0, h / 2 - 4, w, 36)
+        val_rect = QRectF(0, h / 2 - 14, w, 36)
         p.drawText(val_rect, Qt.AlignCenter, f"{self._value:.0f}{self.unit}")
 
         # 2. Label — 10pt uppercase
         p.setPen(QColor(t.TEXT_MID))
         p.setFont(QFont(t.FONT_DISPLAY, max(8, int(10 * scale)), QFont.Bold))
-        label_rect = QRectF(0, h / 2 + 31, w, 16)
+        label_rect = QRectF(0, h / 2 + 18, w, 16)
         p.drawText(label_rect, Qt.AlignCenter, self.label.upper())
 
         # 3. Subtext — monospace detail
         if self._subtext:
             p.setPen(QColor(t.TEXT_LOW))
             p.setFont(QFont(t.FONT_MONO, max(8, int(10 * scale)), QFont.Normal))
-            sub_rect = QRectF(0, h / 2 + 49, w, 22)
+            sub_rect = QRectF(0, h / 2 + 34, w, 22)
             p.drawText(sub_rect, Qt.AlignCenter, f"({self._subtext})")
 
         p.end()

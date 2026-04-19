@@ -114,5 +114,35 @@ class LabStore(QObject):
         self._global_busy[key] = busy
         self.busy_changed.emit(key, busy)
 
+    def update_telemetry(self, iid: int, d: dict):
+        """Bridge real-time metrics from AppController into the Lab state."""
+        st = self.get_state(iid)
+        sys = st.system
+
+        if "gpu_util" in d:
+            sys.gpu_usage_pct = d["gpu_util"]
+        if "gpu_temp" in d:
+            sys.gpu_temp = d["gpu_temp"]
+        if "vram_used_mb" in d:
+            total = d.get("vram_total_mb") or (sys.gpu_vram_gb * 1024 if sys.gpu_vram_gb else 1)
+            sys.gpu_vram_usage_pct = (d["vram_used_mb"] / total) * 100
+        if "ram_used_mb" in d:
+            total = d.get("ram_total_mb") or (sys.ram_total_gb * 1024 if sys.ram_total_gb else 1)
+            sys.ram_usage_pct = (d["ram_used_mb"] / total) * 100
+            sys.ram_available_gb = (total - d["ram_used_mb"]) / 1024
+        if "load1" in d:
+            # Consistent with the CPU calculation fix
+            cores = sys.cpu_cores or 1
+            sys.cpu_usage_pct = (d["load1"] / cores) * 100
+        if "disk_used_gb" in d:
+            sys.disk_used_gb = d["disk_used_gb"]
+            if "disk_total_gb" in d and d["disk_total_gb"]:
+                sys.disk_total_gb = d["disk_total_gb"]
+                sys.disk_usage_pct = (d["disk_used_gb"] / d["disk_total_gb"]) * 100
+
+        self.instance_state_updated.emit(iid, st)
+        if iid == self.selected_instance_id:
+            self.remote_system_changed.emit(sys)
+
     def is_busy(self, key: str) -> bool:
         return self._global_busy.get(key, False)

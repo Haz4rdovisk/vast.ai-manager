@@ -182,6 +182,7 @@ class AppShell(QWidget):
         self.instances.deactivate_requested.connect(controller.deactivate)
         self.instances.connect_requested.connect(controller.connect_tunnel)
         self.instances.disconnect_requested.connect(controller.disconnect_tunnel)
+        self.instances.fix_ssh_requested.connect(controller.fix_instance_ssh)
         self.instances.set_label_requested.connect(self._on_set_label)
         self.instances.bulk_requested.connect(controller.bulk_action)
         self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
@@ -203,6 +204,8 @@ class AppShell(QWidget):
         # Sync dashboard and hardware with current active instances
         controller.instances_refreshed.connect(self.dashboard.sync_instances)
         controller.instances_refreshed.connect(self.hardware.sync_instances)
+        # Bridge real-time metrics back to the Lab store
+        controller.live_metrics.connect(self._on_live_metrics_bridge)
         # Sync analytics
         controller.instances_refreshed.connect(self._sync_analytics)
         controller.refresh_failed.connect(lambda *_: setattr(self, "_analytics_api_sync_pending", False))
@@ -256,6 +259,11 @@ class AppShell(QWidget):
         if status == TunnelStatus.CONNECTED.value:
             # Automatic probe!
             self._probe_instance(iid)
+
+    def _on_live_metrics_bridge(self, iid: int, data: dict):
+        """Bridge metrics from AppController into the Lab store."""
+        if self.store:
+            self.store.update_telemetry(iid, data)
 
     def _on_open_lab_from_card(self, iid: int):
         """User clicked "Open Lab" on an instance card. Select the instance

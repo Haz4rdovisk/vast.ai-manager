@@ -5,34 +5,31 @@ from PySide6.QtCore import Qt
 from app import theme as t
 
 
-from app.ui.components.primitives import GlassCard
-
-
-class HardwarePlaceholderCard(GlassCard):
+class HardwarePlaceholderCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(360)
         self.setMinimumHeight(300)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Adfeita a borda tracejada por cima do efeito de vidro
+        # Wireframe style: dashed border, no glass fills
         self.setStyleSheet(f"""
             QFrame {{
-                border: 2px dashed {t.BORDER_LOW};
+                border: 2px dashed {t.BORDER_HI};
                 border-radius: {t.RADIUS_LG}px;
-                background-color: transparent;
+                background-color: rgba(255, 255, 255, 0.02);
             }}
         """)
 
-        lay = self.body()
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         lay.setSpacing(t.SPACE_2)
         lay.setAlignment(Qt.AlignCenter)
 
         icon = QLabel("\u2726")
         icon.setStyleSheet(
-            f"font-size: 36pt; color: {t.TEXT_LOW};"
-            f" margin-bottom: 10px; border: none;"
+            f"font-size: 32pt; color: {t.TEXT_LOW};"
+            f" margin-bottom: 8px; border: none; background: transparent;"
         )
         icon.setAlignment(Qt.AlignCenter)
         lay.addWidget(icon)
@@ -40,9 +37,9 @@ class HardwarePlaceholderCard(GlassCard):
         tip = QLabel("Connect a machine to see live metrics here.")
         tip.setStyleSheet(
             f"font-size: 10pt; color: {t.TEXT_LOW};"
-            f" font-weight: 500; border: none;"
+            f" font-weight: 500; border: none; background: transparent;"
         )
         tip.setWordWrap(True)
-        tip.setMaximumWidth(280)
+        tip.setMaximumWidth(240)
         tip.setAlignment(Qt.AlignCenter)
         lay.addWidget(tip)

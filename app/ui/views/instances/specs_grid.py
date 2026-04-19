@@ -27,51 +27,68 @@ class _Cell(QFrame):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(2)
 
-        self._label = QLabel(label.upper())
-        lf = self._label.font()
+        self._lbl_title = QLabel(label.upper())
+        lf = self._lbl_title.font()
         lf.setFamily(FONT_DISPLAY)
         lf.setPointSize(7)
-        self._label.setFont(lf)
-        self._label.setStyleSheet(f"color: {TEXT_LOW}; letter-spacing: 1px;")
+        self._lbl_title.setFont(lf)
+        self._lbl_title.setStyleSheet(f"color: {TEXT_LOW}; letter-spacing: 1px;")
 
-        self._value = QLabel(value)
-        vf = self._value.font()
+        self._lbl_value = QLabel(value)
+        vf = self._lbl_value.font()
         vf.setFamily(FONT_MONO)
         vf.setPointSize(9)
-        self._value.setFont(vf)
-        self._value.setStyleSheet(f"color: {TEXT_HI};")
-        self._value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._lbl_value.setFont(vf)
+        self._lbl_value.setStyleSheet(f"color: {TEXT_HI};")
+        self._lbl_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        lay.addWidget(self._label)
-        lay.addWidget(self._value)
+        self._lbl_sub = QLabel(sub)
+        sf = self._lbl_sub.font()
+        sf.setPointSize(8)
+        self._lbl_sub.setFont(sf)
+        self._lbl_sub.setStyleSheet(f"color: {TEXT_MID};")
 
-        if sub:
-            sub_label = QLabel(sub)
-            sf = sub_label.font()
-            sf.setPointSize(8)
-            sub_label.setFont(sf)
-            sub_label.setStyleSheet(f"color: {TEXT_MID};")
-            lay.addWidget(sub_label)
+        lay.addWidget(self._lbl_title)
+        lay.addWidget(self._lbl_value)
+        lay.addWidget(self._lbl_sub)
+
+    def set_values(self, value: str, sub: str):
+        self._lbl_value.setText(value)
+        self._lbl_sub.setText(sub)
 
     def value_text(self) -> str:
-        return self._value.text()
+        return self._lbl_value.text()
 
 
 class SpecsGrid(QFrame):
-    """Dense 7-column grid of instance hardware/performance data."""
+    """Deeply spaced 7-column grid for professional dashboards."""
 
     def __init__(self, inst: Instance, parent=None) -> None:
         super().__init__(parent)
-        self.setStyleSheet(
-            f"SpecsGrid {{ border-top: 1px solid {BORDER_LOW}; padding-top: 10px; }}"
-        )
         self._cells: dict[str, _Cell] = {}
         grid = QGridLayout(self)
-        grid.setContentsMargins(0, 10, 0, 0)
+        grid.setContentsMargins(0, 12, 0, 12) # Massive vertical breathing room
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(4)
+        self.grid = grid
+        
+        self.update_instance(inst)
 
-        cells = [
+    def update_instance(self, inst: Instance):
+        data = self._get_data(inst)
+        if not self._cells:
+            for col, (key, label, value, sub) in enumerate(data):
+                cell = _Cell(label, value, sub, self)
+                self._cells[key] = cell
+                self.grid.addWidget(cell, 0, col)
+                self.grid.setColumnStretch(col, 1)
+        else:
+            for key, label, value, sub in data:
+                if key in self._cells:
+                    self._cells[key].set_values(value, sub)
+
+    def _get_data(self, inst: Instance):
+        return [
             ("instance", "Instance", _fmt(inst.id), f"Host {_fmt(inst.host_id)}"),
             ("cuda", "CUDA", _fmt(inst.cuda_max_good), f"{_fmt(inst.total_flops, ' TFLOPS')}"),
             ("dlperf", "DLPerf", _fmt(inst.dlperf), f"{_fmt(inst.flops_per_dphtotal, '/$/hr')}"),
@@ -85,26 +102,21 @@ class SpecsGrid(QFrame):
                 "cpu",
                 "CPU",
                 _trunc(inst.cpu_name, 14),
-                f"{_fmt(inst.cpu_cores, ' cores')} · {_fmt(inst.ram_used_gb)}/{_fmt(inst.ram_total_gb, ' GB')}",
+                f"{_fmt(inst.cpu_cores, ' cores')} \u00b7 {_fmt(inst.ram_total_gb, ' GB')}",
             ),
             (
                 "disk",
                 "Disk",
-                f"{_fmt(inst.disk_usage_gb)}/{_fmt(inst.disk_space_gb, ' GB')}",
+                f"{_fmt(inst.disk_space_gb, ' GB')}",
                 f"{_fmt(inst.disk_bw_mbps, ' MB/s')}",
             ),
             (
                 "mobo",
                 "Mobo",
                 _trunc(inst.mobo_name, 14),
-                f"PCIe {_fmt(inst.pcie_gen)} · {_fmt(inst.pcie_bw_gbps, ' GB/s')}",
+                f"PCIe {_fmt(inst.pcie_gen)} \u00b7 {_fmt(inst.pcie_bw_gbps, ' GB/s')}",
             ),
         ]
-        for col, (key, label, value, sub) in enumerate(cells):
-            cell = _Cell(label, value, sub, self)
-            self._cells[key] = cell
-            grid.addWidget(cell, 0, col)
-            grid.setColumnStretch(col, 1)
 
     def value_text(self, key: str) -> str:
         return self._cells[key].value_text() if key in self._cells else ""
