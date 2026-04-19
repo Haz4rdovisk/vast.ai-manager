@@ -114,7 +114,7 @@ def test_list_instances_overlays_running_target_from_audit_logs(monkeypatch):
 
     monkeypatch.setattr(svc, "_call", fake_call)
 
-    inst = svc.list_instances()[0]
+    inst = svc.list_instances(include_audit_targets=True)[0]
 
     assert inst.state == InstanceState.STARTING
     assert inst.raw["_is_scheduling"] is True
@@ -149,6 +149,33 @@ def test_list_instances_uses_latest_audit_target(monkeypatch):
                     "args": {"instance_id": 9, "target_state": "stopped"},
                 },
             ]
+        raise AssertionError(fn_name)
+
+    monkeypatch.setattr(svc, "_call", fake_call)
+
+    inst = svc.list_instances(include_audit_targets=True)[0]
+
+    assert inst.state == InstanceState.STOPPED
+    assert inst.raw["_is_scheduling"] is False
+
+
+def test_list_instances_skips_audit_by_default(monkeypatch):
+    svc = VastService("key")
+
+    def fake_call(fn_name, **kwargs):
+        if fn_name == "show_instances":
+            return [
+                {
+                    "id": 9,
+                    "actual_status": "exited",
+                    "intended_status": "stopped",
+                    "gpu_name": "RTX 3090",
+                    "num_gpus": 1,
+                    "gpu_ram": 24576,
+                }
+            ]
+        if fn_name == "show_audit_logs":
+            raise AssertionError("audit should not block the fast path")
         raise AssertionError(fn_name)
 
     monkeypatch.setattr(svc, "_call", fake_call)

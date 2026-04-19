@@ -10,7 +10,7 @@ from app.models import Instance, InstanceState, TunnelStatus, UserInfo
 from app.services.instance_filter import FilterState, apply, gpu_key
 from app.theme import FONT_DISPLAY, TEXT_HI
 from app.ui.components import icons
-from app.ui.components.primitives import IconButton
+from app.ui.components.primitives import GlassCard, IconButton, SkeletonBlock
 from app.ui.views.instances.bulk_action_bar import BulkActionBar
 from app.ui.views.instances.confirm_bulk_dialog import ConfirmBulkDialog
 from app.ui.views.instances.filter_bar import FilterBar
@@ -41,6 +41,7 @@ class InstancesView(QWidget):
         self._all: list[Instance] = []
         self._cards: dict[int, InstanceCard] = {}
         self._selected: set[int] = set()
+        self._loading_cards: list[GlassCard] = []
         self._start_requested_ids: set[int] = {
             int(iid)
             for iid in getattr(controller.config, "start_requested_ids", []) or []
@@ -58,6 +59,7 @@ class InstancesView(QWidget):
         self._tunnels: dict[int, TunnelStatus] = {}
         self._filter = FilterState.from_dict(controller.config.instance_filters)
         self._build()
+        self.set_loading()
 
         controller.log_line.connect(self._on_log_line)
         controller.tunnel_status_changed.connect(self._on_tunnel_status)
@@ -126,6 +128,7 @@ class InstancesView(QWidget):
         outer.addWidget(self.bulk_bar)
 
     def handle_refresh(self, instances: list[Instance], user: UserInfo) -> None:
+        self._clear_loading()
         self._all = self._with_sticky_scheduling(list(instances))
         self.title.setText(f"My Instances ({len(self._all)})")
 
@@ -145,6 +148,29 @@ class InstancesView(QWidget):
         alive = {inst.id for inst in self._all}
         self._selected &= alive
         self._reapply_filter()
+
+    def set_loading(self) -> None:
+        if self._all or self._cards or self._loading_cards:
+            return
+        self.title.setText("My Instances")
+        for _ in range(3):
+            card = GlassCard()
+            body = card.body()
+            body.setContentsMargins(14, 14, 14, 14)
+            body.setSpacing(10)
+            body.addWidget(SkeletonBlock(260, 20))
+            body.addWidget(SkeletonBlock(520, 14))
+            body.addWidget(SkeletonBlock(680, 14))
+            body.addWidget(SkeletonBlock(420, 14))
+            body.addWidget(SkeletonBlock(300, 24))
+            self._loading_cards.append(card)
+            self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+
+    def _clear_loading(self) -> None:
+        while self._loading_cards:
+            widget = self._loading_cards.pop()
+            widget.setParent(None)
+            widget.deleteLater()
 
     def _on_filter_changed(self, state: FilterState) -> None:
         self._filter = state

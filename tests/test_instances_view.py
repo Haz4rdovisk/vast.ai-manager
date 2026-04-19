@@ -36,6 +36,14 @@ def test_renders_cards_on_refresh(qt_app):
     view = InstancesView(ctl)
     view.handle_refresh([_inst(1), _inst(2)], UserInfo(balance=5.0, email=""))
     assert len(view._cards) == 2
+    assert view._loading_cards == []
+
+
+def test_shows_loading_cards_before_first_refresh(qt_app):
+    ctl = _controller()
+    view = InstancesView(ctl)
+    assert len(view._loading_cards) == 3
+    assert view._cards == {}
 
 
 def test_filter_hides_cards(qt_app):

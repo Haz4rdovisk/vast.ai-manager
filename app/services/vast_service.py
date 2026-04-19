@@ -380,14 +380,14 @@ class VastService:
         raw = self._call("show_user")
         return parse_user_info(_normalize_response(raw))
 
-    def list_instances(self) -> list[Instance]:
+    def list_instances(self, *, include_audit_targets: bool = False) -> list[Instance]:
         raw = self._call("show_instances")
         items = _normalize_response(raw)
         if isinstance(items, dict) and "instances" in items:
             items = items["instances"]
         if not isinstance(items, list):
             return []
-        targets = self._load_latest_instance_targets()
+        targets = self._load_latest_instance_targets() if include_audit_targets else {}
         parsed = []
         for i in items:
             if isinstance(i, dict) and "id" in i:
