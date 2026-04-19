@@ -24,6 +24,8 @@ SCHEDULING_TOOLTIP = (
     "the control panel. See docs for more info."
 )
 
+STOP_TOOLTIP = "Stop your instance. Storage charges still apply. See FAQ for details."
+
 
 def _status_text(inst: Instance, *keys: str) -> str:
     for key in keys:
@@ -95,7 +97,12 @@ class ActionBar(QFrame):
         lay.addWidget(self.primary)
         lay.addWidget(_separator())
 
-        self.btn_reboot = IconButton(icons.REBOOT, "Reboot")
+        if inst.state == InstanceState.STARTING:
+            self.btn_reboot = IconButton(icons.POWER, STOP_TOOLTIP)
+            self.btn_reboot.clicked.connect(self.deactivate_requested)
+        else:
+            self.btn_reboot = IconButton(icons.REBOOT, "Reboot")
+            self.btn_reboot.clicked.connect(self.reboot_requested)
         self.btn_snapshot = IconButton(icons.CLOUD, "Snapshot / save")
         self.btn_destroy = IconButton(icons.RECYCLE, "Destroy", danger=True)
         for btn in (self.btn_reboot, self.btn_snapshot, self.btn_destroy):
@@ -117,7 +124,6 @@ class ActionBar(QFrame):
         lay.addWidget(self.btn_lab)
         lay.addStretch(1)
 
-        self.btn_reboot.clicked.connect(self.reboot_requested)
         self.btn_snapshot.clicked.connect(self.snapshot_requested)
         self.btn_destroy.clicked.connect(self.destroy_requested)
         self.btn_log.clicked.connect(self.log_requested)

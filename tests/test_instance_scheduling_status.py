@@ -67,3 +67,23 @@ def test_action_bar_detects_scheduling_from_intended_running(qt_app):
 
     assert bar.primary.text() == "scheduling..."
     assert "GPU is currently in use" in bar.primary.toolTip()
+
+
+def test_action_bar_stop_icon_stops_scheduling_instance(qt_app):
+    from app.ui.views.instances.action_bar import ActionBar
+
+    inst = Instance(
+        id=42,
+        state=InstanceState.STARTING,
+        gpu_name="RTX 3090",
+        raw={"actual_status": "scheduling", "intended_status": "running"},
+    )
+
+    bar = ActionBar(inst, TunnelStatus.DISCONNECTED)
+    seen = []
+    bar.deactivate_requested.connect(lambda: seen.append(True))
+
+    bar.btn_reboot.click()
+
+    assert "Storage charges still apply" in bar.btn_reboot.toolTip()
+    assert seen == [True]
