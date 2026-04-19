@@ -87,6 +87,94 @@ def test_parse_instance_uses_cur_and_next_state_fallbacks():
     assert inst.raw["_is_scheduling"] is True
 
 
+def test_list_instances_overlays_running_target_from_audit_logs(monkeypatch):
+    svc = VastService("key")
+
+    def fake_call(fn_name, **kwargs):
+        if fn_name == "show_instances":
+            return [
+                {
+                    "id": 9,
+                    "actual_status": "exited",
+                    "intended_status": "stopped",
+                    "gpu_name": "RTX 3090",
+                    "num_gpus": 1,
+                    "gpu_ram": 24576,
+                }
+            ]
+        if fn_name == "show_audit_logs":
+            return [
+                {
+                    "api_route": "api.instance_PUT",
+                    "created_at": 10.0,
+                    "args": {"instance_id": 9, "target_state": "running"},
+                }
+            ]
+        raise AssertionError(fn_name)
+
+    monkeypatch.setattr(svc, "_call", fake_call)
+
+    inst = svc.list_instances()[0]
+
+    assert inst.state == InstanceState.STARTING
+    assert inst.raw["_is_scheduling"] is True
+    assert inst.raw["_scheduling_source"] == "audit_logs"
+
+
+def test_list_instances_uses_latest_audit_target(monkeypatch):
+    svc = VastService("key")
+
+    def fake_call(fn_name, **kwargs):
+        if fn_name == "show_instances":
+            return [
+                {
+                    "id": 9,
+                    "actual_status": "exited",
+                    "intended_status": "stopped",
+                    "gpu_name": "RTX 3090",
+                    "num_gpus": 1,
+                    "gpu_ram": 24576,
+                }
+            ]
+        if fn_name == "show_audit_logs":
+            return [
+                {
+                    "api_route": "api.instance_PUT",
+                    "created_at": 10.0,
+                    "args": {"instance_id": 9, "target_state": "running"},
+                },
+                {
+                    "api_route": "api.instance_PUT",
+                    "created_at": 20.0,
+                    "args": {"instance_id": 9, "target_state": "stopped"},
+                },
+            ]
+        raise AssertionError(fn_name)
+
+    monkeypatch.setattr(svc, "_call", fake_call)
+
+    inst = svc.list_instances()[0]
+
+    assert inst.state == InstanceState.STOPPED
+    assert inst.raw["_is_scheduling"] is False
+
+
+def test_start_instance_rejects_unsuccessful_response(monkeypatch):
+    svc = VastService("key")
+    monkeypatch.setattr(
+        svc,
+        "_call",
+        lambda fn_name, **kwargs: {"success": False, "msg": "no capacity"},
+    )
+
+    try:
+        svc.start_instance(9)
+    except Exception as exc:
+        assert "no capacity" in str(exc)
+    else:
+        raise AssertionError("expected start_instance to reject failed response")
+
+
 def test_parse_user_info():
     raw = {"credit": 42.18, "email": "u@example.com"}
     u = parse_user_info(raw)

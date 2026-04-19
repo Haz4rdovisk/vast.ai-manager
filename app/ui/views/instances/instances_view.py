@@ -17,10 +17,7 @@ from app.ui.views.instances.filter_bar import FilterBar
 from app.ui.views.instances.instance_card import InstanceCard
 from app.ui.views.instances.label_tabs import LabelTabs
 from app.ui.views.instances.log_modal import LogModal
-from app.ui.views.instances.action_bar import SCHEDULING_TOOLTIP, is_scheduling_instance
-
-
-OPTIMISTIC_START_GRACE_SECONDS = 30 * 60
+from app.ui.views.instances.action_bar import SCHEDULING_TOOLTIP
 
 
 class InstancesView(QWidget):
@@ -282,20 +279,15 @@ class InstancesView(QWidget):
         self._start_requested_at = {
             iid: ts for iid, ts in self._start_requested_at.items() if iid in alive
         }
-        now = time.time()
         out: list[Instance] = []
         for inst in instances:
             if inst.id in self._start_requested_ids:
-                if inst.state == InstanceState.RUNNING or inst.state == InstanceState.STARTING:
+                if inst.state == InstanceState.RUNNING:
                     self._start_requested_ids.discard(inst.id)
                     self._start_requested_at.pop(inst.id, None)
                     out.append(inst)
-                elif is_scheduling_instance(inst) or self._is_optimistic_start_active(inst.id, now):
-                    out.append(self._as_scheduling(inst))
                 else:
-                    self._start_requested_ids.discard(inst.id)
-                    self._start_requested_at.pop(inst.id, None)
-                    out.append(inst)
+                    out.append(self._as_scheduling(inst))
             else:
                 out.append(inst)
         if self._start_requested_ids != before or self._start_requested_at != before_at:
@@ -333,6 +325,7 @@ class InstancesView(QWidget):
         raw = dict(inst.raw)
         raw["actual_status"] = "scheduling"
         raw["intended_status"] = "running"
+        raw["_is_scheduling"] = True
         return replace(
             inst,
             state=InstanceState.STARTING,
@@ -353,10 +346,6 @@ class InstancesView(QWidget):
         updater = getattr(self._controller, "update_start_requested_ids", None)
         if callable(updater):
             updater(sorted(self._start_requested_ids), dict(self._start_requested_at))
-
-    def _is_optimistic_start_active(self, iid: int, now: float) -> bool:
-        requested_at = self._start_requested_at.get(iid, now)
-        return now - requested_at <= OPTIMISTIC_START_GRACE_SECONDS
 
     def _on_action_done(self, iid: int, action: str, ok: bool, _msg: str) -> None:
         if action == "start" and not ok:

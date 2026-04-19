@@ -178,10 +178,7 @@ def test_server_scheduling_state_wins_without_local_start_request(qt_app):
     ctl.update_start_requested_ids.assert_not_called()
 
 
-def test_expired_optimistic_start_request_clears_if_server_is_stopped(qt_app, monkeypatch):
-    import app.ui.views.instances.instances_view as module
-
-    monkeypatch.setattr(module.time, "time", lambda: 2_000.0)
+def test_persisted_start_request_stays_scheduling_even_if_server_reports_stopped(qt_app):
     ctl = _controller(AppConfig(start_requested_ids=[1], start_requested_at={1: 1.0}))
     view = InstancesView(ctl)
 
@@ -196,6 +193,6 @@ def test_expired_optimistic_start_request_clears_if_server_is_stopped(qt_app, mo
         UserInfo(balance=5.0, email=""),
     )
 
-    assert view._cards[1].actions.primary.text() == "Activate"
-    assert 1 not in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([], {})
+    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert 1 in view._start_requested_ids
+    ctl.update_start_requested_ids.assert_not_called()

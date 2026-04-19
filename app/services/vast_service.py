@@ -311,6 +311,42 @@ def _results_from_response(raw: Any) -> list[dict]:
     return []
 
 
+def _latest_instance_targets(audit_rows: list[dict]) -> dict[int, tuple[str, float]]:
+    targets: dict[int, tuple[str, float]] = {}
+    for row in audit_rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("api_route") != "api.instance_PUT":
+            continue
+        args = row.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        iid = _to_int(args.get("instance_id"))
+        target = _normalize_status(args.get("target_state"))
+        ts = _to_float(row.get("created_at")) or 0.0
+        if iid is None or target not in {"running", "stopped"}:
+            continue
+        prev = targets.get(iid)
+        if prev is None or ts >= prev[1]:
+            targets[iid] = (target, ts)
+    return targets
+
+
+def _apply_target_overlay(raw: dict, target: tuple[str, float] | None) -> dict:
+    if target is None:
+        return raw
+    target_state, ts = target
+    out = dict(raw)
+    out["_audit_target_state"] = target_state
+    out["_audit_target_created_at"] = ts
+    actual, intended = _status_pair(out)
+    if target_state == "running" and actual != "running" and intended != "running":
+        out["intended_status"] = "running"
+        out["next_state"] = "running"
+        out["_scheduling_source"] = "audit_logs"
+    return out
+
+
 class VastService:
     """Wraps the vastai SDK. Holds api_key and exposes typed methods."""
 
@@ -351,20 +387,39 @@ class VastService:
             items = items["instances"]
         if not isinstance(items, list):
             return []
+        targets = self._load_latest_instance_targets()
         parsed = []
         for i in items:
             if isinstance(i, dict) and "id" in i:
                 try:
-                    parsed.append(parse_instance(i))
+                    iid = int(i["id"])
+                    parsed.append(parse_instance(_apply_target_overlay(i, targets.get(iid))))
                 except (KeyError, TypeError, ValueError):
                     continue
         return parsed
 
+    def _load_latest_instance_targets(self) -> dict[int, tuple[str, float]]:
+        try:
+            raw = self._call("show_audit_logs")
+        except Exception:
+            return {}
+        rows = _normalize_response(raw)
+        if not isinstance(rows, list):
+            return {}
+        return _latest_instance_targets(rows)
+
     def start_instance(self, instance_id: int) -> None:
-        self._call("start_instance", id=instance_id)
+        self._ensure_success(self._call("start_instance", id=instance_id))
 
     def stop_instance(self, instance_id: int) -> None:
-        self._call("stop_instance", id=instance_id)
+        self._ensure_success(self._call("stop_instance", id=instance_id))
+
+    @staticmethod
+    def _ensure_success(raw) -> None:
+        data = _normalize_response(raw)
+        if isinstance(data, dict) and data.get("success") is False:
+            msg = data.get("msg") or data.get("error") or data.get("message") or data
+            raise VastNetworkError(str(msg))
 
     def set_label(self, instance_id: int, label: str) -> None:
         """Update the user-set label on an instance via the Vast SDK."""
