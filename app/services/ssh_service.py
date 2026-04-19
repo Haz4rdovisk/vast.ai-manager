@@ -297,6 +297,66 @@ class SSHService:
             return (res.returncode == 0), out
         except Exception as e:
             return False, str(e)
+
+    def stream_script(
+        self,
+        host: str,
+        port: int,
+        script: str,
+        on_line,
+    ) -> tuple[bool, str]:
+        """Run an SSH bash script and call on_line(line) for every stdout line
+        as it arrives. Returns (success, full_output). stderr is merged into
+        stdout. The callback must be thread-safe for Qt (use signals)."""
+        use_askpass, env = self._create_askpass_env()
+
+        cmd = ["ssh", "-p", str(port)]
+        if self.ssh_key_path:
+            cmd += ["-i", self.ssh_key_path, "-o", "IdentitiesOnly=yes"]
+        cmd += ["-o", "StrictHostKeyChecking=accept-new"]
+        if not use_askpass:
+            cmd += ["-o", "BatchMode=yes"]
+        cmd += [f"root@{host}", "bash", "-l", "-s"]
+
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+
+        script = "\n".join(l.rstrip() for l in script.replace("\r", "").splitlines()) + "\n"
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                creationflags=creationflags,
+                bufsize=0,
+            )
+        except Exception as e:
+            return False, str(e)
+
+        try:
+            proc.stdin.write(script.encode("utf-8"))
+            proc.stdin.close()
+        except Exception:
+            pass
+
+        lines: list[str] = []
+        for raw in proc.stdout:
+            if not raw:
+                break
+            text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            lines.append(text)
+            try:
+                on_line(text)
+            except Exception:
+                pass
+
+        rc = proc.wait()
+        return rc == 0, "\n".join(lines)
+
     def detect_win_tunnels(self) -> dict[int, str]:
         """Scans Windows for existing ssh tunnels.
         Returns map of local_port -> remote_host:port string.

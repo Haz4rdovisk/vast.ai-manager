@@ -74,3 +74,57 @@ def test_build_terminal_launch_cmd():
 def test_build_terminal_launch_powershell():
     launch = build_terminal_launch(["ssh", "-p", "22", "root@h"], prefer="powershell")
     assert launch[0] == "powershell.exe"
+
+
+def test_stream_script_yields_lines_then_exit_code(monkeypatch):
+    """stream_script calls on_line for each stdout line and returns (ok, full_output)."""
+    import subprocess
+    from app.services.ssh_service import SSHService
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([b"line1\n", b"line2\n", b"line3\n", b""])
+            self.returncode = 0
+            self._stdin_closed = False
+            class Stdin:
+                def write(self_, _b): pass
+                def close(self_): pass
+            self.stdin = Stdin()
+        def wait(self, timeout=None):
+            return 0
+        def poll(self):
+            return self.returncode
+
+    def fake_popen(*a, **kw):
+        return FakeProc()
+
+    monkeypatch.setattr("app.services.ssh_service.subprocess.Popen", fake_popen)
+    svc = SSHService(ssh_key_path="")
+    seen: list[str] = []
+    ok, full = svc.stream_script("h", 22, "echo hi", on_line=seen.append)
+    assert ok is True
+    assert seen == ["line1", "line2", "line3"]
+    assert "line1" in full and "line3" in full
+
+
+def test_stream_script_returns_false_on_nonzero(monkeypatch):
+    from app.services.ssh_service import SSHService
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([b"boom\n", b""])
+            self.returncode = 42
+            class Stdin:
+                def write(self_, _b): pass
+                def close(self_): pass
+            self.stdin = Stdin()
+        def wait(self, timeout=None):
+            return 42
+        def poll(self):
+            return 42
+
+    monkeypatch.setattr("app.services.ssh_service.subprocess.Popen", lambda *a, **k: FakeProc())
+    svc = SSHService(ssh_key_path="")
+    ok, full = svc.stream_script("h", 22, "exit 42", on_line=lambda _l: None)
+    assert ok is False
+    assert "boom" in full
