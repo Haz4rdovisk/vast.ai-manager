@@ -81,6 +81,7 @@ class AppController(QObject):
         self.tunnel_states: dict[int, TunnelStatus] = {}
 
         self._pending_start: set[int] = set()
+        self._auto_connect_after_start: set[int] = set()
         self._force_next_backfill = False
         self._pending_stop:  set[int] = set()
         self._pending_tunnel:set[int] = set()
@@ -346,9 +347,27 @@ class AppController(QObject):
         self._force_next_backfill = False # Reset flag
 
         self._check_tunnels_health()
+        self._connect_started_instances_when_ready(instances)
         self._sync_live_workers(instances)
         self.log_line.emit(f"✓ Dados sincronizados ({len(instances)} instâncias)")
         self.instances_refreshed.emit(instances, user)
+
+    def _connect_started_instances_when_ready(self, instances: list[Instance]) -> None:
+        if not self.config.auto_connect_on_activate:
+            self._auto_connect_after_start.clear()
+            return
+        ready = {
+            inst.id for inst in instances
+            if (
+                inst.id in self._auto_connect_after_start
+                and inst.state == InstanceState.RUNNING
+                and bool(inst.ssh_host)
+                and bool(inst.ssh_port)
+            )
+        }
+        for iid in ready:
+            self._auto_connect_after_start.discard(iid)
+            self.connect_tunnel(iid)
 
     def _log_analytics_snapshot(self, instances: list, user, force_backfill: bool = False):
         """Persist a cost snapshot for the analytics dashboard."""
@@ -439,10 +458,6 @@ class AppController(QObject):
     def activate(self, iid: int) -> bool:
         if iid in self._pending_start:
             return False
-        if self.config.auto_connect_on_activate and not self._has_usable_passphrase():
-            self._on_passphrase_success = lambda: self.activate(iid)
-            self.passphrase_needed.emit()
-            return False
         self._pending_start.add(iid)
         self.log_line.emit(f"Ativando instância {iid}...")
         self._trigger_start.emit(iid)
@@ -457,6 +472,7 @@ class AppController(QObject):
         self._stop_model_watcher(iid)
         self.tunnel_states[iid] = TunnelStatus.DISCONNECTED
         self._pending_tunnel.discard(iid)
+        self._auto_connect_after_start.discard(iid)
         self.log_line.emit(f"Desativando instância {iid}...")
         self._trigger_stop.emit(iid)
 
@@ -505,6 +521,8 @@ class AppController(QObject):
     def _on_bulk_finished(self, action: str, ok: list, fail: list) -> None:
         self._bulk_in_flight = False
         self.log_line.emit(f"✓ Bulk {action}: {len(ok)} ok, {len(fail)} fail")
+        if action == "start" and self.config.auto_connect_on_activate:
+            self._auto_connect_after_start.update(ok)
         if fail:
             self.toast_requested.emit(
                 f"Falhou em {len(fail)} instâncias", "error", 4000)
@@ -512,20 +530,20 @@ class AppController(QObject):
             self.toast_requested.emit(
                 f"{action} aplicado em {len(ok)} instâncias", "success", 3000)
         self._trigger_refresh.emit()
-        if action == "start" and self.config.auto_connect_on_activate:
-            for iid in ok:
-                self.connect_tunnel(iid)
 
     def _on_action_done(self, iid: int, action: str, ok: bool, msg: str):
         if action == "start":
             self._pending_start.discard(iid)
+            if ok and self.config.auto_connect_on_activate:
+                self._auto_connect_after_start.add(iid)
         elif action == "stop":
             self._pending_stop.discard(iid)
+            self._auto_connect_after_start.discard(iid)
         if ok:
             self.log_line.emit(f"✓ {action} #{iid}: {msg}")
-            if action == "start" and self.config.auto_connect_on_activate:
-                self.connect_tunnel(iid)
         else:
+            if action == "start":
+                self._auto_connect_after_start.discard(iid)
             self.log_line.emit(f"✗ {action} #{iid}: {msg}")
         self.action_done.emit(iid, action, ok, msg)
         if ok:
