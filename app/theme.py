@@ -4,14 +4,14 @@ from __future__ import annotations
 
 # ━━ Surfaces ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BG_VOID    = "#030508"
-BG_DEEP    = "#070A0F"
-BG_BASE    = "#0B0F17"
+BG_DEEP    = "#07090D"
+BG_BASE    = "#0C1016"
 
 # Glass surfaces — rgba for conceptual reference; QSS uses solid fallbacks.
 # Actual glass blur is handled via QPainter overrides in components.
-SURFACE_1       = "#0F141E"          # card (solid fallback)
-SURFACE_2       = "#161C2A"          # raised card
-SURFACE_3       = "#1E2637"          # inputs / recessed
+SURFACE_1       = "#141922"          # card (solid fallback)
+SURFACE_2       = "#1C2330"          # raised card
+SURFACE_3       = "#262F3F"          # inputs / recessed
 GLASS_HOVER     = "#283246"          # hover overlay
 
 SURFACE_1_RGBA  = "rgba(15, 20, 30, 0.65)"
@@ -28,8 +28,8 @@ BORDER_HI   = "rgba(255,255,255, 0.14)"
 TEXT_HERO = "#FFFFFF"
 TEXT_HI   = "#F1F4FA"
 TEXT      = "#C7CEDC"
-TEXT_MID  = "#6B7590"
-TEXT_LOW  = "#3D4560"
+TEXT_MID  = "#8891A6"
+TEXT_LOW  = "#5A6277"
 
 FONT_DISPLAY = "Inter, 'Segoe UI Variable', 'Segoe UI', sans-serif"
 FONT_MONO    = "'JetBrains Mono', Consolas, 'Courier New', monospace"

@@ -250,7 +250,10 @@ class SettingsView(QWidget):
             include_storage_in_burn_rate=self._config.include_storage_in_burn_rate,
             burn_rate_smoothing_window=self._config.burn_rate_smoothing_window,
             estimated_network_cost_per_hour=self._config.estimated_network_cost_per_hour,
-            schema_version=2,
+            port_map=dict(self._config.port_map),
+            instance_filters=dict(self._config.instance_filters),
+            bulk_confirm_threshold=self._config.bulk_confirm_threshold,
+            schema_version=3,
         )
         self.saved.emit(cfg)
 

@@ -81,7 +81,11 @@ def parse_instance(raw: dict) -> Instance:
     mem_usage_mb = _to_float(raw.get("mem_usage"))
     vmem_usage_mb = _to_float(raw.get("vmem_usage"))
 
-    image = raw.get("label") or raw.get("image_uuid")
+    image = raw.get("image_uuid") or raw.get("docker_image") or ""
+    label = raw.get("label") or None
+    is_verified = raw.get("verification") == "verified"
+    public_ip = raw.get("public_ipaddr") or ""
+    inet_billed_per_gb = _to_float(raw.get("inet_up_billed")) or 0.0
 
     iid = int(raw["id"])
     ssh_host = ""
@@ -175,6 +179,10 @@ def parse_instance(raw: dict) -> Instance:
             raw.get("storage_cost") or raw.get("storageCost")
         ),
         storage_total_cost=_to_float(raw.get("storage_total_cost")),
+        label=label,
+        public_ip=public_ip,
+        is_verified=is_verified,
+        inet_billed_per_gb=inet_billed_per_gb,
         raw=raw,
     )
 
@@ -264,6 +272,20 @@ class VastService:
 
     def stop_instance(self, instance_id: int) -> None:
         self._call("stop_instance", id=instance_id)
+
+    def set_label(self, instance_id: int, label: str) -> None:
+        """Update the user-set label on an instance via the Vast SDK."""
+        if hasattr(self, "client"):
+            self.client.label_instance(id=instance_id, label=label)
+            return
+        self._call("label_instance", id=instance_id, label=label)
+
+    def destroy_instance(self, instance_id: int) -> None:
+        """Permanently destroy an instance via the Vast SDK."""
+        if hasattr(self, "client"):
+            self.client.destroy_instance(id=instance_id)
+            return
+        self._call("destroy_instance", id=instance_id)
 
     def get_user_info(self) -> UserInfo:
         return self.test_connection()

@@ -135,7 +135,7 @@ echo "===TELEMETRY_END==="
 def script_check_setup() -> str:
     """Probe what's installed on the instance. Outputs structured markers."""
     return r"""
-echo "===SETUP_START==="
+echo "===PROBE_START==="
 # Check llmfit
 if command -v llmfit &>/dev/null; then
     echo "LLMFIT_INSTALLED=yes"
@@ -183,7 +183,7 @@ fi
 # Count GGUF models
 MODEL_COUNT=$(find /workspace /models /root -type f -name '*.gguf' 2>/dev/null | wc -l)
 echo "MODEL_COUNT=$MODEL_COUNT"
-echo "===SETUP_END==="
+echo "===PROBE_END==="
 """
 
 

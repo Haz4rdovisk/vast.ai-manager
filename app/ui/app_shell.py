@@ -14,7 +14,7 @@ from app.lab.views.dashboard_view import DashboardView
 from app.lab.views.discover_view import DiscoverView
 from app.lab.views.models_view import ModelsView
 from app.controller import AppController
-from app.ui.views.instances_view import InstancesView
+from app.ui.views.instances.instances_view import InstancesView
 from app.ui.views.analytics_view import AnalyticsView
 from app.ui.views.store_view import StoreView
 from app.ui.views.settings_view import SettingsView
@@ -178,9 +178,20 @@ class AppShell(QWidget):
         self._add_view("instances", self.instances)
         self.store_view = StoreView(controller, self)
         self._add_view("store", self.store_view)
+        self.instances.activate_requested.connect(controller.activate)
+        self.instances.deactivate_requested.connect(controller.deactivate)
+        self.instances.connect_requested.connect(controller.connect_tunnel)
+        self.instances.disconnect_requested.connect(controller.disconnect_tunnel)
+        self.instances.set_label_requested.connect(self._on_set_label)
+        self.instances.bulk_requested.connect(controller.bulk_action)
         self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
         self.instances.open_settings_requested.connect(
             lambda: self._go("settings")
+        )
+        self.instances.open_logs_requested.connect(
+            lambda: controller.toast_requested.emit(
+                "Use o ícone de log em cada card para logs filtrados.", "info", 2500
+            )
         )
         self.instances.open_analytics_requested.connect(
             lambda: self._go("analytics")
@@ -188,6 +199,7 @@ class AppShell(QWidget):
         
         # Proactive: listen to tunnel status
         controller.tunnel_status_changed.connect(self._on_tunnel_status_changed)
+        controller.instances_refreshed.connect(self.instances.handle_refresh)
         # Sync dashboard and hardware with current active instances
         controller.instances_refreshed.connect(self.dashboard.sync_instances)
         controller.instances_refreshed.connect(self.hardware.sync_instances)
@@ -233,7 +245,8 @@ class AppShell(QWidget):
         if self._controller:
             self._controller.apply_config(cfg)
             self._controller.config_store.save(cfg)
-            self.instances.billing.apply_config(cfg)
+            if hasattr(self.instances, "billing"):
+                self.instances.billing.apply_config(cfg)
             self.analytics.apply_config(cfg)
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
@@ -249,6 +262,20 @@ class AppShell(QWidget):
         and jump to Dashboard."""
         self.select_instance(iid)
         self._go("dashboard")
+
+    def _on_set_label(self, iid: int, label: str) -> None:
+        if self._controller is None or self._controller.vast is None:
+            return
+        try:
+            self._controller.vast.set_label(iid, label)
+            self._controller.toast_requested.emit(
+                f"Label aplicado em #{iid}", "success", 2000
+            )
+            self._controller.request_refresh()
+        except Exception as exc:
+            self._controller.toast_requested.emit(
+                f"Falha ao definir label: {exc}", "error", 4000
+            )
 
     def _on_dashboard_instance_action(self, iid: int, action: str):
         """Action requested from a specific dashboard card."""

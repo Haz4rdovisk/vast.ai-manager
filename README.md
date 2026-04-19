@@ -34,6 +34,17 @@ Then enter your [Vast.ai API Key](https://cloud.vast.ai/account/) in the **Setti
 *   **Lifecycle Control**: Start, stop, reboot, and label instances directly.
 *   **Native Terminal Integration**: Automatic SSH tunneling with one-click terminal launch.
 
+### Instances Tab
+
+The Instances tab provides a dense, multi-instance interface for power users:
+
+- **Per-instance port allocator** — each tunnel gets its own local port, auto-incremented from `default_tunnel_port`; mappings are persisted to `~/.vastai-app/config.json` so restarts preserve URLs.
+- **Filters** — GPU type, status, label dropdowns plus sort selector; state persists across restarts.
+- **Label tabs** — All / No Label / custom labels, synced with the Vast API `label` field.
+- **Bulk operations** — `Start All` acts on all visible filtered instances; Select Mode supports partial selection. Bulk actions show a confirmation modal with aggregate cost. Destroy requires explicit acknowledgement.
+- **Action bar** — primary CTA plus icon buttons for reboot, snapshot, destroy, log, label, flag, SSH key, and Open Lab. Powered by qtawesome MaterialDesignIcons.
+- **Per-card log** — the log icon opens a modal filtered to that instance's `#<id>` log lines.
+
 ### 🛒 Marketplace & Rental
 *   **Advanced Search**: Deep filtering by GPU model (4090, A100, H100), VRAM, CPU architecture, and region.
 *   **Workflow Presets**: Quick-filters for ML training, inference, and rendering.

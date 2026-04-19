@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QVBoxLayout
+
+from app.models import Instance, InstanceState, TunnelStatus
+from app.ui.components.primitives import GlassCard
+from app.ui.views.instances.action_bar import ActionBar
+from app.ui.views.instances.chip_header import ChipHeader
+from app.ui.views.instances.live_footer import LiveFooter
+from app.ui.views.instances.specs_grid import SpecsGrid
+
+
+class InstanceCard(QFrame):
+    """Dense always-open card. One per instance."""
+
+    activate_requested = Signal(int)
+    deactivate_requested = Signal(int)
+    connect_requested = Signal(int)
+    disconnect_requested = Signal(int)
+    reboot_requested = Signal(int)
+    snapshot_requested = Signal(int)
+    destroy_requested = Signal(int)
+    log_requested = Signal(int)
+    label_requested = Signal(int)
+    flag_requested = Signal(int)
+    key_requested = Signal(int)
+    lab_requested = Signal(int)
+    selection_toggled = Signal(int, bool)
+    ip_copy_requested = Signal(int)
+
+    def __init__(
+        self,
+        inst: Instance,
+        *,
+        port: int,
+        tunnel: TunnelStatus = TunnelStatus.DISCONNECTED,
+        selected: bool = False,
+        select_mode: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.inst = inst
+        self._tunnel = tunnel
+        self._port = port
+        self._select_mode = select_mode
+        self._selected = selected
+
+        self._card = GlassCard(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._card)
+
+        self._inner = self._card.body()
+        self._inner.setContentsMargins(14, 14, 14, 14)
+        self._inner.setSpacing(10)
+        self._build()
+
+    def _build(self) -> None:
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self.header = ChipHeader(self.inst, self._card)
+        self.header.ip_clicked.connect(lambda: self.ip_copy_requested.emit(self.inst.id))
+        top.addWidget(self.header, stretch=1)
+
+        self.select_check = QCheckBox()
+        self.select_check.setChecked(self._selected)
+        self.select_check.setVisible(self._select_mode)
+        self.select_check.toggled.connect(
+            lambda value: self.selection_toggled.emit(self.inst.id, bool(value))
+        )
+        top.addWidget(self.select_check)
+        self._inner.addLayout(top)
+
+        self.specs = SpecsGrid(self.inst, self._card)
+        self._inner.addWidget(self.specs)
+
+        self.live: LiveFooter | None = None
+        if self.inst.state == InstanceState.RUNNING:
+            self.live = LiveFooter(self.inst, self._card)
+            self._inner.addWidget(self.live)
+
+        self.actions = ActionBar(self.inst, self._tunnel, self._card)
+        self._wire_actions()
+        self._inner.addWidget(self.actions)
+
+    def _wire_actions(self) -> None:
+        actions = self.actions
+        actions.activate_requested.connect(lambda: self.activate_requested.emit(self.inst.id))
+        actions.deactivate_requested.connect(lambda: self.deactivate_requested.emit(self.inst.id))
+        actions.connect_requested.connect(lambda: self.connect_requested.emit(self.inst.id))
+        actions.disconnect_requested.connect(lambda: self.disconnect_requested.emit(self.inst.id))
+        actions.reboot_requested.connect(lambda: self.reboot_requested.emit(self.inst.id))
+        actions.snapshot_requested.connect(lambda: self.snapshot_requested.emit(self.inst.id))
+        actions.destroy_requested.connect(lambda: self.destroy_requested.emit(self.inst.id))
+        actions.log_requested.connect(lambda: self.log_requested.emit(self.inst.id))
+        actions.label_requested.connect(lambda: self.label_requested.emit(self.inst.id))
+        actions.flag_requested.connect(lambda: self.flag_requested.emit(self.inst.id))
+        actions.key_requested.connect(lambda: self.key_requested.emit(self.inst.id))
+        actions.lab_requested.connect(lambda: self.lab_requested.emit(self.inst.id))
+
+    def update_instance(self, inst: Instance, tunnel: TunnelStatus) -> None:
+        self.inst = inst
+        self._tunnel = tunnel
+        self._clear_inner()
+        self._build()
+
+    def _clear_inner(self) -> None:
+        while self._inner.count():
+            item = self._inner.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+                continue
+            layout = item.layout()
+            if layout is not None:
+                while layout.count():
+                    child = layout.takeAt(0)
+                    child_widget = child.widget()
+                    if child_widget is not None:
+                        child_widget.deleteLater()
+
+    def apply_metrics(self, metrics: dict) -> None:
+        if self.live is not None:
+            self.live.apply_metrics(metrics)
+
+    def set_select_mode(self, on: bool) -> None:
+        self._select_mode = on
+        self.select_check.setVisible(on)
+
+    def set_selected(self, on: bool) -> None:
+        self._selected = on
+        self.select_check.setChecked(on)

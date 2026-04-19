@@ -27,11 +27,21 @@ class BillingStrip(GlassCard):
 
         # Balance
         self.bal_lbl = QLabel("$—")
+        self.balance_lbl = self.bal_lbl
         self.bal_lbl.setStyleSheet(
             f"color: {t.TEXT_HI}; font-size: 18px; font-weight: 700;"
             f" font-family: {t.FONT_MONO};"
         )
         row.addWidget(self.bal_lbl)
+
+        row.addWidget(VDivider())
+
+        self.today_lbl = QLabel("Today $0.00")
+        self.today_lbl.setStyleSheet(
+            f"color: {t.TEXT_MID}; font-size: 13px; font-weight: 600;"
+            f" font-family: {t.FONT_MONO};"
+        )
+        row.addWidget(self.today_lbl)
 
         row.addWidget(VDivider())
 
@@ -47,6 +57,7 @@ class BillingStrip(GlassCard):
 
         # Autonomy
         self.auto_lbl = QLabel("\u2014")
+        self.autonomy_lbl = self.auto_lbl
         self.auto_lbl.setStyleSheet(
             f"color: {t.TEXT}; font-size: 13px; font-weight: 600;"
         )
@@ -77,6 +88,8 @@ class BillingStrip(GlassCard):
         else:
             self.bal_lbl.setText(f"${user.balance:.2f}")
 
+        self.today_lbl.setText(f"Today ${today_spend:.2f}")
+
         burn = total_burn_rate(
             instances,
             include_storage=cfg.include_storage_in_burn_rate,
@@ -89,11 +102,11 @@ class BillingStrip(GlassCard):
 
         hours = autonomy_hours(user.balance if user else 0.0, display_burn)
         if hours is None:
-            self.auto_lbl.setText("— remaining")
+            self.auto_lbl.setText("Autonomia —")
             self.auto_lbl.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 13px; font-weight: 600;")
         else:
             color = t.autonomy_color(hours)
-            self.auto_lbl.setText(f"{format_autonomy(hours)} remaining")
+            self.auto_lbl.setText(f"Autonomia {format_autonomy(hours)}")
             self.auto_lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: 600;")
             self.bal_lbl.setStyleSheet(
                 f"color: {color}; font-size: 18px; font-weight: 700;"

@@ -333,3 +333,124 @@ class SkeletonBlock(QWidget):
         p.setClipRect(0, 0, w, h)
         p.drawRoundedRect(0, 0, w, h, radius, radius)
         p.end()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Instances revamp primitives
+# ═══════════════════════════════════════════════════════════════════════════════
+import qtawesome as qta
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QPushButton
+
+
+def icon(name: str, color: str = t.TEXT, size: int = 16) -> QIcon:
+    """Return a MaterialDesignIcons QIcon via qtawesome."""
+    return qta.icon(f"mdi.{name}", color=color)
+
+
+class IconButton(QPushButton):
+    """26x26 ghost button with an MDI icon and tooltip."""
+
+    def __init__(
+        self,
+        mdi_name: str,
+        tooltip: str,
+        *,
+        color: str = t.TEXT,
+        danger: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setFixedSize(26, 26)
+        self.setToolTip(tooltip)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mdi = mdi_name
+        self._base_color = t.ERR if danger else color
+        self._refresh_icon()
+        self.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {t.BORDER_LOW};"
+            f" border-radius: 6px; padding: 0; }}"
+            f"QPushButton:hover {{ background: {t.GLASS_HOVER}; border-color: {t.BORDER_MED}; }}"
+            f"QPushButton:disabled {{ background: transparent; border-color: {t.BORDER_LOW}; }}"
+        )
+
+    def _refresh_icon(self) -> None:
+        color = t.TEXT_LOW if not self.isEnabled() else self._base_color
+        self.setIcon(icon(self._mdi, color=color))
+
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        self._refresh_icon()
+
+
+_CHIP_VARIANTS = {
+    "default": (t.SURFACE_2, t.BORDER_LOW, t.TEXT),
+    "ok": ("rgba(59,212,136,0.10)", "rgba(59,212,136,0.30)", t.OK),
+    "accent": ("rgba(124,92,255,0.10)", "rgba(124,92,255,0.30)", t.ACCENT_SOFT),
+    "danger": ("rgba(240,85,106,0.10)", "rgba(240,85,106,0.30)", t.ERR),
+}
+
+
+class Chip(QFrame):
+    """Pill-style label. Variants: default | ok | accent | danger."""
+
+    clicked = Signal()
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        variant: str = "default",
+        mono: bool = False,
+        clickable: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        bg, border, fg = _CHIP_VARIANTS.get(variant, _CHIP_VARIANTS["default"])
+        self._clickable = clickable
+        if clickable:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 2, 8, 2)
+        lay.setSpacing(0)
+        self.label = QLabel(text, self)
+        font = self.label.font()
+        font.setFamily(t.FONT_MONO if mono else t.FONT_DISPLAY)
+        font.setPointSize(9)
+        self.label.setFont(font)
+        self.label.setStyleSheet(f"color: {fg}; background: transparent;")
+        lay.addWidget(self.label)
+
+        self.setObjectName("chip")
+        self.setStyleSheet(
+            f"QFrame#chip {{ background: {bg}; border: 1px solid {border};"
+            f" border-radius: {t.RADIUS_PILL}px; }}"
+        )
+
+    def mousePressEvent(self, e):
+        if self._clickable and e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
+
+
+class ChipRow(QFrame):
+    """Horizontal row of chips with consistent gap."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(6)
+        self._lay.addStretch(1)
+
+    def add(self, chip: Chip) -> None:
+        self._lay.insertWidget(self._lay.count() - 1, chip)
+
+    def clear(self) -> None:
+        while self._lay.count() > 1:
+            item = self._lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()

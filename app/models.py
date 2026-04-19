@@ -67,6 +67,10 @@ class Instance:
     discounted_total_per_hour: float | None = None
     storage_cost_per_gb_month: float | None = None
     storage_total_cost: float | None = None
+    label: str | None = None
+    public_ip: str | None = None
+    is_verified: bool = False
+    inet_billed_per_gb: float = 0.0
     raw: dict = field(default_factory=dict)
 
 
@@ -107,4 +111,7 @@ class AppConfig:
     include_storage_in_burn_rate: bool = True
     burn_rate_smoothing_window: int = 10
     estimated_network_cost_per_hour: float = 0.0
-    schema_version: int = 2
+    port_map: dict = field(default_factory=dict)
+    instance_filters: dict = field(default_factory=dict)
+    bulk_confirm_threshold: int = 1
+    schema_version: int = 3

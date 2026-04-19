@@ -1,8 +1,8 @@
 import pytest
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="session", autouse=True)
 def qt_app():
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QApplication.instance() or QApplication([])
     yield app

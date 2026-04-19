@@ -113,7 +113,10 @@ class SettingsDialog(QDialog):
             include_storage_in_burn_rate=self.config.include_storage_in_burn_rate,
             burn_rate_smoothing_window=self.config.burn_rate_smoothing_window,
             estimated_network_cost_per_hour=self.config.estimated_network_cost_per_hour,
-            schema_version=2,
+            port_map=dict(self.config.port_map),
+            instance_filters=dict(self.config.instance_filters),
+            bulk_confirm_threshold=self.config.bulk_confirm_threshold,
+            schema_version=3,
         )
 
     def _on_browse_key(self):

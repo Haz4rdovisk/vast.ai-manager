@@ -13,6 +13,7 @@ from app.workers.live_metrics import LiveMetricsWorker
 from app.workers.model_watcher import ModelWatcher
 from app.workers.llama_probe import LlamaReadyProbe
 from datetime import datetime, timedelta
+import warnings
 from app.billing import DailySpendTracker, burn_rate_breakdown
 from app.analytics_store import AnalyticsStore, CostSnapshot
 from app.services.rental_service import RentalService
@@ -21,6 +22,7 @@ from app.workers.template_worker import TemplateListWorker
 from app.workers.ssh_key_worker import SshKeyWorker
 from app.workers.rent_worker import RentCreateWorker
 from app.models_rental import OfferQuery, RentRequest
+from app.services.port_allocator import PortAllocator
 
 
 class AppController(QObject):
@@ -56,6 +58,7 @@ class AppController(QObject):
     _trigger_start   = Signal(int)
     _trigger_stop    = Signal(int)
     _trigger_connect = Signal(int, int)
+    _trigger_bulk    = Signal(str, list, dict)
 
     def __init__(self, config_store: ConfigStore, parent=None):
         super().__init__(parent)
@@ -63,6 +66,11 @@ class AppController(QObject):
         self.config: AppConfig = config_store.load()
         self.vast: VastService | None = None
         self.ssh = SSHService(ssh_key_path=self.config.ssh_key_path)
+        self.port_allocator = PortAllocator(
+            default_port=self.config.default_tunnel_port,
+            initial_map=self.config.port_map,
+            persist=self._persist_port_map,
+        )
         self.tracker = DailySpendTracker()
         self.analytics_store = AnalyticsStore(
             path=self.config_store.path.parent / "analytics.json"
@@ -94,6 +102,9 @@ class AppController(QObject):
         self.list_worker:   ListWorker | None    = None
         self.action_worker: ActionWorker | None  = None
         self.tunnel_starter:TunnelStarter | None = None
+        self.bulk_thread = QThread()
+        self.bulk_worker = None
+        self._bulk_in_flight = False
         self._on_passphrase_success: callable | None = None
 
         self.refresh_timer = QTimer(self)
@@ -107,6 +118,8 @@ class AppController(QObject):
         stored = self.analytics_store.today_spend()
         if not self.analytics_store.has_billing_events:
             # No charge data yet — use the live daily tracker alone.
+            return self.tracker.today_spend()
+        if stored <= 0 and self.tracker.today_spend() > 0:
             return self.tracker.today_spend()
         live = self._live_overlay_since(
             datetime.combine(datetime.now().date(), datetime.min.time())
@@ -218,6 +231,15 @@ class AppController(QObject):
         self._trigger_connect.connect(self.tunnel_starter.connect)
         self.tunnel_thread.start()
 
+        from app.workers.bulk_action_worker import BulkActionWorker
+        self.bulk_thread = QThread()
+        self.bulk_worker = BulkActionWorker(self.vast)
+        self.bulk_worker.moveToThread(self.bulk_thread)
+        self.bulk_worker.progress.connect(self._on_bulk_progress)
+        self.bulk_worker.finished.connect(self._on_bulk_finished)
+        self._trigger_bulk.connect(self.bulk_worker.run)
+        self.bulk_thread.start()
+
         self._apply_interval()
         self.log_line.emit("Conectando à Vast.ai...")
         self._trigger_refresh.emit()
@@ -236,6 +258,9 @@ class AppController(QObject):
         if self.store_thread.isRunning():
             self.store_thread.quit()
             self.store_thread.wait(2000)
+        if self.bulk_thread.isRunning():
+            self.bulk_thread.quit()
+            self.bulk_thread.wait(2000)
         self._destroy_workers()
 
     def _destroy_workers(self):
@@ -243,17 +268,32 @@ class AppController(QObject):
             for sig in (self._trigger_refresh, self._trigger_start,
                         self._trigger_stop, self._trigger_connect):
                 try:
-                    sig.disconnect()
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        sig.disconnect()
                 except (RuntimeError, TypeError):
                     pass
-        for t in (self.list_thread, self.action_thread, self.tunnel_thread):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                self._trigger_bulk.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        for t in (self.list_thread, self.action_thread, self.tunnel_thread, self.bulk_thread):
             if t.isRunning():
                 t.quit(); t.wait(1500)
 
     # ---- Config ----
     def apply_config(self, cfg: AppConfig):
         changed_key = cfg.api_key != self.config.api_key
+        cfg.port_map = dict(self.config.port_map)
+        cfg.instance_filters = dict(self.config.instance_filters)
         self.config = cfg
+        self.port_allocator = PortAllocator(
+            default_port=self.config.default_tunnel_port,
+            initial_map=self.config.port_map,
+            persist=self._persist_port_map,
+        )
         self.config_store.save(cfg)
         self.ssh.ssh_key_path = cfg.ssh_key_path
         self.log_line.emit("Configurações salvas.")
@@ -261,6 +301,14 @@ class AppController(QObject):
             self.bootstrap()
         else:
             self._apply_interval()
+
+    def _persist_port_map(self, m: dict[int, int]) -> None:
+        self.config.port_map = m
+        self.config_store.save(self.config)
+
+    def update_instance_filters(self, filters: dict) -> None:
+        self.config.instance_filters = dict(filters)
+        self.config_store.save(self.config)
 
     def _apply_interval(self):
         secs = self.config.refresh_interval_seconds
@@ -279,6 +327,8 @@ class AppController(QObject):
 
     # ---- Refresh callbacks ----
     def _on_refreshed(self, instances: list, user):
+        alive_ids = {i.id for i in instances}
+        self.port_allocator.compact(alive_ids)
         self.last_instances = instances
         self.last_user = user
         
@@ -417,11 +467,12 @@ class AppController(QObject):
             self._on_passphrase_success = lambda: self.connect_tunnel(iid)
             self.passphrase_needed.emit()
             return
+        port = self.port_allocator.get(iid)
         self._pending_tunnel.add(iid)
         self.tunnel_states[iid] = TunnelStatus.CONNECTING
         self.tunnel_status_changed.emit(iid, TunnelStatus.CONNECTING.value, "connecting")
-        self.log_line.emit(f"Conectando #{iid}...")
-        self._trigger_connect.emit(iid, self.config.default_tunnel_port)
+        self.log_line.emit(f"Conectando #{iid} em :{port}...")
+        self._trigger_connect.emit(iid, port)
 
     def disconnect_tunnel(self, iid: int):
         self.ssh.stop_tunnel(iid)
@@ -431,6 +482,39 @@ class AppController(QObject):
         self._pending_tunnel.discard(iid)
         self.log_line.emit(f"Conexão #{iid} encerrada.")
         self.tunnel_status_changed.emit(iid, TunnelStatus.DISCONNECTED.value, "disconnected")
+
+    def bulk_action(self, action: str, ids: list[int], opts: dict | None = None) -> None:
+        opts = opts or {}
+        if action == "connect":
+            for iid in ids:
+                self.connect_tunnel(iid)
+            return
+        if action == "disconnect":
+            for iid in ids:
+                self.disconnect_tunnel(iid)
+            return
+        if self._bulk_in_flight:
+            self.toast_requested.emit("Operação em andamento, aguarde", "warning", 3000)
+            return
+        self._bulk_in_flight = True
+        self._trigger_bulk.emit(action, list(ids), opts)
+
+    def _on_bulk_progress(self, done: int, total: int, iid: int, msg: str) -> None:
+        self.log_line.emit(f"Bulk {done}/{total} #{iid}: {msg}")
+
+    def _on_bulk_finished(self, action: str, ok: list, fail: list) -> None:
+        self._bulk_in_flight = False
+        self.log_line.emit(f"✓ Bulk {action}: {len(ok)} ok, {len(fail)} fail")
+        if fail:
+            self.toast_requested.emit(
+                f"Falhou em {len(fail)} instâncias", "error", 4000)
+        else:
+            self.toast_requested.emit(
+                f"{action} aplicado em {len(ok)} instâncias", "success", 3000)
+        self._trigger_refresh.emit()
+        if action == "start" and self.config.auto_connect_on_activate:
+            for iid in ok:
+                self.connect_tunnel(iid)
 
     def _on_action_done(self, iid: int, action: str, ok: bool, msg: str):
         if action == "start":
@@ -454,12 +538,13 @@ class AppController(QObject):
         self.tunnel_states[iid] = TunnelStatus(status)
         self.log_line.emit(f"Túnel #{iid}: {msg}")
         if self.tunnel_states[iid] == TunnelStatus.CONNECTED:
-            self.toast_requested.emit(f"Conectado em http://127.0.0.1:{self.config.default_tunnel_port}", "success", 3000)
+            port = self.port_allocator.get(iid)
+            self.toast_requested.emit(f"Conectado em http://127.0.0.1:{port}", "success", 3000)
             self._pending_tunnel.discard(iid)
             if iid not in self._live_workers:
                 self._start_live_metrics(iid)
             if self._find_instance(iid) is not None:
-                self._start_model_watcher(iid)
+                self._start_model_watcher(iid, port)
         elif self.tunnel_states[iid] == TunnelStatus.FAILED:
             self.toast_requested.emit("Falha na conexão. Veja o log.", "error", 4000)
             self._pending_tunnel.discard(iid)
@@ -517,9 +602,9 @@ class AppController(QObject):
         if w is not None:
             w.stop(); w.wait(2000)
 
-    def _start_model_watcher(self, iid: int):
+    def _start_model_watcher(self, iid: int, port: int):
         self._stop_model_watcher(iid)
-        w = ModelWatcher(iid, self.config.default_tunnel_port)
+        w = ModelWatcher(iid, port)
         w.model_changed.connect(self.model_changed)
         self._model_watchers[iid] = w
         w.start()
