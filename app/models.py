@@ -71,6 +71,7 @@ class Instance:
     public_ip: str | None = None
     is_verified: bool = False
     inet_billed_per_gb: float = 0.0
+    status_message: str | None = None
     raw: dict = field(default_factory=dict)
 
 

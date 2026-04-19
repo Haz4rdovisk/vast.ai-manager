@@ -75,6 +75,22 @@ def _nested_float(raw: dict, *paths: tuple[str, ...]) -> float | None:
     return None
 
 
+def _status_message(raw: dict) -> str | None:
+    for key in (
+        "status_msg",
+        "status_message",
+        "status_desc",
+        "status_description",
+        "message",
+        "msg",
+        "error_msg",
+    ):
+        text = str(raw.get(key) or "").strip()
+        if text:
+            return text
+    return None
+
+
 def parse_instance(raw: dict) -> Instance:
     gpu_ram_mb = _to_float(raw.get("gpu_ram")) or 0.0
     cpu_ram_mb = _to_float(raw.get("cpu_ram"))
@@ -86,6 +102,7 @@ def parse_instance(raw: dict) -> Instance:
     is_verified = raw.get("verification") == "verified"
     public_ip = raw.get("public_ipaddr") or ""
     inet_billed_per_gb = _to_float(raw.get("inet_up_billed")) or 0.0
+    status_message = _status_message(raw)
 
     iid = int(raw["id"])
     ssh_host = ""
@@ -183,6 +200,7 @@ def parse_instance(raw: dict) -> Instance:
         public_ip=public_ip,
         is_verified=is_verified,
         inet_billed_per_gb=inet_billed_per_gb,
+        status_message=status_message,
         raw=raw,
     )
 

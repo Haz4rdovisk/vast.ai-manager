@@ -16,6 +16,20 @@ def _separator() -> QFrame:
     return sep
 
 
+_SCHEDULING_FALLBACK = (
+    "Attempting to schedule your instance. Your GPU is currently in use, and\n"
+    "your instance will not be able to start until it is free again - which\n"
+    "could take anywhere from hours to weeks. You can copy your data directory\n"
+    "from this instance to a new running instance using the copy buttons on\n"
+    "the control panel. See docs for more info."
+)
+
+
+def _is_scheduling(inst: Instance) -> bool:
+    actual = str(inst.raw.get("actual_status") or "").lower()
+    return actual == "scheduling" or "schedule" in str(inst.status_message or "").lower()
+
+
 class ActionBar(QFrame):
     """Primary CTA plus icon button row."""
 
@@ -74,7 +88,15 @@ class ActionBar(QFrame):
         self.btn_lab.clicked.connect(self.lab_requested)
 
     def _build_primary(self, inst: Instance, tunnel: TunnelStatus) -> QPushButton:
-        if inst.state == InstanceState.STOPPED:
+        tooltip = ""
+        disabled_color = BORDER_LOW
+        keep_enabled = False
+        if inst.state == InstanceState.STARTING and _is_scheduling(inst):
+            label, sig, color = "scheduling...", None, ACCENT
+            disabled_color = ACCENT
+            keep_enabled = True
+            tooltip = inst.status_message or _SCHEDULING_FALLBACK
+        elif inst.state == InstanceState.STOPPED:
             label, sig, color = "Activate", self.activate_requested, ACCENT
         elif inst.state == InstanceState.STARTING:
             label, sig, color = "Starting...", None, TEXT
@@ -93,14 +115,16 @@ class ActionBar(QFrame):
         font.setBold(True)
         btn.setFont(font)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if tooltip:
+            btn.setToolTip(tooltip)
         btn.setStyleSheet(
             f"QPushButton {{ background: {color}; color: white; border: none;"
             f" border-radius: 8px; padding: 4px 14px; }}"
             f"QPushButton:hover {{ background: {ACCENT_HI}; }}"
-            f"QPushButton:disabled {{ background: {BORDER_LOW}; color: {TEXT}; }}"
+            f"QPushButton:disabled {{ background: {disabled_color}; color: white; }}"
         )
         if sig is not None:
             btn.clicked.connect(lambda: sig.emit())
-        else:
+        elif not keep_enabled:
             btn.setEnabled(False)
         return btn
