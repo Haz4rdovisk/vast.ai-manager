@@ -163,8 +163,8 @@ vastai-app/
 
 ### Workflow 1: Rent a GPU in < 2 Minutes
 1. Navigate to **Store** → Select preset "ML Training" or custom filter (e.g., RTX 4090, $0.15/hr)
-2. Click **Rent** on desired offer → Configure template (Ubuntu 22.04 + Docker)
-3. Wait for provisioning (~60s) → Instance appears in dashboard with live metrics
+2. Click **Rent** on desired offer → Configure template (eg. Vast.ai NVIDIA CUDA)
+3. Wait for provisioning → Instance appears in dashboard with live metrics
 
 ### Workflow 2: Monitor Costs & Set Alerts
 1. Open **Analytics** view to see 24h/7d/30d burn rates
