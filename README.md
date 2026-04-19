@@ -60,6 +60,16 @@ The Instances tab provides a dense, multi-instance interface for power users:
 *   **Automated Setup**: One-click scripts to install and configure `LLMfit` and `llama.cpp`.
 *   **Model Advisor**: Integrated recommendation engine for GGUF model selection based on local hardware capacity.
 
+## AI Lab Studio
+
+The AI Lab now works like LM Studio:
+
+- **Discover** — local scorer ranks catalog models for every rented instance, shown as chips on each card.
+- **Install** — one click downloads llama.cpp (if missing) and the GGUF, with live step-by-step progress.
+- **Studio** — pick an instance, pick a model, tweak parameters, hit Load. The llama.cpp webui is embedded for chat. Launch errors surface a diagnostic banner with a one-click Fix action.
+
+Requires `PySide6-Addons` (QtWebEngine) and `requests`. See `requirements.txt`.
+
 ---
 
 ## 🚀 Installation
@@ -175,7 +185,7 @@ vastai-app/
 ### Workflow 1: Rent a GPU in < 2 Minutes
 1. Navigate to **Store** → Select preset "ML Training" or custom filter (e.g., RTX 4090, $0.15/hr)
 2. Click **Rent** on desired offer → Configure template (eg. Vast.ai NVIDIA CUDA)
-3. Wait for provisioning → Instance appears in dashboard with live metrics
+3. Wait for provisioning → Instance appears in **Instances** with live metrics
 
 ### Workflow 2: Monitor Costs & Set Alerts
 1. Open **Analytics** view to see 24h/7d/30d burn rates
@@ -183,16 +193,16 @@ vastai-app/
 3. Historical timeline shows credit consumption spikes and deposits
 
 ### Workflow 3: Deploy LLM with One Click
-1. Navigate to **Remote AI Lab** → Select active instance
-2. Run **Automated Setup**: Installs `LLMfit` + `llama.cpp`
-3. Use **Model Advisor** to select GGUF model based on available VRAM
-4. Launch inference server accessible via SSH tunnel
+1. Open **Studio** from an active instance
+2. Use **Discover** to score catalog models against the selected hardware
+3. Click **Install** to build `llama.cpp` if needed and download the GGUF with live progress
+4. Return to **Studio**, pick the model, tune parameters, and load the embedded llama.cpp webui
 
 ---
 
 ## 🖼 Screenshots
 
-*Coming soon: Dashboard with live gauges, Marketplace filtering interface, and Remote AI Lab setup wizard.*
+Screenshots are maintained with the release notes as the interface changes.
 
 ---
 

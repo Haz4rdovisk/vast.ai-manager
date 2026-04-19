@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Qt
 from app import theme as t
-from app.ui.components.primitives import GlassCard, SectionHeader, StatusPill
+from app.ui.components.primitives import GlassCard, StatusPill
 
 
 _FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err"}
@@ -39,7 +39,7 @@ class DiscoverView(QWidget):
         back_btn.setFixedWidth(80)
         back_btn.clicked.connect(self.back_requested.emit)
         breadcrumb.addWidget(back_btn)
-        self.ctx_lbl = QLabel("Dashboard \u203a Discover Models")
+        self.ctx_lbl = QLabel("Studio \u203a Discover Models")
         self.ctx_lbl.setStyleSheet(
             f"color: {t.TEXT_MID}; font-weight: 500;"
             f" font-size: {t.FONT_SIZE_SMALL}px;"
@@ -57,7 +57,7 @@ class DiscoverView(QWidget):
         title.setStyleSheet(
             f"color: {t.TEXT_HERO}; font-size: 24px; font-weight: 700;"
         )
-        sub = QLabel("Powered by LLMfit \u2014 AI-ranked models for your hardware")
+        sub = QLabel("Locally ranked models for your rented hardware")
         sub.setStyleSheet(
             f"color: {t.TEXT_MID}; font-size: {t.FONT_SIZE_SMALL}px;"
         )
@@ -87,7 +87,7 @@ class DiscoverView(QWidget):
 
         # Status
         self.status_lbl = QLabel(
-            "LLMfit must be running. Go to Dashboard \u2192 Setup."
+            "Select an instance and refresh to score the local catalog."
         )
         self.status_lbl.setProperty("role", "muted")
         self.status_lbl.setWordWrap(True)
@@ -105,11 +105,8 @@ class DiscoverView(QWidget):
 
         # Store connections
         self.store.instance_changed.connect(self._on_instance_changed)
-        self.store.remote_models_changed.connect(self._render)
-        self.store.setup_status_changed.connect(self._update_status)
-        self.store.instance_state_updated.connect(
-            lambda iid, _: self._check_busy(iid)
-        )
+        self.store.scored_models_changed.connect(self._render)
+        self.store.instance_state_updated.connect(self._on_instance_state_updated)
 
     def _check_busy(self, iid: int):
         if iid == self.store.selected_instance_id:
@@ -121,10 +118,18 @@ class DiscoverView(QWidget):
     def _on_instance_changed(self, iid: int):
         if iid:
             self.ctx_lbl.setText(
-                f"Dashboard \u203a Instance #{iid} \u203a Discover"
+                f"Studio \u203a Instance #{iid} \u203a Discover"
             )
+            self._render(self.store.get_state(iid).scored_models)
         else:
-            self.ctx_lbl.setText("Dashboard \u203a Discover Models")
+            self.ctx_lbl.setText("Studio \u203a Discover Models")
+            self._render([])
+
+    def _on_instance_state_updated(self, iid: int, _state):
+        self._check_busy(iid)
+        selected = self.store.selected_instance_id
+        if selected:
+            self._render(self.store.get_state(selected).scored_models)
 
     def _refresh(self):
         iid = self.store.selected_instance_id
@@ -133,19 +138,6 @@ class DiscoverView(QWidget):
         uc = self.filter.currentData() or "all"
         search = self.search_input.text().strip()
         self.refresh_requested.emit(uc, search)
-
-    def _update_status(self, s):
-        if s.llmfit_serving:
-            self.status_lbl.setText(
-                "\u2714 LLMfit active \u00b7 Showing models ranked for "
-                "this machine\u2019s hardware."
-            )
-            self.status_lbl.setStyleSheet(f"color: {t.OK};")
-        else:
-            self.status_lbl.setText(
-                "\u26A0 LLMfit not running. Install from Dashboard setup."
-            )
-            self.status_lbl.setStyleSheet(f"color: {t.WARN};")
 
     def _render(self, models):
         if models is None:
@@ -157,33 +149,22 @@ class DiscoverView(QWidget):
                 item.widget().deleteLater()
 
         if not models:
-            iid = self.store.selected_instance_id
-            st = self.store.get_state(iid) if iid else None
-            is_busy = st and (
-                "discover" in st.busy_keys
-                or "setup" in st.busy_keys
-                or "probe" in st.busy_keys
-            )
-            if is_busy:
-                msg = "Searching for models matching your hardware..."
-                if st and "setup" in st.busy_keys:
-                    msg = "Waking up Model Advisor (LLMfit)... almost there."
-                lbl = QLabel(msg)
-            else:
-                lbl = QLabel(
-                    "No models found. Try a different filter or search."
-                )
+            lbl = QLabel("No models scored yet. Select an instance to refresh.")
             lbl.setProperty("role", "muted")
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet(f"padding: 60px 0; font-size: 12pt;")
+            lbl.setStyleSheet("padding: 60px 0; font-size: 12pt;")
             self.list_lay.addWidget(lbl)
             self.list_lay.addStretch()
             return
 
+        other_ids = [
+            iid for iid in self.store.all_instance_ids()
+            if iid != self.store.selected_instance_id
+        ]
+
         for m in models:
             card = GlassCard()
 
-            # Row 1: Title + Fit pill
             header = QHBoxLayout()
             title = QLabel(m.name)
             title.setStyleSheet(
@@ -197,39 +178,58 @@ class DiscoverView(QWidget):
             )
             card.body().addLayout(header)
 
-            # Row 2: Meta
-            meta_parts = []
-            if m.provider:
-                meta_parts.append(m.provider)
-            meta_parts.append(f"{m.params_b:.1f}B")
-            if m.best_quant:
-                meta_parts.append(m.best_quant)
-            if m.use_case:
-                meta_parts.append(m.use_case)
+            meta_parts = [m.provider, f"{m.params_b:.1f}B", m.best_quant, m.use_case]
             if m.estimated_tps:
                 meta_parts.append(f"~{m.estimated_tps:.0f} tok/s")
-            meta = QLabel("  \u00b7  ".join(meta_parts))
+            meta = QLabel("  \u00b7  ".join([part for part in meta_parts if part]))
             meta.setProperty("role", "muted")
             card.body().addWidget(meta)
 
-            # Row 3: Score + Download
-            score_row = QHBoxLayout()
-            score_lbl = QLabel(f"Rank Score: {m.score:.0f}")
-            score_lbl.setStyleSheet(
-                f"color: {t.ACCENT}; font-weight: bold; font-size: 12pt;"
+            chip_row = QHBoxLayout()
+            iid = self.store.selected_instance_id
+            chip_row.addWidget(
+                self._chip(
+                    f"#{iid} \u2022 {m.score:.0f}",
+                    _FIT_LEVEL.get(m.fit_level, "info"),
+                )
             )
-            score_row.addWidget(score_lbl)
-            score_row.addStretch()
+            for other in other_ids:
+                other_models = self.store.get_state(other).scored_models
+                other_entry = next((entry for entry in other_models if entry.name == m.name), None)
+                if other_entry is None:
+                    continue
+                chip_row.addWidget(
+                    self._chip(
+                        f"#{other} \u2022 {other_entry.score:.0f}",
+                        _FIT_LEVEL.get(other_entry.fit_level, "info"),
+                    )
+                )
+            chip_row.addStretch()
 
-            dl_btn = QPushButton("Download")
+            dl_btn = QPushButton("Install")
             dl_btn.setEnabled(m.fit_level != "too_tight")
             dl_btn.clicked.connect(
                 lambda _=False, name=m.name, q=m.best_quant:
                     self.download_requested.emit(name, q)
             )
-            score_row.addWidget(dl_btn)
-            card.body().addLayout(score_row)
+            chip_row.addWidget(dl_btn)
+            card.body().addLayout(chip_row)
 
             self.list_lay.addWidget(card)
 
         self.list_lay.addStretch()
+
+    def _chip(self, text: str, level: str) -> QLabel:
+        palette = {
+            "ok": (t.OK, "rgba(80,200,120,0.15)"),
+            "info": (getattr(t, "INFO", t.ACCENT), "rgba(124,92,255,0.15)"),
+            "warn": (t.WARN, "rgba(255,176,46,0.15)"),
+            "err": (t.ERR, "rgba(255,80,80,0.15)"),
+        }
+        fg, bg = palette.get(level, palette["info"])
+        label = QLabel(text)
+        label.setStyleSheet(
+            f"color: {fg}; background: {bg}; border-radius: 8px;"
+            f" padding: 3px 8px; font-weight: 600; font-size: 10pt;"
+        )
+        return label

@@ -18,11 +18,10 @@ NAV_ITEMS = [
     ("store",      "Store",       "store",     "CLOUD"),
     ("analytics",  "Analytics",   "analytics", "CLOUD"),
     # ── AI LAB ──
-    ("dashboard",  "Dashboard",   "dashboard", "AI LAB"),
+    ("studio",     "Studio",      "dashboard", "AI LAB"),
     ("hardware",   "Hardware",    "hardware",  "AI LAB"),
     ("discover",   "Discover",    "discover",  "AI LAB"),
     ("models",     "Models",      "models",    "AI LAB"),
-    ("monitor",    "Monitor",     "monitor",   "AI LAB"),
     # ── SYSTEM ──
     ("settings",   "Settings",    "settings",  "SYSTEM"),
 ]

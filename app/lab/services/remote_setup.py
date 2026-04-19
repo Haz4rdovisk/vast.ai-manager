@@ -257,8 +257,8 @@ else
 fi
 
 cd /opt/llama.cpp
-cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native 2>&1 | tail -5
-cmake --build build --config Release -j$(nproc) -- llama-server llama-cli 2>&1 | tail -10
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native 2>&1
+cmake --build build --config Release -j$(nproc) -- llama-server llama-cli 2>&1
 
 if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
     echo "INSTALL_LLAMACPP_DONE"
@@ -317,9 +317,9 @@ echo "Downloading {filename} from HuggingFace..."
 mkdir -p "{dest_dir}"
 cd "{dest_dir}"
 if command -v wget &>/dev/null; then
-    wget -c --progress=dot:giga -O "{dest}" "{url}" 2>&1 | tail -5
+    wget -c --progress=dot:giga -O "{dest}" "{url}" 2>&1
 elif command -v curl &>/dev/null; then
-    curl -L -C - -o "{dest}" "{url}" 2>&1 | tail -5
+    curl -L -C - -o "{dest}" "{url}" 2>&1
 fi
 
 if [ -f "{dest}" ]; then

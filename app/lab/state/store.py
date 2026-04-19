@@ -2,8 +2,15 @@
 from __future__ import annotations
 from PySide6.QtCore import QObject, Signal
 from app.lab.state.models import (
-    RemoteSystem, RemoteModel, RemoteGGUF, SetupStatus, ServerParams,
+    DownloadJob,
+    InstallJob,
     LabInstanceState,
+    RemoteGGUF,
+    RemoteModel,
+    RemoteSystem,
+    ScoredCatalogModel,
+    ServerParams,
+    SetupStatus,
 )
 
 
@@ -12,10 +19,13 @@ class LabStore(QObject):
     instance_changed = Signal(int)               # instance id (the one focused by the lab)
     instance_state_updated = Signal(int, object) # iid, LabInstanceState
     busy_changed = Signal(str, bool)             # global busy (unified probe/setup)
+    install_job_changed = Signal(int, object)    # iid, InstallJob
+    download_job_changed = Signal(int, object)   # iid, DownloadJob
 
     # --- Compatibility signals (fire for current_selected_instance) ---
     remote_system_changed = Signal(object)       # RemoteSystem
     remote_models_changed = Signal(list)         # list[RemoteModel]
+    scored_models_changed = Signal(list)         # list[ScoredCatalogModel]
     remote_gguf_changed = Signal(list)           # list[RemoteGGUF]
     setup_status_changed = Signal(object)        # SetupStatus
     server_params_changed = Signal(object)       # ServerParams
@@ -36,7 +46,7 @@ class LabStore(QObject):
         return list(self.instance_states.keys())
 
     def set_instance(self, iid: int | None):
-        """Focus the UI (other than Dashboard) on a specific instance."""
+        """Focus Lab views on a specific instance."""
         self.selected_instance_id = iid
         self.instance_changed.emit(iid or 0)
         
@@ -44,6 +54,7 @@ class LabStore(QObject):
         st = self.get_state(iid) if iid else LabInstanceState(iid=0)
         self.remote_system_changed.emit(st.system)
         self.remote_models_changed.emit(st.models)
+        self.scored_models_changed.emit(st.scored_models)
         self.remote_gguf_changed.emit(st.gguf)
         self.setup_status_changed.emit(st.setup)
         self.server_params_changed.emit(st.server_params)
@@ -70,6 +81,57 @@ class LabStore(QObject):
         self.instance_state_updated.emit(iid, st)
         if iid == self.selected_instance_id:
             self.remote_models_changed.emit(models)
+
+    def set_scored_models(self, iid: int, scored):
+        """Store scored catalog models as flat DTOs.
+
+        Accepts list[ScoredCatalogModel] or list[fit_scorer.ScoredModel] to keep
+        views independent from scorer service imports.
+        """
+        flat: list[ScoredCatalogModel] = []
+        for item in scored:
+            if isinstance(item, ScoredCatalogModel):
+                flat.append(item)
+                continue
+
+            entry = item.entry
+            flat.append(
+                ScoredCatalogModel(
+                    name=entry.name,
+                    provider=entry.provider,
+                    params_b=entry.params_b,
+                    best_quant=entry.best_quant,
+                    use_case=entry.use_case,
+                    fit_level=item.fit_level,
+                    fit_label=item.fit_label,
+                    run_mode=item.run_mode,
+                    score=item.score,
+                    utilization_pct=item.utilization_pct,
+                    memory_required_gb=entry.memory_required_gb,
+                    memory_available_gb=item.memory_available_gb,
+                    estimated_tps=item.estimated_tps,
+                    gguf_sources=list(entry.gguf_sources),
+                    notes=list(item.notes),
+                )
+            )
+
+        st = self.get_state(iid)
+        st.scored_models = flat
+        self.instance_state_updated.emit(iid, st)
+        if iid == self.selected_instance_id:
+            self.scored_models_changed.emit(flat)
+
+    def update_install_job(self, iid: int, job: InstallJob):
+        st = self.get_state(iid)
+        st.install_job = job
+        self.instance_state_updated.emit(iid, st)
+        self.install_job_changed.emit(iid, job)
+
+    def update_download_job(self, iid: int, job: DownloadJob):
+        st = self.get_state(iid)
+        st.download_job = job
+        self.instance_state_updated.emit(iid, st)
+        self.download_job_changed.emit(iid, job)
 
     def set_remote_gguf(self, iid: int, files: list[RemoteGGUF]):
         st = self.get_state(iid)
@@ -106,8 +168,8 @@ class LabStore(QObject):
         else:
             st.busy_keys.discard(key)
         self.instance_state_updated.emit(iid, st)
-        # We don't have a direct compatibility signal for busy, 
-        # but views might need it. For now Dashboard handles it.
+        # We don't have a direct compatibility signal for busy, but views can
+        # listen to instance_state_updated for per-instance busy keys.
 
     # Global busy (e.g. for general UI overlays)
     def set_busy(self, key: str, busy: bool):

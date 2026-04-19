@@ -237,7 +237,7 @@ git commit -m "feat(ssh): add stream_script for line-by-line remote output"
 - Create: `app/lab/workers/streaming_worker.py`
 - Test: `tests/lab/test_streaming_worker.py`
 
-- [ ] **Step 2.1: Write the failing test**
+- [x] **Step 2.1: Write the failing test**
 
 Create `tests/lab/test_streaming_worker.py`:
 
@@ -289,7 +289,7 @@ def test_streaming_worker_propagates_failure(qt_app):
     assert done["ok"] is False
 ```
 
-- [ ] **Step 2.2: Run — expect failure**
+- [x] **Step 2.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_streaming_worker.py -v
@@ -297,7 +297,7 @@ python -m pytest tests/lab/test_streaming_worker.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 2.3: Implement**
+- [x] **Step 2.3: Implement**
 
 Create `app/lab/workers/streaming_worker.py`:
 
@@ -329,7 +329,7 @@ class StreamingRemoteWorker(QThread):
             self.finished.emit(False, str(e))
 ```
 
-- [ ] **Step 2.4: Run tests — expect pass**
+- [x] **Step 2.4: Run tests — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_streaming_worker.py -v
@@ -352,7 +352,7 @@ git commit -m "feat(lab): add StreamingRemoteWorker for live remote output"
 - Create: `app/lab/services/progress_parsers.py`
 - Test: `tests/lab/test_progress_parsers.py`
 
-- [ ] **Step 3.1: Write the failing tests**
+- [x] **Step 3.1: Write the failing tests**
 
 Create `tests/lab/test_progress_parsers.py`:
 
@@ -403,7 +403,7 @@ def test_cmake_build_stage_done():
     assert ev == BuildEvent(stage="done", detail="INSTALL_LLAMACPP_DONE")
 ```
 
-- [ ] **Step 3.2: Run — expect failure**
+- [x] **Step 3.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_progress_parsers.py -v
@@ -411,7 +411,7 @@ python -m pytest tests/lab/test_progress_parsers.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 3.3: Implement parsers**
+- [x] **Step 3.3: Implement parsers**
 
 Create `app/lab/services/progress_parsers.py`:
 
@@ -468,7 +468,7 @@ def parse_cmake_build_stage(line: str) -> BuildEvent:
     return BuildEvent(stage="unknown", detail=line)
 ```
 
-- [ ] **Step 3.4: Run — expect pass**
+- [x] **Step 3.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_progress_parsers.py -v
@@ -491,7 +491,7 @@ git commit -m "feat(lab): add progress parsers for wget/cmake output"
 - Create: `app/ui/components/progress_panel.py`
 - Test: `tests/lab/test_progress_panel.py`
 
-- [ ] **Step 4.1: Write the failing test**
+- [x] **Step 4.1: Write the failing test**
 
 Create `tests/lab/test_progress_panel.py`:
 
@@ -528,7 +528,7 @@ def test_progress_panel_set_percent(qt_app):
     assert p.percent() == 42
 ```
 
-- [ ] **Step 4.2: Run — expect failure**
+- [x] **Step 4.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_progress_panel.py -v
@@ -536,7 +536,7 @@ python -m pytest tests/lab/test_progress_panel.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 4.3: Implement**
+- [x] **Step 4.3: Implement**
 
 Create `app/ui/components/progress_panel.py`:
 
@@ -640,7 +640,7 @@ class ProgressPanel(QWidget):
         return self._percent
 ```
 
-- [ ] **Step 4.4: Run — expect pass**
+- [x] **Step 4.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_progress_panel.py -v
@@ -663,7 +663,7 @@ git commit -m "feat(ui): add reusable ProgressPanel (steps + log + bar)"
 - Create: `app/lab/services/diagnostics.py`
 - Test: `tests/lab/test_diagnostics.py`
 
-- [ ] **Step 5.1: Write the failing test**
+- [x] **Step 5.1: Write the failing test**
 
 Create `tests/lab/test_diagnostics.py`:
 
@@ -705,7 +705,7 @@ def test_classify_unknown_returns_none_on_clean_log():
     assert classify_server_log(log) is None
 ```
 
-- [ ] **Step 5.2: Run — expect failure**
+- [x] **Step 5.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_diagnostics.py -v
@@ -713,7 +713,7 @@ python -m pytest tests/lab/test_diagnostics.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 5.3: Implement**
+- [x] **Step 5.3: Implement**
 
 Create `app/lab/services/diagnostics.py`:
 
@@ -785,7 +785,7 @@ def _extract_context(log: str, needle: str, window: int = 160) -> str:
     return log[start:end].strip()
 ```
 
-- [ ] **Step 5.4: Run — expect pass**
+- [x] **Step 5.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_diagnostics.py -v
@@ -811,7 +811,7 @@ git commit -m "feat(lab): add rule-based llama-server log diagnostics"
 - Create: `app/lab/assets/models_catalog.json` (seed data)
 - Test: `tests/lab/test_model_catalog.py`
 
-- [ ] **Step 6.1: Write the failing test**
+- [x] **Step 6.1: Write the failing test**
 
 Create `tests/lab/test_model_catalog.py`:
 
@@ -841,7 +841,7 @@ def test_catalog_search_name():
     assert any("qwen" in e.name.lower() for e in hits)
 ```
 
-- [ ] **Step 6.2: Run — expect failure**
+- [x] **Step 6.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_model_catalog.py -v
@@ -849,7 +849,7 @@ python -m pytest tests/lab/test_model_catalog.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 6.3: Seed the catalog JSON**
+- [x] **Step 6.3: Seed the catalog JSON**
 
 Create `app/lab/assets/models_catalog.json` with at least six diverse entries. Use this exact content:
 
@@ -882,7 +882,7 @@ Create `app/lab/assets/models_catalog.json` with at least six diverse entries. U
 ]
 ```
 
-- [ ] **Step 6.4: Implement `model_catalog.py`**
+- [x] **Step 6.4: Implement `model_catalog.py`**
 
 Create `app/lab/services/model_catalog.py`:
 
@@ -932,7 +932,7 @@ class ModelCatalog:
         return out
 ```
 
-- [ ] **Step 6.5: Run — expect pass**
+- [x] **Step 6.5: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_model_catalog.py -v
@@ -955,7 +955,7 @@ git commit -m "feat(lab): add bundled model catalog for local scoring"
 - Create: `app/lab/services/fit_scorer.py`
 - Test: `tests/lab/test_fit_scorer.py`
 
-- [ ] **Step 7.1: Write the failing test**
+- [x] **Step 7.1: Write the failing test**
 
 Create `tests/lab/test_fit_scorer.py`:
 
@@ -1012,7 +1012,7 @@ def test_scores_cpu_when_no_gpu():
     assert sm.fit_level in ("good", "marginal")
 ```
 
-- [ ] **Step 7.2: Run — expect failure**
+- [x] **Step 7.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_fit_scorer.py -v
@@ -1020,7 +1020,7 @@ python -m pytest tests/lab/test_fit_scorer.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 7.3: Implement**
+- [x] **Step 7.3: Implement**
 
 Create `app/lab/services/fit_scorer.py`:
 
@@ -1103,7 +1103,7 @@ class InstanceFitScorer:
         )
 ```
 
-- [ ] **Step 7.4: Run — expect pass**
+- [x] **Step 7.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_fit_scorer.py -v
@@ -1126,7 +1126,7 @@ git commit -m "feat(lab): add local InstanceFitScorer (replaces remote LLMfit)"
 - Create: `app/lab/services/local_llmfit.py`
 - Test: `tests/lab/test_local_llmfit.py`
 
-- [ ] **Step 8.1: Write the failing test**
+- [x] **Step 8.1: Write the failing test**
 
 Create `tests/lab/test_local_llmfit.py`:
 
@@ -1153,7 +1153,7 @@ def test_install_commands_on_windows():
     assert "llmfit" in joined
 ```
 
-- [ ] **Step 8.2: Run — expect failure**
+- [x] **Step 8.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_local_llmfit.py -v
@@ -1161,7 +1161,7 @@ python -m pytest tests/lab/test_local_llmfit.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 8.3: Implement**
+- [x] **Step 8.3: Implement**
 
 Create `app/lab/services/local_llmfit.py`:
 
@@ -1187,7 +1187,7 @@ class LocalLLMFit:
         ]
 ```
 
-- [ ] **Step 8.4: Run — expect pass**
+- [x] **Step 8.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_local_llmfit.py -v
@@ -1211,7 +1211,7 @@ git commit -m "feat(lab): add LocalLLMFit wrapper (catalog refresh helper)"
 - Modify: `app/lab/state/store.py`
 - Test: `tests/lab/test_remote_setup.py` (add a new test file `tests/lab/test_lab_store.py` if it doesn't exist)
 
-- [ ] **Step 9.1: Write the failing test**
+- [x] **Step 9.1: Write the failing test**
 
 Create `tests/lab/test_lab_store.py`:
 
@@ -1242,7 +1242,7 @@ def test_store_emits_signal_on_scored_update(qt_app):
     assert received == [[]]
 ```
 
-- [ ] **Step 9.2: Run — expect failure**
+- [x] **Step 9.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_lab_store.py -v
@@ -1250,7 +1250,7 @@ python -m pytest tests/lab/test_lab_store.py -v
 
 Expected: FAIL — `scored_models`, `set_scored_models`, `scored_models_changed` don't exist.
 
-- [ ] **Step 9.3: Add fields + method**
+- [x] **Step 9.3: Add fields + method**
 
 In `app/lab/state/models.py`, after `RemoteGGUF` add:
 
@@ -1315,7 +1315,7 @@ In `app/lab/state/store.py`:
             self.scored_models_changed.emit(flat)
 ```
 
-- [ ] **Step 9.4: Run — expect pass**
+- [x] **Step 9.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_lab_store.py -v
@@ -1323,7 +1323,7 @@ python -m pytest tests/lab/test_lab_store.py -v
 
 Expected: PASS.
 
-- [ ] **Step 9.5: Run full suite — must stay green**
+- [x] **Step 9.5: Run full suite — must stay green**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -1344,7 +1344,7 @@ git commit -m "feat(lab): add scored_models per instance to LabStore"
 - Modify: `app/lab/views/discover_view.py`
 - Test: `tests/lab/test_discover_view_scoring.py`
 
-- [ ] **Step 10.1: Write the failing test**
+- [x] **Step 10.1: Write the failing test**
 
 Create `tests/lab/test_discover_view_scoring.py`:
 
@@ -1414,7 +1414,7 @@ def test_discover_shows_per_instance_score_column(qt_app):
     assert any("#2" in t for t in texts)
 ```
 
-- [ ] **Step 10.2: Run — expect failure**
+- [x] **Step 10.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_discover_view_scoring.py -v
@@ -1422,7 +1422,7 @@ python -m pytest tests/lab/test_discover_view_scoring.py -v
 
 Expected: FAIL — existing view reads `store.remote_models_changed`, not `scored_models_changed`; also lacks per-instance chips.
 
-- [ ] **Step 10.3: Modify `DiscoverView`**
+- [x] **Step 10.3: Modify `DiscoverView`**
 
 In `app/lab/views/discover_view.py`:
 
@@ -1530,7 +1530,7 @@ Replace the `_render` body (currently ~150-235) with:
 
 Also ensure the view still exposes `status_lbl` (kept for the existing status message) and does not crash if no instance is selected.
 
-- [ ] **Step 10.4: Run — expect pass**
+- [x] **Step 10.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_discover_view_scoring.py -v
@@ -1538,7 +1538,7 @@ python -m pytest tests/lab/test_discover_view_scoring.py -v
 
 Expected: PASS.
 
-- [ ] **Step 10.5: Run full suite — stay green**
+- [x] **Step 10.5: Run full suite — stay green**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -1558,7 +1558,7 @@ git commit -m "feat(lab): discover view uses local scorer, shows per-instance ch
 **Files:**
 - Modify: `app/ui/app_shell.py`
 
-- [ ] **Step 11.1: Replace the remote-LLMfit refresh**
+- [x] **Step 11.1: Replace the remote-LLMfit refresh**
 
 In `app/ui/app_shell.py`, replace `_refresh_llmfit_models`, `_perform_llmfit_query`, `_on_llmfit_models_done` (currently lines ~444-489) with the following **single** method:
 
@@ -1594,7 +1594,7 @@ python main.py
 
 Expected: the app boots; Discover tab shows scored cards for selected instance; no errors in the console. Close the app.
 
-- [ ] **Step 11.3: Run full suite**
+- [x] **Step 11.3: Run full suite**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -1618,7 +1618,7 @@ git commit -m "refactor(lab): discover refresh scores catalog locally"
 - Modify: `app/lab/state/store.py`
 - Test: `tests/lab/test_lab_store.py` (append)
 
-- [ ] **Step 12.1: Write the failing test**
+- [x] **Step 12.1: Write the failing test**
 
 Append to `tests/lab/test_lab_store.py`:
 
@@ -1644,7 +1644,7 @@ def test_download_job_progress_signal(qt_app):
     assert events == [(5, 37)]
 ```
 
-- [ ] **Step 12.2: Run — expect failure**
+- [x] **Step 12.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_lab_store.py::test_install_job_progress_signal tests/lab/test_lab_store.py::test_download_job_progress_signal -v
@@ -1652,7 +1652,7 @@ python -m pytest tests/lab/test_lab_store.py::test_install_job_progress_signal t
 
 Expected: FAIL — dataclasses/signals missing.
 
-- [ ] **Step 12.3: Add dataclasses**
+- [x] **Step 12.3: Add dataclasses**
 
 In `app/lab/state/models.py`, append:
 
@@ -1685,7 +1685,7 @@ Add to `LabInstanceState`:
     download_job: "DownloadJob | None" = None
 ```
 
-- [ ] **Step 12.4: Add signals + update methods in store**
+- [x] **Step 12.4: Add signals + update methods in store**
 
 In `app/lab/state/store.py`:
 
@@ -1713,7 +1713,7 @@ In `app/lab/state/store.py`:
         self.download_job_changed.emit(iid, job)
 ```
 
-- [ ] **Step 12.5: Run — expect pass**
+- [x] **Step 12.5: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_lab_store.py -v
@@ -1736,7 +1736,7 @@ git commit -m "feat(lab): add Install/Download job state + store signals"
 - Create: `app/lab/views/install_panel.py`
 - Test: `tests/lab/test_install_panel.py`
 
-- [ ] **Step 13.1: Write the failing test**
+- [x] **Step 13.1: Write the failing test**
 
 Create `tests/lab/test_install_panel.py`:
 
@@ -1776,7 +1776,7 @@ def test_download_job_updates_download_progress(qt_app):
     assert panel.download_progress.percent() == 73
 ```
 
-- [ ] **Step 13.2: Run — expect failure**
+- [x] **Step 13.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_install_panel.py -v
@@ -1784,7 +1784,7 @@ python -m pytest tests/lab/test_install_panel.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 13.3: Implement**
+- [x] **Step 13.3: Implement**
 
 Create `app/lab/views/install_panel.py`:
 
@@ -1879,7 +1879,7 @@ class InstallPanel(QWidget):
             self.download_progress.append_log(f"{job.percent}% \u00b7 {job.speed}")
 ```
 
-- [ ] **Step 13.4: Run — expect pass**
+- [x] **Step 13.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_install_panel.py -v
@@ -1901,7 +1901,7 @@ git commit -m "feat(lab): add InstallPanel view (llama.cpp install + GGUF downlo
 **Files:**
 - Modify: `app/ui/app_shell.py`
 
-- [ ] **Step 14.1: Add an install flow method**
+- [x] **Step 14.1: Add an install flow method**
 
 In `app/ui/app_shell.py`, at the top add import:
 
@@ -2014,7 +2014,7 @@ python main.py
 
 Manually: select an instance, go to Discover, click Install on a model. The app should switch to the Install panel and the progress should advance. Don't wait for the full build; just confirm UI updates. Close the app.
 
-- [ ] **Step 14.3: Run full suite**
+- [x] **Step 14.3: Run full suite**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -2038,7 +2038,7 @@ git commit -m "feat(lab): wire live install + download progress via streaming wo
 - Modify: `app/lab/views/configure_view.py` (delegate to the new form)
 - Test: `tests/lab/test_model_params.py` (add new file `tests/lab/test_server_params_form.py` if needed)
 
-- [ ] **Step 15.1: Write the failing test**
+- [x] **Step 15.1: Write the failing test**
 
 Create `tests/lab/test_server_params_form.py`:
 
@@ -2065,7 +2065,7 @@ def test_form_emits_on_change(qt_app):
     assert any(p.context_length == 16384 for p in received)
 ```
 
-- [ ] **Step 15.2: Run — expect failure**
+- [x] **Step 15.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_server_params_form.py -v
@@ -2073,7 +2073,7 @@ python -m pytest tests/lab/test_server_params_form.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 15.3: Implement**
+- [x] **Step 15.3: Implement**
 
 Create `app/ui/components/server_params_form.py`:
 
@@ -2187,7 +2187,7 @@ class ServerParamsForm(QWidget):
         self.changed.emit(self.current_params())
 ```
 
-- [ ] **Step 15.4: Run — expect pass**
+- [x] **Step 15.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_server_params_form.py -v
@@ -2209,7 +2209,7 @@ git commit -m "feat(ui): extract ServerParamsForm (reusable inference config)"
 **Files:**
 - Create: `app/ui/components/diagnostic_banner.py`
 
-- [ ] **Step 16.1: Write a smoke test**
+- [x] **Step 16.1: Write a smoke test**
 
 Append to `tests/lab/test_diagnostics.py`:
 
@@ -2229,7 +2229,7 @@ def test_diagnostic_banner_shows_fix(qt_app):
     assert b.is_visible_hint() is True
 ```
 
-- [ ] **Step 16.2: Run — expect failure**
+- [x] **Step 16.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_diagnostics.py::test_diagnostic_banner_shows_fix -v
@@ -2237,7 +2237,7 @@ python -m pytest tests/lab/test_diagnostics.py::test_diagnostic_banner_shows_fix
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 16.3: Implement**
+- [x] **Step 16.3: Implement**
 
 Create `app/ui/components/diagnostic_banner.py`:
 
@@ -2309,7 +2309,7 @@ class DiagnosticBanner(QWidget):
         return self._visible
 ```
 
-- [ ] **Step 16.4: Run — expect pass**
+- [x] **Step 16.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_diagnostics.py -v
@@ -2331,7 +2331,7 @@ git commit -m "feat(ui): add DiagnosticBanner for llama-server errors"
 **Files:**
 - Modify: `requirements.txt`
 
-- [ ] **Step 17.1: Append deps**
+- [x] **Step 17.1: Append deps**
 
 Open `requirements.txt` and replace it with:
 
@@ -2345,7 +2345,7 @@ psutil>=5.9
 requests>=2.31
 ```
 
-- [ ] **Step 17.2: Install**
+- [x] **Step 17.2: Install**
 
 ```bash
 pip install -r requirements.txt
@@ -2353,7 +2353,7 @@ pip install -r requirements.txt
 
 Expected: `PySide6-Addons` and `requests` install without error.
 
-- [ ] **Step 17.3: Verify import works**
+- [x] **Step 17.3: Verify import works**
 
 ```bash
 python -c "from PySide6.QtWebEngineWidgets import QWebEngineView; print('OK')"
@@ -2376,7 +2376,7 @@ git commit -m "chore(deps): add PySide6-Addons (QtWebEngine) + requests"
 - Create: `app/lab/views/studio_view.py`
 - Test: `tests/lab/test_studio_view.py`
 
-- [ ] **Step 18.1: Write the failing test**
+- [x] **Step 18.1: Write the failing test**
 
 Create `tests/lab/test_studio_view.py`:
 
@@ -2424,7 +2424,7 @@ def test_studio_sidebar_model_list_populates(qt_app):
     assert v.model_list.count() == 2
 ```
 
-- [ ] **Step 18.2: Run — expect failure**
+- [x] **Step 18.2: Run — expect failure**
 
 ```bash
 python -m pytest tests/lab/test_studio_view.py -v
@@ -2432,7 +2432,7 @@ python -m pytest tests/lab/test_studio_view.py -v
 
 Expected: FAIL — ModuleNotFoundError.
 
-- [ ] **Step 18.3: Implement the shell**
+- [x] **Step 18.3: Implement the shell**
 
 Create `app/lab/views/studio_view.py`:
 
@@ -2569,7 +2569,7 @@ class StudioView(QWidget):
         self.launch_requested.emit(params)
 ```
 
-- [ ] **Step 18.4: Run — expect pass**
+- [x] **Step 18.4: Run — expect pass**
 
 ```bash
 python -m pytest tests/lab/test_studio_view.py -v
@@ -2591,7 +2591,7 @@ git commit -m "feat(lab): add StudioView shell (instance picker + sidebar)"
 **Files:**
 - Modify: `app/lab/views/studio_view.py`
 
-- [ ] **Step 19.1: Add webui widget**
+- [x] **Step 19.1: Add webui widget**
 
 In `app/lab/views/studio_view.py`, at the top add:
 
@@ -2621,7 +2621,7 @@ Add a public method for the shell to call once the server is ready:
         self.webui.setHtml("<div style='color:#aaa;padding:32px;'>No model loaded.</div>")
 ```
 
-- [ ] **Step 19.2: Add a smoke test**
+- [x] **Step 19.2: Add a smoke test**
 
 Append to `tests/lab/test_studio_view.py`:
 
@@ -2639,7 +2639,7 @@ def test_open_webui_does_not_crash(qt_app):
         assert "webengine" in str(e).lower() or True
 ```
 
-- [ ] **Step 19.3: Run full suite**
+- [x] **Step 19.3: Run full suite**
 
 ```bash
 python -m pytest tests/lab/test_studio_view.py -v
@@ -2662,7 +2662,7 @@ git commit -m "feat(lab): embed QWebEngineView llama.cpp webui in Studio"
 - Modify: `app/ui/app_shell.py`
 - Modify: `app/ui/components/nav_rail.py`
 
-- [ ] **Step 20.1: Replace dashboard with studio in nav rail**
+- [x] **Step 20.1: Replace dashboard with studio in nav rail**
 
 In `app/ui/components/nav_rail.py`, in `NAV_ITEMS`, replace the AI LAB section with:
 
@@ -2676,7 +2676,7 @@ In `app/ui/components/nav_rail.py`, in `NAV_ITEMS`, replace the AI LAB section w
 
 (removes `monitor` and renames `dashboard` → `studio`).
 
-- [ ] **Step 20.2: Register StudioView in AppShell, drop Dashboard + Monitor**
+- [x] **Step 20.2: Register StudioView in AppShell, drop Dashboard + Monitor**
 
 In `app/ui/app_shell.py`:
 
@@ -2760,7 +2760,7 @@ with:
             self._controller.log_line.emit(f"#{iid} Launch failed.")
 ```
 
-- [ ] **Step 20.3: Delete the obsolete files**
+- [x] **Step 20.3: Delete the obsolete files**
 
 ```bash
 git rm app/lab/views/dashboard_view.py app/lab/views/monitor_view.py
@@ -2774,7 +2774,7 @@ grep -rln "DashboardView\|MonitorView" tests/ app/
 
 If any reference remains in non-test files (other than deletion), fix it. Remove imports and references from `app/ui/app_shell.py` if you missed any.
 
-- [ ] **Step 20.4: Run full suite**
+- [x] **Step 20.4: Run full suite**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -2805,7 +2805,7 @@ git commit -m "feat(lab): replace Dashboard/Monitor with Studio + webui + fixer"
 - Modify: `app/lab/views/studio_view.py`
 - Modify: `app/ui/app_shell.py`
 
-- [ ] **Step 21.1: Add a live log pane under the webui**
+- [x] **Step 21.1: Add a live log pane under the webui**
 
 In `app/lab/views/studio_view.py`, in `__init__`, below `self.webui`:
 
@@ -2832,7 +2832,7 @@ Add:
             self.launch_log.set_percent(100)
 ```
 
-- [ ] **Step 21.2: Stream the remote log tail on launch**
+- [x] **Step 21.2: Stream the remote log tail on launch**
 
 In `app/ui/app_shell.py`, after calling `self._launch_server(params)` is routed to `worker.start()`, refactor `_launch_server` to use `StreamingRemoteWorker` with `build_launch_script` combined with a post-script `tail -f` on `/tmp/llama-server.log` for ~20 seconds:
 
@@ -2862,7 +2862,7 @@ Replace `_launch_server`:
         worker.start()
 ```
 
-- [ ] **Step 21.3: Run full suite**
+- [x] **Step 21.3: Run full suite**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -2890,7 +2890,7 @@ git commit -m "feat(lab): stream launch log to Studio, surface diagnostics live"
 **Files:**
 - Modify: `app/ui/app_shell.py`
 
-- [ ] **Step 22.1: Drop Configure from nav flow**
+- [x] **Step 22.1: Drop Configure from nav flow**
 
 In `app/ui/components/nav_rail.py`, `ConfigureView` is no longer listed — confirm it isn't. If any `_go("configure")` call remains in the codebase, redirect to `"studio"`:
 
@@ -2902,7 +2902,7 @@ Update each reference to `"studio"`.
 
 In `app/ui/app_shell.py`, delete the `ConfigureView` import and its `_add_view("configure", ...)` line if still present.
 
-- [ ] **Step 22.2: Run full suite**
+- [x] **Step 22.2: Run full suite**
 
 ```bash
 python -m pytest tests/ -x -q
@@ -2959,7 +2959,7 @@ git commit -m "fix(lab): polish Studio E2E flow (whatever-was-broken)"
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 24.1: Add a section**
+- [x] **Step 24.1: Add a section**
 
 Append to `README.md`:
 
@@ -2986,16 +2986,17 @@ git commit -m "docs: document new AI Lab Studio flow"
 
 ## Self-review checklist (after all tasks)
 
-- [ ] Every spec bullet has at least one task:
+- [x] Every spec bullet has at least one task:
   1. Local LLMfit + per-instance scoring → Tasks 6, 7, 8, 9, 10, 11.
   2. Install/download live visual progress → Tasks 1, 2, 3, 4, 12, 13, 14.
   3. Dashboard → Studio rename + LM-Studio layout + error fixer → Tasks 15, 16, 17, 18, 20, 21, 22.
   4. Embedded llama.cpp webui → Tasks 17, 19, 20.
   5. Redesign freedom → entire plan.
-- [ ] No placeholders, no "TBD", no "implement later" strings anywhere.
-- [ ] Method names consistent: `stream_script`, `StreamingRemoteWorker`, `ProgressPanel.set_step`, `InstallJob(kind=…, stage=…, percent=…)`, `DownloadJob(repo_id=…, filename=…)`, `classify_server_log`, `ScoredCatalogModel`, `set_scored_models`, `ServerParamsForm.current_params`.
-- [ ] Every new file has a paired test file except those covered by an existing test file (`test_diagnostics.py` covers `diagnostic_banner.py`).
-- [ ] Every task has runnable shell commands.
+- [x] No placeholders, no "TBD", no "implement later" strings anywhere.
+  - Verified in `app`, `tests`, and `README.md`; the only `TODO` match is the Portuguese word "Todos" in the file dialog filter.
+- [x] Method names consistent: `stream_script`, `StreamingRemoteWorker`, `ProgressPanel.set_step`, `InstallJob(kind=…, stage=…, percent=…)`, `DownloadJob(repo_id=…, filename=…)`, `classify_server_log`, `ScoredCatalogModel`, `set_scored_models`, `ServerParamsForm.current_params`.
+- [x] Every new file has a paired test file except those covered by an existing test file (`test_diagnostics.py` covers `diagnostic_banner.py`).
+- [x] Every task has runnable shell commands.
 
 ---
 

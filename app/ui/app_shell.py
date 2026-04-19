@@ -2,31 +2,33 @@
 Manages views, workers, and wiring against a selected Vast.ai instance."""
 from __future__ import annotations
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QStackedWidget, QLabel, QVBoxLayout, QMessageBox,
+    QWidget, QHBoxLayout, QStackedWidget, QLabel, QVBoxLayout,
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 from app import theme as t
 from app.ui.components.nav_rail import NavRail, NAV_ITEMS
 from app.lab.state.store import LabStore
-from app.lab.state.models import RemoteGGUF, ServerParams
+from app.lab.state.models import DownloadJob, InstallJob, RemoteGGUF, ServerParams
 from app.models import TunnelStatus
-from app.lab.views.dashboard_view import DashboardView
 from app.lab.views.discover_view import DiscoverView
+from app.lab.views.install_panel import InstallPanel
 from app.lab.views.models_view import ModelsView
+from app.lab.views.studio_view import StudioView
 from app.controller import AppController
 from app.ui.views.instances.instances_view import InstancesView
 from app.ui.views.analytics_view import AnalyticsView
 from app.ui.views.store_view import StoreView
 from app.ui.views.settings_view import SettingsView
 from app.lab.views.hardware_view import HardwareView
-from app.lab.views.configure_view import ConfigureView
-from app.lab.views.monitor_view import MonitorView
 from app.lab.workers.remote_probe import RemoteProbeWorker
 from app.lab.workers.remote_setup_worker import RemoteSetupWorker
-from app.lab.services.remote_llmfit import (
-    build_models_query, parse_models, parse_json_output,
+from app.lab.workers.streaming_worker import StreamingRemoteWorker
+from app.lab.services.progress_parsers import parse_cmake_build_stage, parse_wget_progress
+from app.lab.services.remote_setup import (
+    script_download_model,
+    script_fetch_log,
+    script_install_llamacpp,
 )
-from app.lab.services.remote_setup import script_fetch_log
 from app.ui.dialogs import UpdateSelectionDialog
 from app.ui.components.title_bar import TitleBar
 
@@ -36,12 +38,11 @@ _VIEW_LABELS = {
     "instances": "Instances",
     "store": "Store",
     "analytics": "Analytics",
-    "dashboard": "Dashboard",
+    "studio": "Studio",
     "hardware": "Hardware",
     "discover": "Discover Models",
+    "install": "Install",
     "models": "Models",
-    "monitor": "Monitor",
-    "configure": "Configure",
     "settings": "Settings",
 }
 
@@ -94,21 +95,19 @@ class AppShell(QWidget):
         
         root.addWidget(self.right_container, 1)
 
-        # --- Dashboard ---
-        self.dashboard = DashboardView(self.store, self)
-        self._add_view("dashboard", self.dashboard)
-        self.dashboard.probe_requested.connect(self._manual_probe)
-        self.dashboard.setup_requested.connect(self._run_setup)
-        self.dashboard.navigate_requested.connect(self._go)
-        # New: Dashboard emits iid for actions
-        self.dashboard.instance_action_requested.connect(self._on_dashboard_instance_action)
+        # --- Studio ---
+        self.studio = StudioView(self.store, self)
+        self._add_view("studio", self.studio)
+        self.studio.launch_requested.connect(self._launch_server)
+        self.studio.stop_requested.connect(self._stop_server)
+        self.studio.fix_requested.connect(self._apply_diagnostic_fix)
 
         # --- Discover ---
         self.discover = DiscoverView(self.store, self)
         self._add_view("discover", self.discover)
         self.discover.refresh_requested.connect(self._refresh_llmfit_models)
         self.discover.download_requested.connect(self._download_model_by_name)
-        self.discover.back_requested.connect(lambda: self._go("dashboard"))
+        self.discover.back_requested.connect(lambda: self._go("studio"))
 
         # --- Models ---
         self.models = ModelsView(self.store, self)
@@ -117,13 +116,6 @@ class AppShell(QWidget):
         self.models.rescan_requested.connect(self._manual_probe)
         self.models.navigate_requested.connect(self._go)
         self.models.launch_requested.connect(self._launch_server)
-
-        # --- Monitor ---
-        self.monitor = MonitorView(self.store, self)
-        self._add_view("monitor", self.monitor)
-        self.monitor.stop_requested.connect(self._stop_server)
-        self.monitor.restart_requested.connect(self._restart_server)
-        self.monitor.fetch_log_requested.connect(self._fetch_log)
 
         # --- Hardware ---
         self.hardware = HardwareView(self.store, self)
@@ -140,7 +132,7 @@ class AppShell(QWidget):
             lambda: self._go("instances")
         )
 
-        self._switch("dashboard")
+        self._switch("studio")
 
         from PySide6.QtGui import QShortcut, QKeySequence
         QShortcut(QKeySequence("Ctrl+R"), self,
@@ -201,8 +193,12 @@ class AppShell(QWidget):
         # Proactive: listen to tunnel status
         controller.tunnel_status_changed.connect(self._on_tunnel_status_changed)
         controller.instances_refreshed.connect(self.instances.handle_refresh)
-        # Sync dashboard and hardware with current active instances
-        controller.instances_refreshed.connect(self.dashboard.sync_instances)
+        # Sync Studio and hardware with current active instances
+        controller.instances_refreshed.connect(
+            lambda instances, *_: self.studio.refresh_instances(
+                [i.id for i in instances if i.ssh_host]
+            )
+        )
         controller.instances_refreshed.connect(self.hardware.sync_instances)
         # Bridge real-time metrics back to the Lab store
         controller.live_metrics.connect(self._on_live_metrics_bridge)
@@ -218,7 +214,7 @@ class AppShell(QWidget):
         self.analytics.set_store(controller.analytics_store)
         
         # Models connections
-        self.models.back_requested.connect(lambda: self._go("dashboard"))
+        self.models.back_requested.connect(lambda: self._go("studio"))
         
         # Landing view
         self._switch("instances")
@@ -253,9 +249,6 @@ class AppShell(QWidget):
             self.analytics.apply_config(cfg)
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
-        # Notify dashboard UI
-        self.dashboard.update_tunnel_status(iid, status)
-        
         if status == TunnelStatus.CONNECTED.value:
             # Automatic probe!
             self._probe_instance(iid)
@@ -266,10 +259,9 @@ class AppShell(QWidget):
             self.store.update_telemetry(iid, data)
 
     def _on_open_lab_from_card(self, iid: int):
-        """User clicked "Open Lab" on an instance card. Select the instance
-        and jump to Dashboard."""
+        """User clicked "Open Lab" on an instance card."""
         self.select_instance(iid)
-        self._go("dashboard")
+        self._go("studio")
 
     def _on_set_label(self, iid: int, label: str) -> None:
         if self._controller is None or self._controller.vast is None:
@@ -284,23 +276,6 @@ class AppShell(QWidget):
             self._controller.toast_requested.emit(
                 f"Falha ao definir label: {exc}", "error", 4000
             )
-
-    def _on_dashboard_instance_action(self, iid: int, action: str):
-        """Action requested from a specific dashboard card."""
-        if action == "select":
-            self.select_instance(iid)
-        elif action == "probe":
-            self._probe_instance(iid)
-        elif action == "setup_all":
-            self._run_setup("all", iid=iid)
-        elif action == "discover":
-            self.select_instance(iid)
-            self._go("discover")
-            # Auto-refresh models if needed
-            self._refresh_llmfit_models("all", "")
-        elif action == "models":
-            self.select_instance(iid)
-            self._go("models")
 
     # --- Instance selection ---
 
@@ -442,55 +417,167 @@ class AppShell(QWidget):
     # --- LLMfit model refresh ---
 
     def _refresh_llmfit_models(self, use_case: str, search: str):
-        iid = self.store.selected_instance_id
-        if not iid or not self._ssh: return
-        st = self.store.get_state(iid)
-        
-        # Proactive Warmup: Start LLMfit if it's installed but not serving
-        if not st.setup.llmfit_serving and st.setup.llmfit_installed:
-            self._controller.log_line.emit(f"#{iid}: Waking up Model Advisor (LLMfit)...")
-            self._run_single_setup("start_llmfit", iid, 
-                                 callback=lambda: self._perform_llmfit_query(use_case, search))
-            return
+        """Score the bundled catalog locally against every known instance."""
+        from app.lab.services.fit_scorer import InstanceFitScorer
+        from app.lab.services.model_catalog import ModelCatalog
 
-        self._perform_llmfit_query(use_case, search)
+        catalog = ModelCatalog.bundled()
+        entries = catalog.filter(use_case=use_case or "all", search=search or "")
+        scorer = InstanceFitScorer()
 
-    def _perform_llmfit_query(self, use_case: str, search: str):
-        iid = self.store.selected_instance_id
-        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
-        if not inst or not inst.ssh_host: return
-
-        script = build_models_query(use_case=use_case, search=search)
-        self.store.set_instance_busy(iid, "discover", True)
-
-        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, "_raw_script")
-        worker._build_script = lambda: script
-        worker.finished.connect(lambda ok, out: self._on_llmfit_models_done(ok, out, iid))
-        worker.start()
-        self._setup_workers[iid] = worker
-
-    def _on_llmfit_models_done(self, ok: bool, output: str, iid: int):
-        self.store.set_instance_busy(iid, "discover", False)
-        # Cleanup worker ref
-        QTimer.singleShot(100, lambda: self._setup_workers.pop(iid, None))
-
-        if ok:
-            try:
-                data = parse_json_output(output)
-                if data:
-                    models = parse_models(data)
-                    self.store.set_remote_models(iid, models)
-                else:
-                    self._controller.log_line.emit(f"#{iid} LLMfit returned invalid data format.")
-            except Exception as e:
-                self._controller.log_line.emit(f"#{iid} Error parsing LLMfit data: {str(e)}")
-        else:
-            self._controller.log_line.emit(f"#{iid} LLMfit query failed: {output[:300]}")
+        ids = list(self.store.all_instance_ids()) or (
+            [self.store.selected_instance_id] if self.store.selected_instance_id else []
+        )
+        for iid in ids:
+            system = self.store.get_state(iid).system
+            scored = [scorer.score(entry, system) for entry in entries]
+            self.store.set_scored_models(iid, scored)
 
     # --- Download model ---
 
     def _download_model_by_name(self, model_name: str, quant: str):
-        QMessageBox.information(self, "Download", "Full HuggingFace download support coming soon.")
+        iid = self.store.selected_instance_id
+        if not iid or not self._controller or not self._ssh:
+            return
+
+        self._install_retry_model = model_name
+        self._install_retry_quant = quant
+
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host:
+            return
+
+        if "install" not in self._views:
+            panel = InstallPanel(self.store, self)
+            self._add_view("install", panel)
+            panel.close_requested.connect(lambda: self._go("discover"))
+            panel.retry_requested.connect(
+                lambda: self._download_model_by_name(
+                    self._install_retry_model,
+                    self._install_retry_quant,
+                )
+            )
+        self._go("install")
+
+        state = self.store.get_state(iid)
+        scored = next((s for s in state.scored_models if s.name == model_name), None)
+        repo = scored.gguf_sources[0] if scored and scored.gguf_sources else model_name
+        filename = (
+            f"{model_name.lower().replace(' ', '-')}-"
+            f"{(quant or 'Q4_K_M').lower()}.gguf"
+        )
+        needs_install = not state.setup.llamacpp_installed
+
+        script_parts: list[str] = []
+        if needs_install:
+            script_parts.append(script_install_llamacpp())
+        script_parts.append(script_download_model(repo, filename))
+        full_script = "\n".join(script_parts)
+
+        worker = StreamingRemoteWorker(
+            self._ssh,
+            inst.ssh_host,
+            inst.ssh_port,
+            full_script,
+            self,
+        )
+        self._setup_workers[iid] = worker
+        log_tail: list[str] = []
+        progress_state = {
+            "phase": "install" if needs_install else "download",
+            "percent": 0,
+        }
+
+        def on_line(line: str):
+            log_tail.append(line)
+            if len(log_tail) > 200:
+                del log_tail[:100]
+
+            if progress_state["phase"] == "install":
+                event = parse_cmake_build_stage(line)
+                if event.stage == "done":
+                    self.store.update_install_job(
+                        iid,
+                        InstallJob(
+                            kind="llamacpp",
+                            stage="done",
+                            percent=100,
+                            log_tail=log_tail[-10:],
+                        ),
+                    )
+                    progress_state["phase"] = "download"
+                    return
+
+                if event.stage != "unknown":
+                    percent = (
+                        event.percent
+                        if event.percent is not None
+                        else progress_state["percent"]
+                    )
+                    progress_state["percent"] = percent
+                    self.store.update_install_job(
+                        iid,
+                        InstallJob(
+                            kind="llamacpp",
+                            stage=event.stage,
+                            percent=percent,
+                            log_tail=log_tail[-10:],
+                        ),
+                    )
+                return
+
+            event = parse_wget_progress(line)
+            if event is not None:
+                self.store.update_download_job(
+                    iid,
+                    DownloadJob(
+                        repo_id=repo,
+                        filename=filename,
+                        percent=event.percent,
+                        bytes_downloaded=0,
+                        bytes_total=0,
+                        speed=event.speed,
+                    ),
+                )
+            elif "DOWNLOAD_DONE" in line:
+                self.store.update_download_job(
+                    iid,
+                    DownloadJob(
+                        repo_id=repo,
+                        filename=filename,
+                        percent=100,
+                        bytes_downloaded=0,
+                        bytes_total=0,
+                        speed="",
+                        done=True,
+                    ),
+                )
+
+        worker.line.connect(on_line)
+        worker.finished.connect(lambda ok, out: self._on_install_done(ok, out, iid))
+        self.store.update_install_job(
+            iid,
+            InstallJob(
+                kind="llamacpp",
+                stage="apt" if needs_install else "done",
+                percent=0 if needs_install else 100,
+            ),
+        )
+        worker.start()
+
+    def _on_install_done(self, ok: bool, output: str, iid: int):
+        if not ok:
+            self.store.update_install_job(
+                iid,
+                InstallJob(
+                    kind="llamacpp",
+                    stage="failed",
+                    percent=0,
+                    log_tail=output.splitlines()[-20:],
+                    error=output[-200:],
+                ),
+            )
+        self._probe_instance(iid)
 
     # --- Model operations ---
 
@@ -513,26 +600,55 @@ class AppShell(QWidget):
         st = self.store.get_state(iid)
         binary = st.setup.llamacpp_path or ""
         self.store.set_instance_busy(iid, "launch", True)
+        self.store.set_server_params(iid, params)
 
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
-        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port,
-                                    "launch_server", params=params, binary_path=binary)
+        if not inst:
+            return
+        from app.lab.services.model_params import build_launch_script
+
+        script = build_launch_script(params, binary) + "\n" + (
+            "timeout 20 tail -n 40 -f /tmp/llama-server.log 2>/dev/null || true\n"
+        )
+        worker = StreamingRemoteWorker(
+            self._ssh,
+            inst.ssh_host,
+            inst.ssh_port,
+            script,
+            self,
+        )
+        worker.line.connect(lambda line: self.studio.append_launch_log(line))
         worker.finished.connect(lambda ok, out: self._on_launch_done(ok, out, iid))
         worker.start()
         self._setup_workers[iid] = worker
 
     def _on_launch_done(self, ok: bool, output: str, iid: int):
+        from app.lab.services.diagnostics import classify_server_log
+
         self.store.set_instance_busy(iid, "launch", False)
         if ok and "LAUNCH_OK" in output:
+            tunnel = self._ssh.get(iid) if self._ssh else None
+            port = (
+                tunnel.local_port
+                if tunnel
+                else self.store.get_state(iid).server_params.port
+            )
             if iid == self.store.selected_instance_id:
-                self._go("monitor")
+                self._go("studio")
+                self.studio.open_webui(port)
             self._probe_instance(iid)
         else:
+            diag = classify_server_log(output)
+            if diag and iid == self.store.selected_instance_id:
+                self.studio.banner.set_diagnostic(diag)
+                self.studio.mark_launch_failed()
             self._controller.log_line.emit(f"#{iid} Launch failed.")
 
     def _stop_server(self):
         iid = self.store.selected_instance_id
-        if iid: self._run_single_setup("stop_server", iid)
+        if iid:
+            self._run_single_setup("stop_server", iid)
+            self.studio.clear_webui()
 
     def _restart_server(self):
         iid = self.store.selected_instance_id
@@ -547,4 +663,21 @@ class AppShell(QWidget):
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst or not inst.ssh_host: return
         ok, output = self._ssh.run_script(inst.ssh_host, inst.ssh_port, script_fetch_log())
-        self.monitor.set_log(output if ok else f"(SSH failed)\n{output}")
+        if self._controller:
+            self._controller.log_line.emit(output if ok else f"(SSH failed)\n{output}")
+
+    def _apply_diagnostic_fix(self, action: str):
+        iid = self.store.selected_instance_id
+        if not iid:
+            return
+        if action == "lower_ngl":
+            params = self.store.get_state(iid).server_params
+            params.gpu_layers = max(0, params.gpu_layers // 2)
+            self.store.set_server_params(iid, params)
+            self._launch_server(params)
+        elif action == "free_port":
+            self._stop_server()
+        elif action == "reinstall_llamacpp":
+            self._run_setup("install_llamacpp", iid=iid)
+        elif action == "pick_model":
+            self._go("models")

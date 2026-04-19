@@ -33,7 +33,7 @@ class ModelsView(QWidget):
         self.back_btn.setProperty("variant", "ghost")
         self.back_btn.clicked.connect(self.back_requested.emit)
         nav_lay.addWidget(self.back_btn)
-        self.ctx_lbl = QLabel("Dashboard \u203a Instance \u203a Models")
+        self.ctx_lbl = QLabel("Studio \u203a Instance \u203a Models")
         self.ctx_lbl.setProperty("role", "muted")
         self.ctx_lbl.setStyleSheet(f"font-size: {t.FONT_SIZE_SMALL}px;")
         nav_lay.addWidget(self.ctx_lbl)
@@ -74,8 +74,8 @@ class ModelsView(QWidget):
 
     def _on_instance_changed(self, iid: int):
         self.ctx_lbl.setText(
-            f"Dashboard \u203a Instance #{iid} \u203a Models"
-            if iid else "Dashboard \u203a Models"
+            f"Studio \u203a Instance #{iid} \u203a Models"
+            if iid else "Studio \u203a Models"
         )
 
     def _render(self, files):

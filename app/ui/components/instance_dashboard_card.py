@@ -124,16 +124,16 @@ class InstanceDashboardCard(GlassCard):
             lambda: self.navigate_requested.emit(self.iid, "models")
         )
 
-        self.monitor_btn = QPushButton("\u25D4 Monitor")
-        self.monitor_btn.setProperty("variant", "ghost")
-        self.monitor_btn.clicked.connect(
-            lambda: self.navigate_requested.emit(self.iid, "monitor")
+        self.studio_btn = QPushButton("\u25D4 Studio")
+        self.studio_btn.setProperty("variant", "ghost")
+        self.studio_btn.clicked.connect(
+            lambda: self.navigate_requested.emit(self.iid, "studio")
         )
 
         action_bar.addWidget(self.setup_btn)
         action_bar.addWidget(self.discover_btn)
         action_bar.addWidget(self.models_btn)
-        action_bar.addWidget(self.monitor_btn)
+        action_bar.addWidget(self.studio_btn)
         action_bar.addStretch()
         self.body_lay.addLayout(action_bar)
 
@@ -281,7 +281,7 @@ class InstanceDashboardCard(GlassCard):
         can_use = is_installed and not is_busy and not is_syncing
         self.discover_btn.setEnabled(can_use)
         self.models_btn.setEnabled(can_use)
-        self.monitor_btn.setEnabled(can_use)
+        self.studio_btn.setEnabled(can_use)
 
         if is_updating:
             self.gpu_lbl.setText(f"{gpu} (Checking updates...)")

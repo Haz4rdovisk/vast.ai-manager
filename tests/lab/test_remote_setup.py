@@ -65,6 +65,16 @@ def test_install_scripts_exist():
     assert "pkill" in script_stop_llama_server()
 
 
+def test_streamed_setup_scripts_do_not_tail_progress_commands():
+    install_script = script_install_llamacpp()
+    download_script = script_download_model("TheBloke/model", "model.Q4.gguf")
+
+    assert "cmake -B build" in install_script
+    assert "cmake --build build" in install_script
+    assert "| tail" not in install_script
+    assert "| tail" not in download_script
+
+
 def test_check_setup_script_has_markers():
     script = script_check_setup()
     assert "===PROBE_START===" in script

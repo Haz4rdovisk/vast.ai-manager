@@ -74,6 +74,26 @@ class RemoteGGUF:
 
 
 @dataclass
+class ScoredCatalogModel:
+    """Flat DTO for scored catalog entries kept in LabStore."""
+    name: str
+    provider: str
+    params_b: float
+    best_quant: str
+    use_case: str
+    fit_level: str
+    fit_label: str
+    run_mode: str
+    score: float
+    utilization_pct: float
+    memory_required_gb: float
+    memory_available_gb: float
+    estimated_tps: float
+    gguf_sources: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class SetupStatus:
     """Tracks what's installed on the remote instance."""
     llmfit_installed: bool = False
@@ -105,15 +125,39 @@ class ServerParams:
 
 
 @dataclass
+class InstallJob:
+    kind: str
+    stage: str
+    percent: int = 0
+    log_tail: list[str] = field(default_factory=list)
+    error: str = ""
+
+
+@dataclass
+class DownloadJob:
+    repo_id: str
+    filename: str
+    percent: int = 0
+    bytes_downloaded: int = 0
+    bytes_total: int = 0
+    speed: str = ""
+    error: str = ""
+    done: bool = False
+
+
+@dataclass
 class LabInstanceState:
     """Grouped state for a single remote instance in the Lab."""
     iid: int
     system: RemoteSystem = field(default_factory=RemoteSystem)
     models: list[RemoteModel] = field(default_factory=list)
     gguf: list[RemoteGGUF] = field(default_factory=list)
+    scored_models: list[ScoredCatalogModel] = field(default_factory=list)
     setup: SetupStatus = field(default_factory=SetupStatus)
     server_params: ServerParams = field(default_factory=ServerParams)
     model_configs: dict[str, ServerParams] = field(default_factory=dict)
+    install_job: InstallJob | None = None
+    download_job: DownloadJob | None = None
     busy_keys: set[str] = field(default_factory=set)
 
 

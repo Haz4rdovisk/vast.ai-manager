@@ -127,6 +127,7 @@ class ActionBar(QFrame):
         self.btn_connect.setProperty("size", "sm")
         # Override padding to prevent clipping at 26px height
         self.btn_connect.setStyleSheet("padding: 2px 14px;")
+        self.primary = self.btn_connect
         lay.addWidget(self.btn_connect)
 
         # Connections
@@ -141,6 +142,8 @@ class ActionBar(QFrame):
         self.update_state(inst, tunnel)
 
     def update_state(self, inst: Instance, tunnel: TunnelStatus) -> None:
+        scheduling = is_scheduling_instance(inst)
+
         # 1. Status & Colors
         variant = "default"
         label = inst.state.value.upper()
@@ -150,7 +153,7 @@ class ActionBar(QFrame):
         
         if inst.state == InstanceState.RUNNING:
             p_color, p_sig, p_tip = ERR, self.deactivate_requested, "Stop Instance"
-        elif inst.state == InstanceState.SCHEDULING:
+        elif inst.state == InstanceState.SCHEDULING or scheduling:
             p_color, p_sig, p_tip = "#FFA000", self.deactivate_requested, "Cancel Search"
         elif inst.state == InstanceState.STOPPED:
             p_color, p_sig, p_tip = OK, self.activate_requested, "Start Instance"
@@ -177,7 +180,16 @@ class ActionBar(QFrame):
         c_color_qss = "" 
         c_enabled = (inst.state == InstanceState.RUNNING)
         
-        if tunnel == TunnelStatus.CONNECTING:
+        if scheduling:
+            c_label = "scheduling..."
+            c_sig = self.deactivate_requested
+            c_enabled = True
+            c_color_qss = "background: #FFA000;"
+        elif inst.state == InstanceState.STOPPED:
+            c_label = "Activate"
+            c_sig = self.activate_requested
+            c_enabled = True
+        elif tunnel == TunnelStatus.CONNECTING:
             c_label = "Connecting..."
         elif tunnel == TunnelStatus.CONNECTED:
             c_label, c_sig = "Disconnect", self.disconnect_requested
@@ -189,6 +201,7 @@ class ActionBar(QFrame):
 
         self.btn_connect.setText(c_label)
         self.btn_connect.setEnabled(c_enabled)
+        self.btn_connect.setToolTip(_scheduling_tooltip(inst) if scheduling else "")
         self.btn_connect.setStyleSheet(f"padding: 2px 14px; {c_color_qss}") 
         
         try: self.btn_connect.clicked.disconnect()
@@ -197,6 +210,15 @@ class ActionBar(QFrame):
             self.btn_connect.clicked.connect(lambda: c_sig.emit())
 
         # 3. Shared Icons
-        self.btn_reboot.setEnabled(inst.state == InstanceState.RUNNING)
+        try: self.btn_reboot.clicked.disconnect()
+        except: pass
+        if scheduling:
+            self.btn_reboot.setEnabled(True)
+            self.btn_reboot.setToolTip(STOP_TOOLTIP)
+            self.btn_reboot.clicked.connect(lambda: self.deactivate_requested.emit())
+        else:
+            self.btn_reboot.setEnabled(inst.state == InstanceState.RUNNING)
+            self.btn_reboot.setToolTip("Reboot")
+            self.btn_reboot.clicked.connect(self.reboot_requested)
         self.btn_snapshot.setEnabled(inst.state != InstanceState.STOPPING)
-        self.btn_destroy.setEnabled(inst.state == InstanceState.STOPPED or inst.state == InstanceState.SCHEDULING)
+        self.btn_destroy.setEnabled(inst.state == InstanceState.STOPPED or inst.state == InstanceState.SCHEDULING or scheduling)

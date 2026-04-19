@@ -500,6 +500,9 @@ class AppController(QObject):
     def _on_action_done(self, iid, action, ok, msg):
         if action == "start": self._pending_start.discard(iid)
         elif action == "stop": self._pending_stop.discard(iid)
+
+        if action == "start" and ok and self.config.auto_connect_on_activate:
+            self._auto_connect_after_start.add(iid)
         
         # If action failed, clear the sticky lock so we don't stay in fake state
         if not ok:
@@ -509,6 +512,8 @@ class AppController(QObject):
         self._trigger_refresh.emit()
 
     def _on_bulk_finished(self, a, ok, fail):
+        if a == "start" and self.config.auto_connect_on_activate:
+            self._auto_connect_after_start.update(ok)
         self.bulk_done.emit(a, ok, fail)
         self._trigger_refresh.emit()
 
