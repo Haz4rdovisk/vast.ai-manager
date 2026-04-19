@@ -1,11 +1,15 @@
 import pytest
 import weakref
-from PySide6.QtCore import QCoreApplication
+import os
+from PySide6.QtWidgets import QApplication
 
 
-@pytest.fixture(scope="session", autouse=True)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="session")
 def qt_app():
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QApplication.instance() or QApplication([])
     yield app
 
 

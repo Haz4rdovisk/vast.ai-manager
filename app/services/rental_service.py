@@ -8,6 +8,10 @@ from app.services.offer_parser import parse_offer
 from app.services.vast_service import VastAuthError, VastNetworkError
 
 
+def _enum_value(v):
+    return getattr(v, "value", v)
+
+
 class RentalService:
     """Wraps VastAI SDK rental operations: search offers, templates, ssh keys, rent."""
 
@@ -34,11 +38,19 @@ class RentalService:
     # ---- Offers ----
     def search_offers(self, query: OfferQuery) -> list[Offer]:
         q_dict, order, limit, storage = build_offer_query(query)
-        raw = self._call(
-            "search_offers",
-            query=q_dict, type=query.offer_type.value,
-            order=order, limit=limit, storage=storage, no_default=True,
-        )
+        offer_type = str(_enum_value(query.offer_type))
+        try:
+            raw = self._call(
+                "search_offers",
+                query=q_dict, type=offer_type,
+                order=order, limit=limit, storage=storage, no_default=True,
+            )
+        except VastNetworkError as e:
+            raise VastNetworkError(
+                f"{e}; search_offers payload="
+                f"type={offer_type}, order={order}, limit={limit}, "
+                f"storage={storage}, query={q_dict}"
+            ) from e
         if not isinstance(raw, list):
             return []
         return [parse_offer(r) for r in raw if isinstance(r, dict) and "id" in r]

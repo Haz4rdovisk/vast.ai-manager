@@ -278,7 +278,7 @@ class NavRail(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("nav-rail")
-        self.setFixedWidth(240)
+        self.setFixedWidth(224)
         self.setAttribute(Qt.WA_StyledBackground, False)
 
         lay = QVBoxLayout(self)

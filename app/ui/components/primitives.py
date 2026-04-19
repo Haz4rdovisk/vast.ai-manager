@@ -119,26 +119,29 @@ class GlassCard(QFrame):
 #  Badge — compact pill label (non-status); and Divider — 1px horizontal rule
 # ═══════════════════════════════════════════════════════════════════════════════
 class Badge(QLabel):
-    """Neutral pill label for compact info (GPU spec, model id, meta tags).
-    Distinct from StatusPill — no leading dot, no level color semantics."""
+    """Inline metadata label for compact info.
+
+    Badges stay visually light so dense cards do not turn into a wall of boxes.
+    """
 
     def __init__(self, text: str = "", *, mono: bool = False,
                  accent: bool = False, parent=None):
-        super().__init__(text, parent)
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        super().__init__(str(text or ""), parent)
+        self.setAttribute(Qt.WA_StyledBackground, False)
         self._mono = mono
         self._accent = accent
         self._restyle()
 
     def _restyle(self):
         family = t.FONT_MONO if self._mono else t.FONT_DISPLAY
-        fg = t.ACCENT if self._accent else t.TEXT
+        fg = t.ACCENT_SOFT if self._accent else t.TEXT_HI
+        line = t.ACCENT if self._accent else t.BORDER_HI
         self.setStyleSheet(
-            f"QLabel {{ color: {fg}; background: {t.SURFACE_2};"
-            f" border: 1px solid {t.BORDER_MED};"
-            f" border-radius: {t.RADIUS_PILL}px; padding: 4px 12px;"
-            f" font-family: {family}; font-size: {t.FONT_SIZE_SMALL}px;"
-            f" font-weight: 500; }}"
+            f"QLabel {{ color: {fg}; background: transparent;"
+            f" border: none; border-bottom: 1px solid {line};"
+            f" padding: 1px 2px 4px 2px;"
+            f" font-family: {family}; font-size: 12px;"
+            f" font-weight: 700; }}"
         )
 
 
@@ -185,11 +188,11 @@ class SectionHeader(QWidget):
 #  StatusPill — colored chip with dot
 # ═══════════════════════════════════════════════════════════════════════════════
 class StatusPill(QLabel):
-    """Small colored chip. `level` controls dot + text color."""
+    """Inline colored state label. `level` controls dot + text color."""
 
     def __init__(self, text: str, level: str = "info", parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_StyledBackground, False)
         self._level = level
         self.set_status(text, level)
 
@@ -198,10 +201,9 @@ class StatusPill(QLabel):
         color = t.health_color(level)
         self.setText(f"\u25CF  {text}")
         self.setStyleSheet(
-            f"QLabel {{ color: {color}; background: {t.SURFACE_2};"
-            f" border: 1px solid {t.BORDER_MED};"
-            f" border-radius: {t.RADIUS_PILL}px; padding: 5px 14px;"
-            f" font-size: {t.FONT_SIZE_LABEL}px; font-weight: 600; }}"
+            f"QLabel {{ color: {color}; background: transparent;"
+            f" border: none; padding: 1px 2px 4px 2px;"
+            f" font-size: 12px; font-weight: 800; }}"
         )
 
 

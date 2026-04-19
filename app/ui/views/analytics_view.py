@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
     QGridLayout, QSizePolicy, QFrame, QComboBox, QToolTip,
 )
-from PySide6.QtCore import Qt, QRectF, QPointF
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
     QColor, QPainter, QPen, QFont, QLinearGradient, QPainterPath,
 )
@@ -683,6 +683,8 @@ class AnalyticsView(QWidget):
         self._range_hours = 168  # 7 Days default para histórico
         self._line_hours = 6     # 6 Hours default para operacional
         self._mode = "FINANCE" # Fixed to finance for clarity
+        self.summary_cards: list[GlassCard] = []
+        self._summary_cols: int | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(t.SPACE_6, t.SPACE_5, t.SPACE_6, t.SPACE_4)
@@ -823,10 +825,7 @@ class AnalyticsView(QWidget):
         t3.addWidget(comp_card, 1)
         self.clyt.addLayout(t3)
 
-        # ── TIER 4: Live fleet health + billing sync detail ───────────
-        t4 = QHBoxLayout()
-        t4.setSpacing(t.SPACE_3)
-
+        # ── TIER 4: Fleet intelligence summary ───────────────────────
         health_card = GlassCard()
         hl = health_card.body()
         hl.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
@@ -850,7 +849,6 @@ class AnalyticsView(QWidget):
         ]):
             _metric_row(self.health_grid, self.health_labels, row, key, label)
         hl.addLayout(self.health_grid)
-        t4.addWidget(health_card, 1)
 
         billing_card = GlassCard()
         bil = billing_card.body()
@@ -873,13 +871,6 @@ class AnalyticsView(QWidget):
         ]):
             _metric_row(self.billing_grid, self.billing_labels, row, key, label)
         bil.addLayout(self.billing_grid)
-        t4.addWidget(billing_card, 1)
-
-        self.clyt.addLayout(t4)
-
-        # ── TIER 5: Economic efficiency, without market recommendations ─
-        t5 = QHBoxLayout()
-        t5.setSpacing(t.SPACE_3)
 
         efficiency_card = GlassCard()
         el = efficiency_card.body()
@@ -901,7 +892,6 @@ class AnalyticsView(QWidget):
         ]):
             _metric_row(self.efficiency_grid, self.efficiency_labels, row, key, label)
         el.addLayout(self.efficiency_grid)
-        t5.addWidget(efficiency_card, 1)
 
         ranking_card = GlassCard()
         rl = ranking_card.body()
@@ -921,9 +911,16 @@ class AnalyticsView(QWidget):
         ]):
             _metric_row(self.ranking_grid, self.ranking_labels, row, key, label)
         rl.addLayout(self.ranking_grid)
-        t5.addWidget(ranking_card, 1)
 
-        self.clyt.addLayout(t5)
+        self.summary_grid = QGridLayout()
+        self.summary_grid.setHorizontalSpacing(t.SPACE_3)
+        self.summary_grid.setVerticalSpacing(t.SPACE_3)
+        self.summary_cards = [health_card, billing_card, efficiency_card, ranking_card]
+        for card in self.summary_cards:
+            card.setMinimumWidth(280)
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.clyt.addLayout(self.summary_grid)
+        self._arrange_summary_cards(force_cols=4)
 
         self.clyt.addStretch()
 
@@ -934,6 +931,49 @@ class AnalyticsView(QWidget):
 
     def set_store(self, store: AnalyticsStore):
         self._store = store
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._arrange_summary_cards)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._arrange_summary_cards()
+
+    def _summary_width(self) -> int:
+        viewport = self.scroll.viewport().width() if hasattr(self, "scroll") else 0
+        if viewport <= 0:
+            viewport = self.width()
+        return max(0, viewport - t.SPACE_2)
+
+    def _summary_column_count(self, width: int | None = None) -> int:
+        width = self._summary_width() if width is None else width
+        if width >= 1240:
+            return 4
+        if width >= 720:
+            return 2
+        return 1
+
+    def _arrange_summary_cards(self, force_cols: int | None = None):
+        if not hasattr(self, "summary_grid"):
+            return
+        cols = force_cols or self._summary_column_count()
+        if cols == self._summary_cols and self.summary_grid.count():
+            return
+        self._summary_cols = cols
+
+        while self.summary_grid.count():
+            self.summary_grid.takeAt(0)
+
+        for index, card in enumerate(self.summary_cards):
+            row = index // cols
+            col = index % cols
+            self.summary_grid.addWidget(card, row, col)
+
+        for c in range(4):
+            self.summary_grid.setColumnStretch(c, 0)
+        for c in range(cols):
+            self.summary_grid.setColumnStretch(c, 1)
 
     def _on_line_range_changed(self, index: int):
         # Time range for operational LINE

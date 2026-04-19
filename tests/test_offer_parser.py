@@ -55,3 +55,24 @@ def test_parse_country_edge_cases():
     # Trailing-comma geolocation → None
     o = parse_offer({"id": 1, "ask_contract_id": 1, "machine_id": 2, "gpu_name": "X", "num_gpus": 1, "dph_total": 0, "geolocation": "Paris,"})
     assert o.country is None
+
+
+def test_parse_numeric_text_fields_from_live_api():
+    o = parse_offer({
+        "id": 1, "ask_contract_id": 1, "machine_id": 2,
+        "gpu_name": 4090, "num_gpus": 1, "dph_total": 0.1,
+        "gpu_arch": 8, "hosting_type": 1, "datacenter": True,
+    })
+    assert o.gpu_name == "4090"
+    assert o.gpu_arch == "8"
+    assert o.hosting_type == "1"
+    assert o.datacenter is None
+
+
+def test_parse_hosting_type_from_datacenter_flag():
+    o = parse_offer({
+        "id": 1, "ask_contract_id": 1, "machine_id": 2,
+        "gpu_name": "X", "num_gpus": 1, "dph_total": 0,
+        "datacenter": True,
+    })
+    assert o.hosting_type == "datacenter"

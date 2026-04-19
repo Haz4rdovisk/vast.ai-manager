@@ -1,10 +1,13 @@
 """Card component for hardware monitoring — glassmorphism polish."""
 from __future__ import annotations
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout
+from PySide6.QtWidgets import (
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout, QSizePolicy,
+)
 from PySide6.QtCore import Qt
 from app import theme as t
 from app.ui.components.gauge import GaugeWidget
 from app.ui.components.network_widget import NetworkSpeedWidget
+from app.ui.components.thermometer import ThermometerWidget
 from app.lab.state.models import LabInstanceState
 
 
@@ -15,12 +18,13 @@ class HardwareCard(GlassCard):
     def __init__(self, iid: int, gpu_name: str = "GPU", parent=None):
         super().__init__(parent)
         self.iid = iid
-        self.setMinimumWidth(600)
-        self.setMaximumWidth(1300)
-        self.setMinimumHeight(450)
+        self._metric_cols: int | None = None
+        self.setMinimumWidth(360)
+        self.setMinimumHeight(340)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         lay = self.body()
-        lay.setContentsMargins(t.SPACE_5, t.SPACE_5, t.SPACE_5, t.SPACE_5)
+        lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
 
         # Header
         header = QHBoxLayout()
@@ -37,11 +41,16 @@ class HardwareCard(GlassCard):
         )
         header.addWidget(self.gpu_lbl)
         lay.addLayout(header)
-        lay.addSpacing(t.SPACE_3)
+        lay.addSpacing(t.SPACE_2)
 
-        # Gauges Grid (3×2)
-        grid = QGridLayout()
-        grid.setSpacing(t.SPACE_3)
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(t.SPACE_4)
+
+        # Gauges grid, reflowed by card width.
+        self.metrics_grid = QGridLayout()
+        self.metrics_grid.setHorizontalSpacing(t.SPACE_4)
+        self.metrics_grid.setVerticalSpacing(t.SPACE_3)
 
         self.gauge_cpu = GaugeWidget("CPU Load")
         self.gauge_ram = GaugeWidget("RAM Usage")
@@ -50,30 +59,67 @@ class HardwareCard(GlassCard):
         self.gauge_vram = GaugeWidget("VRAM Usage")
         self.net_widget = NetworkSpeedWidget()
 
-        # Row 0: CPU, RAM, DISK
-        grid.addWidget(self._wrap(self.gauge_cpu), 0, 0)
-        grid.addWidget(self._wrap(self.gauge_ram), 0, 1)
-        grid.addWidget(self._wrap(self.gauge_disk), 0, 2)
-        # Row 1: GPU, VRAM, NET
-        grid.addWidget(self._wrap(self.gauge_gpu), 1, 0)
-        grid.addWidget(self._wrap(self.gauge_vram), 1, 1)
-        grid.addWidget(self._wrap(self.net_widget), 1, 2)
+        self.metric_widgets = [
+            self._wrap(self.gauge_cpu),
+            self._wrap(self.gauge_ram),
+            self._wrap(self.gauge_disk),
+            self._wrap(self.gauge_gpu),
+            self._wrap(self.gauge_vram),
+            self._wrap(self.net_widget),
+        ]
+        self._arrange_metrics()
 
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
+        content.addLayout(self.metrics_grid, 1)
 
-        lay.addLayout(grid)
+        self.thermo = ThermometerWidget()
+        content.addWidget(self.thermo, 0, Qt.AlignRight | Qt.AlignVCenter)
+        lay.addLayout(content, 1)
 
         # Footer
         footer = QHBoxLayout()
-        self.temp_lbl = QLabel("Temp: --")
-        self.temp_lbl.setProperty("role", "muted")
-        footer.addWidget(self.temp_lbl)
+        footer.setContentsMargins(0, 0, 0, 0)
+        self.status_lbl = QLabel("Live telemetry")
+        self.status_lbl.setStyleSheet(
+            f"color: {t.TEXT_MID}; font-size: {t.FONT_SIZE_SMALL}px; font-weight: 650;"
+        )
+        footer.addWidget(self.status_lbl)
         footer.addStretch()
         self.uptime_lbl = QLabel("Uptime: --")
         self.uptime_lbl.setProperty("role", "muted")
         footer.addWidget(self.uptime_lbl)
         lay.addLayout(footer)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._arrange_metrics()
+
+    def _metric_column_count(self) -> int:
+        content_w = max(0, self.width() - (t.SPACE_4 * 2) - 96)
+        if content_w >= 600:
+            return 3
+        if content_w >= 280:
+            return 2
+        return 1
+
+    def _arrange_metrics(self) -> None:
+        cols = self._metric_column_count()
+        if cols == self._metric_cols and self.metrics_grid.count():
+            return
+        self._metric_cols = cols
+
+        while self.metrics_grid.count():
+            self.metrics_grid.takeAt(0)
+
+        for index, widget in enumerate(self.metric_widgets):
+            row = index // cols
+            col = index % cols
+            self.metrics_grid.addWidget(widget, row, col)
+            widget.show()
+
+        for col in range(3):
+            self.metrics_grid.setColumnStretch(col, 0)
+        for col in range(cols):
+            self.metrics_grid.setColumnStretch(col, 1)
 
     def _wrap(self, widget):
         container = QFrame()
@@ -112,11 +158,13 @@ class HardwareCard(GlassCard):
         )
         self.net_widget.set_speeds(sys.net_rx_kbps, sys.net_tx_kbps)
 
-        # Temp with dynamic color
         temp_c = t.temp_color(sys.gpu_temp)
-        self.temp_lbl.setText(f"GPU Temp: {sys.gpu_temp:.0f}\u00b0C")
-        self.temp_lbl.setStyleSheet(
-            f"color: {temp_c}; font-size: {t.FONT_SIZE_SMALL}px; font-weight: 600;"
+        self.thermo.set_temperature(sys.gpu_temp)
+        self.status_lbl.setText(
+            "GPU thermal nominal" if sys.gpu_temp < 70 else "GPU thermal watch"
+        )
+        self.status_lbl.setStyleSheet(
+            f"color: {temp_c}; font-size: {t.FONT_SIZE_SMALL}px; font-weight: 700;"
         )
 
         h = sys.uptime_seconds // 3600

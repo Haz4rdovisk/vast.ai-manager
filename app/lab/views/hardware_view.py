@@ -1,7 +1,7 @@
 """Hardware monitoring view — glassmorphism redesign."""
 from __future__ import annotations
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QGridLayout, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from app import theme as t
 from app.lab.state.store import LabStore
 from app.lab.views.hardware_card import HardwareCard
@@ -13,9 +13,13 @@ class HardwareView(QWidget):
         super().__init__(parent)
         self.store = store
         self.cards: dict[int, HardwareCard] = {}
+        self.placeholders: list[HardwarePlaceholderCard] = []
+        self._layout_signature: tuple[int, int, tuple[int, ...]] | None = None
+        self._arrange_pending = False
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_4)
+        lay.setContentsMargins(t.SPACE_5, t.SPACE_5, t.SPACE_5, t.SPACE_4)
+        lay.setSpacing(t.SPACE_2)
 
         header = QLabel("Hardware Monitoring")
         header.setStyleSheet(
@@ -31,13 +35,15 @@ class HardwareView(QWidget):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.NoFrame)
         self.container = QWidget()
         self.grid = QGridLayout(self.container)
-        self.grid.setContentsMargins(0, 0, t.SPACE_3, 0)
+        self.grid.setContentsMargins(0, 0, t.SPACE_2, 0)
         self.grid.setSpacing(t.SPACE_4)
         self.grid.setAlignment(Qt.AlignTop)
 
         self.scroll.setWidget(self.container)
+        self.scroll.viewport().installEventFilter(self)
         lay.addWidget(self.scroll)
 
         self.store.instance_state_updated.connect(self._on_state_updated)
@@ -46,6 +52,13 @@ class HardwareView(QWidget):
     def sync_instances(self, *args):
         """Synchronize cards with the store's instances."""
         active_instances = self.store.all_instance_ids()
+
+        for iid in list(self.cards.keys()):
+            if iid not in active_instances:
+                card = self.cards.pop(iid)
+                card.setParent(None)
+                card.deleteLater()
+                self._layout_signature = None
 
         for iid in active_instances:
             if iid not in self.cards:
@@ -60,7 +73,7 @@ class HardwareView(QWidget):
 
                 card = HardwareCard(iid, gpu_name=gpu_name)
                 self.cards[iid] = card
-                self._arrange_cards()
+                self._layout_signature = None
 
         for iid, card in self.cards.items():
             state = self.store.get_state(iid)
@@ -72,48 +85,94 @@ class HardwareView(QWidget):
             if n > 0
             else "Real-time telemetry for all active remote instances."
         )
+        self._schedule_arrange(force=True)
 
     def _on_state_updated(self, iid: int, state):
         if iid in self.cards:
             self.cards[iid].update_state(state)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._schedule_arrange(force=True)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._schedule_arrange()
+
+    def eventFilter(self, watched, event):
+        if watched is self.scroll.viewport() and event.type() == QEvent.Resize:
+            self._schedule_arrange()
+        return super().eventFilter(watched, event)
+
+    def _schedule_arrange(self, *, force: bool = False) -> None:
+        if force:
+            self._layout_signature = None
+        if self._arrange_pending:
+            return
+        self._arrange_pending = True
+        QTimer.singleShot(0, self._run_scheduled_arrange)
+
+    def _run_scheduled_arrange(self) -> None:
+        self._arrange_pending = False
         self._arrange_cards()
 
-    def _arrange_cards(self):
+    def _available_grid_width(self) -> int:
+        viewport_w = self.scroll.viewport().width()
+        if viewport_w <= 0:
+            viewport_w = self.width() - (t.SPACE_5 * 2)
+        return max(320, viewport_w - t.SPACE_2)
+
+    def _columns_for_width(self, width: int) -> int:
+        if width >= 1320:
+            return 3
+        if width >= 760:
+            return 2
+        return 1
+
+    def _arrange_cards(self, *, force: bool = False):
         """Re-arrange cards into a dynamic grid, filling empty slots."""
-        viewport_w = self.scroll.viewport().width() - 20
-        viewport_h = self.scroll.viewport().height() - 20
+        viewport_w = self._available_grid_width()
+        viewport_h = max(320, self.scroll.viewport().height() - t.SPACE_2)
 
-        card_w_hint = 620
-        cols = max(1, viewport_w // card_w_hint)
-
-        card_h_hint = 480
-        rows_to_fill = max(2, (viewport_h // card_h_hint) + 1)
-        total_slots_needed = max(4, cols * rows_to_fill)
-
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-
+        cols = self._columns_for_width(viewport_w)
         sorted_ids = sorted(self.cards.keys())
+
+        card_h_hint = 360
+        rows_to_fill = max(2, (viewport_h // card_h_hint) + 1)
+        total_slots_needed = max(cols * 2, cols * rows_to_fill, len(self.cards))
+        total_slots_needed = ((total_slots_needed + cols - 1) // cols) * cols
+        signature = (cols, total_slots_needed, tuple(sorted_ids))
+
+        if not force and signature == self._layout_signature and self.grid.count():
+            return
+        self._layout_signature = signature
+
+        needed_placeholders = max(0, total_slots_needed - len(sorted_ids))
+        while len(self.placeholders) < needed_placeholders:
+            self.placeholders.append(HardwarePlaceholderCard(self.container))
+        for idx, placeholder in enumerate(self.placeholders):
+            placeholder.setVisible(idx < needed_placeholders)
+
         all_items = [self.cards[iid] for iid in sorted_ids]
+        all_items.extend(self.placeholders[:needed_placeholders])
 
-        while len(all_items) < total_slots_needed:
-            all_items.append(HardwarePlaceholderCard())
+        self.container.setUpdatesEnabled(False)
+        try:
+            while self.grid.count():
+                self.grid.takeAt(0)
 
-        for idx, widget in enumerate(all_items):
-            row = idx // cols
-            col = idx % cols
-            self.grid.addWidget(widget, row, col)
-            widget.show()
+            for idx, widget in enumerate(all_items):
+                row = idx // cols
+                col = idx % cols
+                self.grid.addWidget(widget, row, col)
+                widget.show()
 
-        for r in range(self.grid.rowCount()):
-            self.grid.setRowStretch(r, 0)
-        for c in range(self.grid.columnCount()):
-            self.grid.setColumnStretch(c, 0)
-        for c in range(cols):
-            self.grid.setColumnStretch(c, 1)
-        self.grid.setRowStretch(1000, 1)
+            for r in range(self.grid.rowCount()):
+                self.grid.setRowStretch(r, 0)
+            for c in range(self.grid.columnCount()):
+                self.grid.setColumnStretch(c, 0)
+            for c in range(cols):
+                self.grid.setColumnStretch(c, 1)
+            self.grid.setRowStretch(1000, 1)
+        finally:
+            self.container.setUpdatesEnabled(True)

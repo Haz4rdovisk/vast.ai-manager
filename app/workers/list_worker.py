@@ -37,4 +37,6 @@ class ListWorker(QObject):
             self.failed.emit("unknown", str(e))
             return
 
+        if not isinstance(insts, list):
+            insts = []
         self.refreshed.emit(insts, user)

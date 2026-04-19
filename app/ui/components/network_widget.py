@@ -1,6 +1,6 @@
 """Network speed widget — upload/download with colored arrows."""
 from __future__ import annotations
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QSizePolicy, QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PySide6.QtCore import Qt
 from app import theme as t
 
@@ -8,10 +8,11 @@ from app import theme as t
 class NetworkSpeedWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(160, 160)
+        self.setMinimumSize(112, 112)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 20, 0, 5)
+        lay.setContentsMargins(0, 12, 0, 4)
         lay.setSpacing(0)
         lay.addStretch()
 

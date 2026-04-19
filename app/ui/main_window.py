@@ -15,6 +15,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setWindowTitle("Vast.ai Manager")
         self.resize(1240, 820)
+        self.setMinimumSize(860, 580)
         self.setMouseTracking(True)
         
         self._resizing = False

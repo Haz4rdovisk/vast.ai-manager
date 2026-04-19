@@ -1,6 +1,6 @@
 """Dashed wireframe placeholder for the hardware grid — glassmorphism polish."""
 from __future__ import annotations
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel, QSizePolicy
 from PySide6.QtCore import Qt
 from app import theme as t
 
@@ -11,8 +11,9 @@ from app.ui.components.primitives import GlassCard
 class HardwarePlaceholderCard(GlassCard):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(600)
-        self.setMinimumHeight(450)
+        self.setMinimumWidth(360)
+        self.setMinimumHeight(300)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # Adfeita a borda tracejada por cima do efeito de vidro
         self.setStyleSheet(f"""
@@ -42,6 +43,6 @@ class HardwarePlaceholderCard(GlassCard):
             f" font-weight: 500; border: none;"
         )
         tip.setWordWrap(True)
-        tip.setFixedWidth(280)
+        tip.setMaximumWidth(280)
         tip.setAlignment(Qt.AlignCenter)
         lay.addWidget(tip)

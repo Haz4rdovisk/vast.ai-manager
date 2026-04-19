@@ -6,6 +6,7 @@ from app.models_rental import OfferQuery, OfferType
 def _gte(v): return {"gte": v}
 def _lte(v): return {"lte": v}
 def _eq(v):  return {"eq": v}
+def _enum_value(v): return getattr(v, "value", v)
 
 
 def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, float]:
@@ -73,7 +74,8 @@ def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, f
         d["static_ip"] = _eq(bool(q.static_ip))
 
     # Pricing
-    if q.offer_type == OfferType.INTERRUPTIBLE and q.max_bid is not None:
+    offer_type = _enum_value(q.offer_type)
+    if offer_type == OfferType.INTERRUPTIBLE.value and q.max_bid is not None:
         d["min_bid"] = _lte(float(q.max_bid))
     if q.max_dph is not None:
         d["dph_total"] = _lte(float(q.max_dph))
@@ -95,10 +97,10 @@ def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, f
         # Georegion — Vast recognizes `geolocation` tokens like "North_America"
         # as region when resolved server-side. We emit via same key.
         d.setdefault("geolocation", _eq(q.region))
-    if q.datacenter_only and not q.hosting_type:
-        d["hosting_type"] = _eq("datacenter")
-    if q.hosting_type:
-        d["hosting_type"] = _eq(q.hosting_type)
+    if q.datacenter_only or q.hosting_type == "datacenter":
+        d["datacenter"] = _eq(True)
+    elif q.hosting_type == "consumer":
+        d["datacenter"] = _eq(False)
     if q.host_id is not None:
         d["host_id"] = _eq(int(q.host_id))
     if q.machine_id is not None:
@@ -106,4 +108,4 @@ def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, f
     if q.cluster_id is not None:
         d["cluster_id"] = _eq(int(q.cluster_id))
 
-    return d, q.sort.value, q.limit, q.storage_gib
+    return d, str(_enum_value(q.sort)), q.limit, q.storage_gib

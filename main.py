@@ -4,12 +4,14 @@ from PySide6.QtWidgets import QApplication
 from app.config import ConfigStore
 from app import theme
 from app.ui.main_window import MainWindow
+from app.ui.wheel_guard import install_wheel_guard
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Vast.ai Manager")
     app.setStyleSheet(theme.STYLESHEET)
+    install_wheel_guard(app)
 
     store = ConfigStore()
     win = MainWindow(store)

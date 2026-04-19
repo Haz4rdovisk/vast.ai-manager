@@ -17,6 +17,7 @@ Foco: ligar/desligar instâncias, abrir conexão SSH automaticamente, visualizar
 - 🔗 **Conexão automática** — ao ativar, o túnel SSH sobe sozinho
 - 🔘 **Abrir Terminal** — abre uma sessão SSH no Windows Terminal (fallback cmd.exe)
 - 🔌 **Desconectar** / **Desativar** com confirmação
+- 🛒 **Store** — busca ofertas de GPU na Vast.ai com filtros por modelo, VRAM, CPU, rede, preço, país, datacenter e confiabilidade; permite comparar ofertas e iniciar aluguel com imagem/template, disco, chave SSH e Jupyter opcional.
 - 📝 Painel de logs de ações e falhas
 - 🌑 Visual dark, clean, sem dependências pesadas
 

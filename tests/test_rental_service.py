@@ -21,6 +21,19 @@ def test_search_offers_calls_sdk_with_query_dict():
     assert kwargs["storage"] == 10.0
 
 
+def test_search_offers_accepts_qt_stringified_enum_values():
+    fake_sdk = MagicMock()
+    fake_sdk.search_offers.return_value = []
+    svc = RentalService(api_key="k")
+    svc._sdk = fake_sdk
+
+    svc.search_offers(OfferQuery(offer_type="on-demand", sort="score-"))
+
+    _, kwargs = fake_sdk.search_offers.call_args
+    assert kwargs["type"] == "on-demand"
+    assert kwargs["order"] == "score-"
+
+
 def test_search_templates():
     fake_sdk = MagicMock()
     fake_sdk.search_templates.return_value = [
@@ -84,6 +97,18 @@ def test_call_translates_network_error():
     svc = RentalService(api_key="k"); svc._sdk = fake_sdk
     with pytest.raises(VastNetworkError):
         svc.list_ssh_keys()
+
+
+def test_search_offer_network_error_includes_payload():
+    fake_sdk = MagicMock()
+    fake_sdk.search_offers.side_effect = Exception("400 Bad Request")
+    svc = RentalService(api_key="k"); svc._sdk = fake_sdk
+    with pytest.raises(VastNetworkError) as err:
+        svc.search_offers(OfferQuery(gpu_names=["RTX 4090"], hosting_type="datacenter"))
+    msg = str(err.value)
+    assert "search_offers payload" in msg
+    assert "RTX 4090" in msg
+    assert "datacenter" in msg
 
 
 def test_rent_success_with_status_msg():

@@ -417,8 +417,8 @@ QToolTip {{
     color: {TEXT_HI};
     border: 1px solid {BORDER_MED};
     border-radius: {RADIUS_SM}px;
-    padding: 6px 10px;
-    font-size: {FONT_SIZE_SMALL}px;
+    padding: 12px 14px;
+    font-size: 14px;
 }}
 """
 

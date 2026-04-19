@@ -24,7 +24,7 @@ CPU_ARCHS: list[tuple[str, str]] = [
 
 # Vast georegion tokens (server-side); country codes pass through as-is.
 REGIONS: list[tuple[str, str]] = [
-    ("All Regions", ""),
+    ("Location", ""),
     ("North America", "North_America"),
     ("Europe", "Europe"),
     ("Asia", "Asia"),

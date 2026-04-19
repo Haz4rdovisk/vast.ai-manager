@@ -16,6 +16,7 @@ from app.lab.views.models_view import ModelsView
 from app.controller import AppController
 from app.ui.views.instances_view import InstancesView
 from app.ui.views.analytics_view import AnalyticsView
+from app.ui.views.store_view import StoreView
 from app.ui.views.settings_view import SettingsView
 from app.lab.views.hardware_view import HardwareView
 from app.lab.views.configure_view import ConfigureView
@@ -33,6 +34,7 @@ from app.ui.components.title_bar import TitleBar
 # View key → readable label for the title bar
 _VIEW_LABELS = {
     "instances": "Instances",
+    "store": "Store",
     "analytics": "Analytics",
     "dashboard": "Dashboard",
     "hardware": "Hardware",
@@ -161,6 +163,8 @@ class AppShell(QWidget):
             self._current_view = key
             if entering_analytics:
                 self._request_analytics_api_sync()
+            if key == "store" and hasattr(v, "enter_view"):
+                v.enter_view()
 
     def _go(self, key: str):
         self.nav.set_active(key)
@@ -172,6 +176,8 @@ class AppShell(QWidget):
         self._controller = controller
         self.instances = InstancesView(controller, self)
         self._add_view("instances", self.instances)
+        self.store_view = StoreView(controller, self)
+        self._add_view("store", self.store_view)
         self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
         self.instances.open_settings_requested.connect(
             lambda: self._go("settings")

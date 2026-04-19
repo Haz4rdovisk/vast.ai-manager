@@ -63,8 +63,34 @@ def test_datacenter_and_country():
         OfferQuery(datacenter_only=True, country="US", region="North_America",
                    hosting_type="datacenter")
     )
-    assert d["hosting_type"] == {"eq": "datacenter"}
+    assert d["datacenter"] == {"eq": True}
     assert d["geolocation"] == {"eq": "US"}
+
+
+def test_consumer_hosting_maps_to_supported_datacenter_field():
+    d, *_ = build_offer_query(OfferQuery(hosting_type="consumer"))
+    assert d["datacenter"] == {"eq": False}
+    assert "hosting_type" not in d
+
+
+def test_generated_query_uses_sdk_supported_fields():
+    from vastai.api.query import offers_fields
+
+    d, *_ = build_offer_query(
+        OfferQuery(
+            gpu_names=["RTX 4090"],
+            min_num_gpus=1,
+            max_num_gpus=2,
+            min_gpu_ram_gb=24,
+            min_cpu_cores=8,
+            min_disk_space_gb=100,
+            min_inet_down_mbps=200,
+            max_dph=1.0,
+            min_reliability=0.97,
+            hosting_type="datacenter",
+        )
+    )
+    assert set(d).issubset(set(offers_fields))
 
 
 def test_sort_maps_to_order_string():
@@ -72,6 +98,14 @@ def test_sort_maps_to_order_string():
     assert order == "dph_total"
     _, order, *_ = build_offer_query(OfferQuery(sort=OfferSort.DLPERF_PER_DPH_DESC))
     assert order == "dlperf_per_dphtotal-"
+
+
+def test_qt_stringified_enum_values_are_accepted():
+    d, order, *_ = build_offer_query(
+        OfferQuery(offer_type="bid", sort="dph_total", max_bid=0.25)
+    )
+    assert d["min_bid"] == {"lte": 0.25}
+    assert order == "dph_total"
 
 
 def test_storage_forwarded():
