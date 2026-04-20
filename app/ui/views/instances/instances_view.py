@@ -37,9 +37,11 @@ class InstancesView(QWidget):
     bulk_requested = Signal(str, list, dict)
     fix_ssh_requested = Signal(int)
 
-    def __init__(self, controller, parent=None) -> None:
+    def __init__(self, controller, parent=None, store=None) -> None:
         super().__init__(parent)
         self._controller = controller
+        self._store = store
+
         self._all: list[Instance] = []
         self._cards: dict[int, InstanceCard] = {}
         self._selected: set[int] = set()
@@ -65,7 +67,10 @@ class InstancesView(QWidget):
 
         controller.log_line.connect(self._on_log_line)
         controller.tunnel_status_changed.connect(self._on_tunnel_status)
-        controller.live_metrics.connect(self._on_live_metrics)
+        if self._store:
+            self._store.telemetry_updated.connect(self._on_live_metrics)
+        else:
+            controller.live_metrics.connect(self._on_live_metrics)
         controller.action_done.connect(self._on_action_done)
         if hasattr(controller, "bulk_done"):
             controller.bulk_done.connect(self._on_bulk_done)

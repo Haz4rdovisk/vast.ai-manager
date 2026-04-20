@@ -470,8 +470,13 @@ class StudioView(QWidget):
         self._ui_probe_timer.setInterval(600)
         self._ui_probe_timer.timeout.connect(self._run_ui_probe)
         
+        # Track objects for explicit cleanup to avoid QtWebEngine profile warnings
+        self._pages_to_cleanup = []
+        
         self.webui = QWebEngineView()
-        self.webui.setPage(QWebEnginePage(self.profile, self.webui)) 
+        chat_page = QWebEnginePage(self.profile, self.webui)
+        self.webui.setPage(chat_page) 
+        self._pages_to_cleanup.append(chat_page)
         self.webui.page().setBackgroundColor(QColor("#0a0a0b"))
         self.webui.loadFinished.connect(self._on_webui_load_finished)
         self.webui.setHtml(_EMPTY_WEBUI_HTML)
@@ -479,6 +484,9 @@ class StudioView(QWidget):
         # Proper stacked widget for loading state
         self.webui_stack = QStackedWidget()
         self.webui_overlay = QWebEngineView()
+        load_page = QWebEnginePage(self.profile, self.webui_overlay)
+        self.webui_overlay.setPage(load_page)
+        self._pages_to_cleanup.append(load_page)
         self.webui_overlay.page().setBackgroundColor(QColor("#0a0a0b"))
         self.webui_overlay.setHtml(_LOADING_WEBUI_HTML)
         
@@ -753,3 +761,20 @@ class StudioView(QWidget):
             f" border: 1px solid {border}; border-radius: 8px;"
             f" padding: 6px 10px; min-width: 76px; font-weight: 800; }}"
         )
+
+    def closeEvent(self, event):
+        """Explicit cleanup to prevent QtWebEngine profile release warnings."""
+        if hasattr(self, "_ui_probe_timer"):
+            self._ui_probe_timer.stop()
+        
+        # The order is critical: Pages must be destroyed before the Profile
+        for page in self._pages_to_cleanup:
+            # Setting page to None on the view or deleting the page
+            try:
+                page.setParent(None)
+                page.deleteLater()
+            except:
+                pass
+        
+        self._pages_to_cleanup.clear()
+        super().closeEvent(event)

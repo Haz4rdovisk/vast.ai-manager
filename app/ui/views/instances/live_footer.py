@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QStackedLayout
 
 from app.models import Instance
-from app.theme import ACCENT, BORDER_LOW, FONT_MONO, TEXT, TEXT_LOW
+from app.theme import ACCENT, BORDER_LOW, FONT_MONO, TEXT, TEXT_LOW, metric_color, temp_color
 
 
 class _Bar(QFrame):
@@ -18,6 +18,7 @@ class _Bar(QFrame):
         font.setPointSize(8)
         font.setFamily(FONT_MONO)
         self.lbl.setFont(font)
+        self.lbl.setFixedWidth(110) # Fixed width prevents text expansion from triggering layout recalc
         self.lbl.setStyleSheet(f"color: {TEXT_LOW};")
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -31,9 +32,13 @@ class _Bar(QFrame):
         lay.addWidget(self.lbl)
         lay.addWidget(self.bar)
 
-    def set_value(self, label: str, pct: float) -> None:
+    def set_value(self, label: str, pct: float, color: str = ACCENT) -> None:
         self.lbl.setText(label)
         self.bar.setValue(int(max(0, min(100, pct))))
+        self.bar.setStyleSheet(
+            f"QProgressBar {{ background: {BORDER_LOW}; border: none; border-radius: 2px; }}"
+            f"QProgressBar::chunk {{ background: {color}; border-radius: 2px; }}"
+        )
 
 
 class LiveFooter(QFrame):
@@ -102,32 +107,43 @@ class LiveFooter(QFrame):
             self._has_data = True
             self.stack.setCurrentWidget(self.metrics_widget)
 
-        gpu = metrics.get("gpu_util") or 0
+        # 1. GPU
+        gpu_pct = metrics.get("gpu_util") or 0
         temp = metrics.get("gpu_temp")
-        self.bars[0].set_value(
-            f"GPU {gpu:.0f}%" + (f" {temp:.0f}\u00b0C" if temp is not None else ""),
-            gpu,
-        )
+        gpu_label = f"GPU {gpu_pct:.0f}%"
+        if temp is not None:
+             gpu_label += f" {temp:.0f}\u00b0C"
+        self.bars[0].set_value(gpu_label, gpu_pct, metric_color(gpu_pct))
+        self.bars[0].setToolTip(f"GPU Utilization: {gpu_pct:.1f}%" + (f"\nTemp: {temp:.1f}\u00b0C" if temp else ""))
 
+        # 2. vRAM
         vram_used = metrics.get("vram_used_mb") or 0
         vram_total = metrics.get("vram_total_mb") or (self._gpu_total * 1024)
         vram_pct = (vram_used / vram_total * 100) if vram_total else 0
         self.bars[1].set_value(
-            f"vRAM {vram_used / 1024:.1f}/{(vram_total or 1) / 1024:.0f}GB",
+            f"vRAM {vram_pct:.0f}%",
             vram_pct,
+            metric_color(vram_pct)
         )
+        self.bars[1].setToolTip(f"vRAM: {vram_used / 1024:.1f} / {(vram_total or 1) / 1024:.0f} GB ({vram_pct:.1f}%)")
 
+        # 3. CPU (Intuitive Percentage)
         load = metrics.get("load1") or 0
-        load_pct = (load / self._cpu_cores) * 100
+        cpu_pct = (load / self._cpu_cores) * 100
         self.bars[2].set_value(
-            f"CPU load {load:.2f}" if load else "CPU \u2014",
-            load_pct,
+            f"CPU {cpu_pct:.0f}%",
+            cpu_pct,
+            metric_color(cpu_pct)
         )
+        self.bars[2].setToolTip(f"CPU Load (1m): {load:.2f}\nCore Count: {self._cpu_cores}")
 
+        # 4. RAM
         ram_used = metrics.get("ram_used_mb") or 0
         ram_total = metrics.get("ram_total_mb") or self._ram_total_mb
         ram_pct = (ram_used / ram_total * 100) if ram_total else 0
         self.bars[3].set_value(
-            f"RAM {ram_used / 1024:.1f}/{(ram_total or 1) / 1024:.0f}GB",
+            f"RAM {ram_pct:.0f}%",
             ram_pct,
+            metric_color(ram_pct)
         )
+        self.bars[3].setToolTip(f"RAM: {ram_used / 1024:.1f} / {(ram_total or 1) / 1024:.0f} GB ({ram_pct:.1f}%)")

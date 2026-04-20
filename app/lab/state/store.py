@@ -21,6 +21,7 @@ class LabStore(QObject):
     busy_changed = Signal(str, bool)             # global busy (unified probe/setup)
     install_job_changed = Signal(int, object)    # iid, InstallJob
     download_job_changed = Signal(int, object)   # iid, DownloadJob
+    telemetry_updated = Signal(int, dict)        # iid, dict of raw changes
 
     # --- Compatibility signals (fire for current_selected_instance) ---
     remote_system_changed = Signal(object)       # RemoteSystem
@@ -177,34 +178,57 @@ class LabStore(QObject):
         self.busy_changed.emit(key, busy)
 
     def update_telemetry(self, iid: int, d: dict):
-        """Bridge real-time metrics from AppController into the Lab state."""
+        """Bridge real-time metrics from AppController into the Lab state.
+        
+        Uses thresholding to prevent UI stutter (only signals significant changes).
+        """
         st = self.get_state(iid)
         sys = st.system
+        
+        changed_significantly = False
+        
+        def update_val(obj, attr, val, threshold=1.0):
+            nonlocal changed_significantly
+            old = getattr(obj, attr, 0.0)
+            if abs(old - val) >= threshold:
+                setattr(obj, attr, val)
+                changed_significantly = True
 
-        if "gpu_util" in d:
-            sys.gpu_usage_pct = d["gpu_util"]
-        if "gpu_temp" in d:
-            sys.gpu_temp = d["gpu_temp"]
+        if "gpu_util" in d: update_val(sys, "gpu_usage_pct", d["gpu_util"], 2.0)
+        if "gpu_temp" in d: update_val(sys, "gpu_temp", d["gpu_temp"], 1.0)
+        
         if "vram_used_mb" in d:
             total = d.get("vram_total_mb") or (sys.gpu_vram_gb * 1024 if sys.gpu_vram_gb else 1)
-            sys.gpu_vram_usage_pct = (d["vram_used_mb"] / total) * 100
+            new_pct = (d["vram_used_mb"] / total) * 100
+            update_val(sys, "gpu_vram_usage_pct", new_pct, 1.0)
+            
         if "ram_used_mb" in d:
             total = d.get("ram_total_mb") or (sys.ram_total_gb * 1024 if sys.ram_total_gb else 1)
-            sys.ram_usage_pct = (d["ram_used_mb"] / total) * 100
+            new_pct = (d["ram_used_mb"] / total) * 100
+            update_val(sys, "ram_usage_pct", new_pct, 1.0)
             sys.ram_available_gb = (total - d["ram_used_mb"]) / 1024
+            
         if "load1" in d:
-            # Consistent with the CPU calculation fix
             cores = sys.cpu_cores or 1
-            sys.cpu_usage_pct = (d["load1"] / cores) * 100
+            new_pct = (d["load1"] / cores) * 100
+            update_val(sys, "cpu_usage_pct", new_pct, 2.0)
+            
         if "disk_used_gb" in d:
-            sys.disk_used_gb = d["disk_used_gb"]
+            update_val(sys, "disk_used_gb", d["disk_used_gb"], 0.1)
             if "disk_total_gb" in d and d["disk_total_gb"]:
                 sys.disk_total_gb = d["disk_total_gb"]
-                sys.disk_usage_pct = (d["disk_used_gb"] / d["disk_total_gb"]) * 100
+                new_pct = (d["disk_used_gb"] / d["disk_total_gb"]) * 100
+                update_val(sys, "disk_usage_pct", new_pct, 1.0)
 
-        self.instance_state_updated.emit(iid, st)
-        if iid == self.selected_instance_id:
-            self.remote_system_changed.emit(sys)
+        # Surgical update for Gauges: always emit the raw telemetry signal 
+        # (views that only use numbers won't lag the layout)
+        self.telemetry_updated.emit(iid, d)
+
+        # Only emit heavy state update signals if changes are significant
+        if changed_significantly:
+            self.instance_state_updated.emit(iid, st)
+            if iid == self.selected_instance_id:
+                self.remote_system_changed.emit(sys)
 
     def is_busy(self, key: str) -> bool:
         return self._global_busy.get(key, False)

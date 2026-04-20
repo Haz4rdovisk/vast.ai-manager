@@ -183,7 +183,7 @@ class AppShell(QWidget):
         if self._controller is not None:
             return
         self._controller = controller
-        self.instances = InstancesView(controller, self)
+        self.instances = InstancesView(controller, self, store=self.store)
         self._add_view("instances", self.instances)
         self.store_view = StoreView(controller, self)
         self._add_view("store", self.store_view)

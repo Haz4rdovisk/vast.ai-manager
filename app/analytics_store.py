@@ -8,6 +8,7 @@ Sampling: 1 entry per 5 minutes max.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,6 +43,7 @@ class AnalyticsStore:
         self._billing_summary: dict = {}
         self._billing_events: list[dict] = []
         self._last_write: datetime | None = None
+        self._save_lock = threading.Lock()
         self._load()
 
     # ── Persistence ─────────────────────────────────────────────────────
@@ -88,21 +90,30 @@ class AnalyticsStore:
                 self._last_write = None
 
     def _save(self):
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+        """Thread-safe background persistence."""
+        # Deep copy data for safe serialization outside the lock
+        with self._save_lock:
             payload = {
-                "entries": self._entries,
+                "entries": list(self._entries),
                 "last_recharge_val": self._last_recharge_val,
                 "last_recharge_ts": self._last_recharge_ts,
-                "billing_summary": self._billing_summary,
-                "billing_events": self._billing_events,
+                "billing_summary": dict(self._billing_summary),
+                "billing_events": list(self._billing_events),
             }
-            self._path.write_text(
-                json.dumps(payload, separators=(",", ":")),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
+
+        def worker():
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = self._path.with_suffix(".tmp")
+                tmp_path.write_text(
+                    json.dumps(payload, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                tmp_path.replace(self._path)
+            except OSError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ── Logging ─────────────────────────────────────────────────────────
 
