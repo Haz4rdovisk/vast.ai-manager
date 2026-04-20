@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from app import theme as t
 from app.lab.services.model_params import build_launch_command, params_summary
 from app.lab.state.models import ServerParams
+from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard, SectionHeader
 from app.ui.components.server_params_form import ServerParamsForm
 
@@ -30,10 +31,13 @@ class ConfigureView(QWidget):
         scroll.setWidgetResizable(True)
         inner = QWidget()
         root = QVBoxLayout(inner)
-        root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
-        root.setSpacing(t.SPACE_5)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
+        root.setSpacing(t.SPACE_4)
 
-        root.addWidget(SectionHeader("PARAMETERS", "Configure llama-server"))
+        root.addWidget(PageHeader(
+            "Configure llama-server",
+            "Tune inference parameters before launching the model server.",
+        ))
 
         params_card = GlassCard()
         params_card.body().addWidget(SectionHeader("CORE", "Inference Settings"))

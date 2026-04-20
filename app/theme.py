@@ -280,6 +280,27 @@ QPushButton[size="sm"] {{
     font-size: {FONT_SIZE_SMALL}px;
 }}
 
+QPushButton[role="primary"] {{
+    background: {ACCENT};
+    color: #ffffff;
+    font-weight: 700;
+    padding: 6px 14px;
+    border: none;
+    border-radius: 6px;
+}}
+QPushButton[role="primary"]:hover {{
+    background: {ACCENT_HI};
+}}
+QPushButton[role="primary"]:disabled {{
+    background: rgba(255,255,255,0.04);
+    color: #666;
+    border: 1px dashed rgba(255,255,255,0.1);
+}}
+QLabel[size="lg"] {{
+    font-size: 16px;
+    font-weight: 800;
+}}
+
 /* ── Inputs ─────────────────────────────────────────────────────────────── */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
     background-color: {SURFACE_3};

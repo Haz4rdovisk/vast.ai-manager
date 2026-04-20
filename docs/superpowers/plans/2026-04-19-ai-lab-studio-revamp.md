@@ -1613,6 +1613,9 @@ git commit -m "refactor(lab): discover refresh scores catalog locally"
 
 ### Task 12: `InstallJob` / `DownloadJob` data model + store signals
 
+> **Superseded:** by `docs/superpowers/plans/2026-04-19-model-store-side-panel.md`.
+> Keep this section for history; do not implement from here.
+
 **Files:**
 - Modify: `app/lab/state/models.py`
 - Modify: `app/lab/state/store.py`
@@ -1731,6 +1734,9 @@ git commit -m "feat(lab): add Install/Download job state + store signals"
 ---
 
 ### Task 13: Install panel view
+
+> **Superseded:** by `docs/superpowers/plans/2026-04-19-model-store-side-panel.md`.
+> Keep this section for history; do not implement from here.
 
 **Files:**
 - Create: `app/lab/views/install_panel.py`
@@ -1897,6 +1903,9 @@ git commit -m "feat(lab): add InstallPanel view (llama.cpp install + GGUF downlo
 ---
 
 ### Task 14: Wire streaming install in `AppShell`
+
+> **Superseded:** by `docs/superpowers/plans/2026-04-19-model-store-side-panel.md`.
+> Keep this section for history; do not implement from here.
 
 **Files:**
 - Modify: `app/ui/app_shell.py`

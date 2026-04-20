@@ -6,12 +6,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 from app import theme as t
-from app.ui.components.nav_rail import NavRail, NAV_ITEMS
+from app.ui.components.nav_rail import NavRail
 from app.lab.state.store import LabStore
-from app.lab.state.models import DownloadJob, InstallJob, RemoteGGUF, ServerParams
+from app.lab.state.models import ServerParams
 from app.models import TunnelStatus
 from app.lab.views.discover_view import DiscoverView
-from app.lab.views.install_panel import InstallPanel
 from app.lab.views.models_view import ModelsView
 from app.lab.views.studio_view import StudioView
 from app.controller import AppController
@@ -23,11 +22,13 @@ from app.lab.views.hardware_view import HardwareView
 from app.lab.workers.remote_probe import RemoteProbeWorker
 from app.lab.workers.remote_setup_worker import RemoteSetupWorker
 from app.lab.workers.streaming_worker import StreamingRemoteWorker
+from app.lab.services.job_registry import JobRegistry
 from app.lab.services.progress_parsers import parse_cmake_build_stage, parse_wget_progress
 from app.lab.services.remote_setup import (
     script_download_model,
     script_fetch_log,
     script_install_llamacpp,
+    script_wipe_llamacpp,
 )
 from app.ui.dialogs import UpdateSelectionDialog
 from app.ui.components.title_bar import TitleBar
@@ -54,6 +55,10 @@ class AppShell(QWidget):
         self.setObjectName("app-shell")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.store = LabStore(self)
+        import pathlib
+        jobs_path = pathlib.Path.home() / ".vastai-app" / "jobs.json"
+        self.job_registry = JobRegistry(persist_path=str(jobs_path), parent=self)
+        self.job_registry.load_from_disk()
         self._config = config
         self._config_store = config_store
         self._ssh = ssh_service
@@ -103,11 +108,16 @@ class AppShell(QWidget):
         self.studio.fix_requested.connect(self._apply_diagnostic_fix)
 
         # --- Discover ---
-        self.discover = DiscoverView(self.store, self)
+        self.discover = DiscoverView(self.store, self.job_registry, self)
         self._add_view("discover", self.discover)
-        self.discover.refresh_requested.connect(self._refresh_llmfit_models)
         self.discover.download_requested.connect(self._download_model_by_name)
+        self.discover.setup_requested.connect(self._setup_environment_job)
+        self.discover.wipe_requested.connect(self._wipe_environment)
+        self.discover.cancel_requested.connect(self._cancel_job)
+        self.discover.resume_requested.connect(self._resume_job)
+        self.discover.discard_requested.connect(self._discard_job)
         self.discover.back_requested.connect(lambda: self._go("studio"))
+        self.discover.instances_requested.connect(lambda: self._go("instances"))
 
         # --- Models ---
         self.models = ModelsView(self.store, self)
@@ -200,6 +210,7 @@ class AppShell(QWidget):
             )
         )
         controller.instances_refreshed.connect(self.hardware.sync_instances)
+        controller.instances_refreshed.connect(self._try_reattach_jobs_once)
         # Bridge real-time metrics back to the Lab store
         controller.live_metrics.connect(self._on_live_metrics_bridge)
         # Sync analytics
@@ -398,6 +409,80 @@ class AppShell(QWidget):
         else:
             self._probe_instance(iid)
 
+    def _setup_environment_job(self, iid: int):
+        """Standardized environment setup using the Job System for visibility."""
+        if not iid or not self._controller or not self._ssh:
+            return
+
+        state = self.store.get_state(iid)
+        if state.setup.llamacpp_installed:
+            return
+
+        if not self.job_registry.can_start(iid):
+            self._controller.toast_requested.emit(
+                f"A job is already running on #{iid}.", "warning", 2500
+            )
+            return
+
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host:
+            return
+
+        from app.lab.state.models import JobDescriptor, build_job_key
+        import time
+
+        key = build_job_key(iid, "SYSTEM", "SETUP")
+        desc = JobDescriptor(
+            key=key,
+            iid=iid,
+            repo_id="Environment",
+            filename="llama.cpp (CUDA Build)",
+            quant="SETUP",
+            size_bytes=0,
+            needs_llamacpp=True,
+            remote_state_path=f"/workspace/.vastai-app/jobs/{key}.json",
+            remote_log_path=f"/tmp/install-{key}.log",
+            started_at=time.time(),
+        )
+        self.job_registry.start_job(desc)
+
+        script = script_install_llamacpp(job_key=key)
+        worker = StreamingRemoteWorker(self._ssh, inst.ssh_host, inst.ssh_port, script, self)
+        self._setup_workers[iid] = worker
+
+        def on_line(line: str):
+            event = parse_cmake_build_stage(line)
+            if event.stage != "unknown":
+                self.job_registry.update(key, stage=event.stage, percent=event.percent or 0)
+
+        worker.line.connect(on_line)
+        worker.finished.connect(lambda ok, out: self._on_install_done_registry(ok, out, key, iid))
+        self.job_registry.update(key, stage="apt", percent=0)
+        worker.start()
+
+    def _wipe_environment(self, iid: int):
+        """Recursive deletion of llama.cpp to test fresh setup."""
+        if not iid or not self._controller or not self._ssh:
+            return
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        if not inst or not inst.ssh_host:
+            return
+
+        self.store.set_instance_busy(iid, "setup", True)
+        
+        def on_done(ok, out):
+            self.store.set_instance_busy(iid, "setup", False)
+            if ok:
+                self._controller.log_line.emit(f"#{iid}: Environment wiped.")
+                self._probe_instance(iid)
+            else:
+                self._controller.log_line.emit(f"#{iid}: Wipe failed: {out[:100]}")
+
+        worker = RemoteSetupWorker(self._ssh, inst.ssh_host, inst.ssh_port, "wipe_llamacpp")
+        self._setup_workers[iid] = worker
+        worker.finished.connect(on_done)
+        worker.start()
+
     def _run_single_setup(self, action: str, iid: int, callback: callable | None = None, **kwargs):
         self.store.set_instance_busy(iid, "setup", True)
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
@@ -435,11 +520,22 @@ class AppShell(QWidget):
 
     # --- Download model ---
 
-    def _download_model_by_name(self, model_name: str, quant: str):
-        iid = self.store.selected_instance_id
+    def _download_model_by_name(self, iid: int, model_name: str, quant: str):
+        """Start a remote install/download job.
+
+        ``quant`` is the full GGUF filename in the current Discover flow.
+        """
         if not iid or not self._controller or not self._ssh:
             return
 
+        if not self.job_registry.can_start(iid):
+            self._controller.toast_requested.emit(
+                f"Install already running on #{iid}.", "warning", 2500
+            )
+            return
+
+        self.store.set_instance(iid) # Ensure the store is focused on the target instance
+        self._install_retry_iid = iid
         self._install_retry_model = model_name
         self._install_retry_quant = quant
 
@@ -447,31 +543,42 @@ class AppShell(QWidget):
         if not inst or not inst.ssh_host:
             return
 
-        if "install" not in self._views:
-            panel = InstallPanel(self.store, self)
-            self._add_view("install", panel)
-            panel.close_requested.connect(lambda: self._go("discover"))
-            panel.retry_requested.connect(
-                lambda: self._download_model_by_name(
-                    self._install_retry_model,
-                    self._install_retry_quant,
-                )
-            )
-        self._go("install")
-
         state = self.store.get_state(iid)
-        scored = next((s for s in state.scored_models if s.name == model_name), None)
-        repo = scored.gguf_sources[0] if scored and scored.gguf_sources else model_name
-        filename = (
-            f"{model_name.lower().replace(' ', '-')}-"
-            f"{(quant or 'Q4_K_M').lower()}.gguf"
-        )
+        
+        # We no longer rely on scored_models for the repo, as we search HF directly
+        # The model_name passed from DiscoverView is the HF repo ID (e.g., "bartowski/Meta-Llama-3-8B-Instruct-GGUF")
+        repo = model_name
+        
+        # The filename is passed directly from the selected HFModelFile
+        filename = quant # In the new flow, 'quant' parameter is actually the full filename
+        import re
+        import time
+
+        match = re.search(r'-(Q\d_[A-Z0-9_]+)\.gguf$', filename, re.I)
+        quant_token = match.group(1).upper() if match else "UNKNOWN"
+
         needs_install = not state.setup.llamacpp_installed
+        from app.lab.state.models import JobDescriptor, build_job_key
+
+        key = build_job_key(iid, repo, quant_token)
+        desc = JobDescriptor(
+            key=key,
+            iid=iid,
+            repo_id=repo,
+            filename=filename,
+            quant=quant_token,
+            size_bytes=0,
+            needs_llamacpp=needs_install,
+            remote_state_path=f"/workspace/.vastai-app/jobs/{key}.json",
+            remote_log_path=f"/tmp/install-{key}.log",
+            started_at=time.time(),
+        )
+        self.job_registry.start_job(desc)
 
         script_parts: list[str] = []
         if needs_install:
-            script_parts.append(script_install_llamacpp())
-        script_parts.append(script_download_model(repo, filename))
+            script_parts.append(script_install_llamacpp(job_key=key))
+        script_parts.append(script_download_model(repo, filename, job_key=key))
         full_script = "\n".join(script_parts)
 
         worker = StreamingRemoteWorker(
@@ -496,15 +603,7 @@ class AppShell(QWidget):
             if progress_state["phase"] == "install":
                 event = parse_cmake_build_stage(line)
                 if event.stage == "done":
-                    self.store.update_install_job(
-                        iid,
-                        InstallJob(
-                            kind="llamacpp",
-                            stage="done",
-                            percent=100,
-                            log_tail=log_tail[-10:],
-                        ),
-                    )
+                    self.job_registry.update(key, stage="download", percent=0)
                     progress_state["phase"] = "download"
                     return
 
@@ -515,69 +614,141 @@ class AppShell(QWidget):
                         else progress_state["percent"]
                     )
                     progress_state["percent"] = percent
-                    self.store.update_install_job(
-                        iid,
-                        InstallJob(
-                            kind="llamacpp",
-                            stage=event.stage,
-                            percent=percent,
-                            log_tail=log_tail[-10:],
-                        ),
-                    )
+                    self.job_registry.update(key, stage=event.stage, percent=percent)
                 return
 
             event = parse_wget_progress(line)
             if event is not None:
-                self.store.update_download_job(
-                    iid,
-                    DownloadJob(
-                        repo_id=repo,
-                        filename=filename,
-                        percent=event.percent,
-                        bytes_downloaded=0,
-                        bytes_total=0,
-                        speed=event.speed,
-                    ),
-                )
+                self.job_registry.update(key, stage="download", percent=event.percent, speed=event.speed)
             elif "DOWNLOAD_DONE" in line:
-                self.store.update_download_job(
-                    iid,
-                    DownloadJob(
-                        repo_id=repo,
-                        filename=filename,
-                        percent=100,
-                        bytes_downloaded=0,
-                        bytes_total=0,
-                        speed="",
-                        done=True,
-                    ),
-                )
+                self.job_registry.update(key, stage="done", percent=100)
 
         worker.line.connect(on_line)
-        worker.finished.connect(lambda ok, out: self._on_install_done(ok, out, iid))
-        self.store.update_install_job(
-            iid,
-            InstallJob(
-                kind="llamacpp",
-                stage="apt" if needs_install else "done",
-                percent=0 if needs_install else 100,
-            ),
-        )
+        worker.finished.connect(lambda ok, out: self._on_install_done_registry(ok, out, key, iid))
+        self.job_registry.update(key, stage="apt" if needs_install else "download", percent=0)
         worker.start()
 
-    def _on_install_done(self, ok: bool, output: str, iid: int):
-        if not ok:
-            self.store.update_install_job(
-                iid,
-                InstallJob(
-                    kind="llamacpp",
-                    stage="failed",
-                    percent=0,
-                    log_tail=output.splitlines()[-20:],
-                    error=output[-200:],
-                ),
-            )
+    def _on_install_done_registry(self, ok: bool, output: str, key: str, iid: int):
+        self.job_registry.finish(key, ok=ok, error=(output[-200:] if not ok else None))
         self._probe_instance(iid)
+
+    def _cancel_job(self, key: str) -> None:
+        desc = self.job_registry.get(key)
+        if desc is None or self._ssh is None or self._controller is None:
+            return
+        inst = next((i for i in self._controller.last_instances if i.id == desc.iid), None)
+        if not inst or not inst.ssh_host:
+            return
+        from app.lab.services.remote_setup import script_cancel_job
+
+        self._ssh.run_script(inst.ssh_host, inst.ssh_port, script_cancel_job(key))
+        self.job_registry.update(key, stage="cancelled")
+        self.job_registry.finish(key, ok=False, error="cancelled")
+
+    def _resume_job(self, key: str) -> None:
+        desc = self.job_registry.get(key)
+        if desc is None:
+            return
+        self.job_registry.drop(key)
+        self._download_model_by_name(desc.iid, desc.repo_id, desc.filename)
+
+    def _discard_job(self, key: str) -> None:
+        desc = self.job_registry.get(key)
+        if desc is None:
+            return
+        if self._ssh is not None and self._controller is not None:
+            inst = next((i for i in self._controller.last_instances if i.id == desc.iid), None)
+            if inst and inst.ssh_host:
+                from app.lab.services.remote_setup import script_cancel_job
+
+                self._ssh.run_script(inst.ssh_host, inst.ssh_port, script_cancel_job(key))
+        self.job_registry.drop(key)
+
+    def _try_reattach_jobs_once(self, instances, _user=None):
+        if getattr(self, "_reattach_done", False):
+            return
+        self._reattach_done = True
+        if self._ssh is None:
+            return
+
+        from app.lab.workers.remote_job_probe import RemoteJobProbe
+
+        self._job_probes: dict[str, RemoteJobProbe] = {}
+        for key, desc in self.job_registry.active_items():
+            inst = next((i for i in instances if i.id == desc.iid), None)
+            if not inst or not inst.ssh_host:
+                continue
+            probe = RemoteJobProbe(self._ssh, inst.ssh_host, inst.ssh_port, desc, self)
+            self._job_probes[key] = probe
+            probe.result.connect(
+                lambda status, state, d=desc: self._on_job_probe(d, status, state)
+            )
+            probe.finished.connect(lambda k=key: self._job_probes.pop(k, None))
+            probe.start()
+
+    def _on_job_probe(self, desc, status: str, state: dict):
+        if status == "DONE":
+            self.job_registry.finish(desc.key, ok=True)
+            if self._controller:
+                self._controller.toast_requested.emit(
+                    f"Install of {desc.filename} completed on #{desc.iid}.", "success", 3000
+                )
+            self._probe_instance(desc.iid)
+            return
+        if status == "MISSING":
+            self.job_registry.drop(desc.key)
+            return
+        if status == "STALE":
+            self.discover.side_panel.show_stale(desc, state)
+            return
+        if status != "RUNNING":
+            return
+
+        self.job_registry.update(
+            desc.key,
+            stage=state.get("stage", desc.stage),
+            percent=state.get("percent", desc.percent),
+            bytes_downloaded=state.get("bytes_downloaded", desc.bytes_downloaded),
+        )
+        self._reattach_stream(desc)
+        self.job_registry.mark_reattached(desc.key)
+        if self._controller:
+            self._controller.toast_requested.emit(
+                f"Reattached to install on #{desc.iid}.", "info", 3000
+            )
+
+    def _reattach_stream(self, desc) -> None:
+        if self._controller is None or self._ssh is None:
+            return
+        inst = next((i for i in self._controller.last_instances if i.id == desc.iid), None)
+        if not inst or not inst.ssh_host:
+            return
+        tail_script = f'tail -n +1 -f "{desc.remote_log_path}"'
+        worker = StreamingRemoteWorker(self._ssh, inst.ssh_host, inst.ssh_port, tail_script, self)
+        self._setup_workers[desc.iid] = worker
+        key = desc.key
+
+        def on_line(line: str):
+            event = parse_wget_progress(line)
+            if event is not None:
+                self.job_registry.update(key, stage="download", percent=event.percent, speed=event.speed)
+                return
+            build_event = parse_cmake_build_stage(line)
+            if build_event.stage != "unknown":
+                current = self.job_registry.get(key)
+                self.job_registry.update(
+                    key,
+                    stage=build_event.stage,
+                    percent=build_event.percent or (current.percent if current else 0),
+                )
+                return
+            if "DOWNLOAD_DONE" in line:
+                self.job_registry.update(key, stage="done", percent=100)
+                self.job_registry.finish(key, ok=True)
+                worker.requestInterruption()
+
+        worker.line.connect(on_line)
+        worker.start()
 
     # --- Model operations ---
 
@@ -647,6 +818,8 @@ class AppShell(QWidget):
     def _stop_server(self):
         iid = self.store.selected_instance_id
         if iid:
+            self._run_single_setup("stop_server", iid)
+        else:
             self._run_single_setup("stop_server", iid)
             self.studio.clear_webui()
 

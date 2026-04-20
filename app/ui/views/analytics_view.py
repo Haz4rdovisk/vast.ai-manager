@@ -19,6 +19,7 @@ from app.billing import (
 )
 from app.models import AppConfig, Instance, InstanceState, UserInfo
 from app.analytics_store import AnalyticsStore
+from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard, MetricTile
 
 
@@ -687,26 +688,11 @@ class AnalyticsView(QWidget):
         self._summary_cols: int | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_6, t.SPACE_5, t.SPACE_6, t.SPACE_4)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
         root.setSpacing(t.SPACE_4)
 
         # Header
-        head = QHBoxLayout()
-        title_col = QVBoxLayout()
-        title_col.setSpacing(2)
-        title = QLabel("Analytics")
-        title.setStyleSheet(
-            f"color: {t.TEXT_HERO}; font-size: {t.FONT_SIZE_DISPLAY}px;"
-            f" font-weight: 700;"
-        )
-        sub = QLabel("Fleet cost intelligence")
-        sub.setStyleSheet(
-            f"color: {t.TEXT_MID}; font-size: {t.FONT_SIZE_SMALL}px;"
-        )
-        title_col.addWidget(title)
-        title_col.addWidget(sub)
-        head.addLayout(title_col)
-        head.addStretch()
+        head = PageHeader("Analytics", "Fleet cost intelligence")
 
         # Data indicator kept for internal sync state; not shown as a loose tag.
         self.data_lbl = QLabel("")
@@ -714,7 +700,7 @@ class AnalyticsView(QWidget):
             f"color: {t.TEXT_LOW}; font-size: {t.FONT_SIZE_SMALL}px;"
             f" font-family: {t.FONT_MONO};"
         )
-        root.addLayout(head)
+        root.addWidget(head)
 
         # Scroll
         self.scroll = QScrollArea()

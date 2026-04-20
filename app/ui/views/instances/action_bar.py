@@ -180,16 +180,7 @@ class ActionBar(QFrame):
         c_color_qss = "" 
         c_enabled = (inst.state == InstanceState.RUNNING)
         
-        if scheduling:
-            c_label = "scheduling..."
-            c_sig = self.deactivate_requested
-            c_enabled = True
-            c_color_qss = "background: #FFA000;"
-        elif inst.state == InstanceState.STOPPED:
-            c_label = "Activate"
-            c_sig = self.activate_requested
-            c_enabled = True
-        elif tunnel == TunnelStatus.CONNECTING:
+        if tunnel == TunnelStatus.CONNECTING:
             c_label = "Connecting..."
         elif tunnel == TunnelStatus.CONNECTED:
             c_label, c_sig = "Disconnect", self.disconnect_requested

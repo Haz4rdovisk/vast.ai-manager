@@ -1,235 +1,612 @@
-"""Discover view — LLMfit model recommendations. Glassmorphism redesign."""
+"""Discover view: Hugging Face GGUF search, fit scoring, and side-panel install."""
 from __future__ import annotations
+
+import json
+import os
+import pathlib
+import re
+import webbrowser
+
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QScrollArea, QPushButton, QLineEdit,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Signal, Qt
+
 from app import theme as t
-from app.ui.components.primitives import GlassCard, StatusPill
+from app.lab.services.fit_scorer import InstanceFitScorer
+from app.lab.services.huggingface import HFModel
+from app.lab.services.job_registry import JobRegistry
+from app.lab.services.model_catalog import CatalogEntry
+from app.lab.views.install_panel_side import InstallPanelSide
+from app.lab.workers.huggingface_worker import HFSearchWorker
+from app.ui.components.page_header import PageHeader
+from app.ui.components.model_card import ModelCard
 
 
-_FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err"}
+_FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err", "pending": "muted"}
+_FIT_LABEL = {
+    "perfect": "Perfect Fit",
+    "good": "Good Fit",
+    "marginal": "Tight Fit",
+    "too_tight": "Too Large",
+    "pending": "Analyzing...",
+}
 
-USE_CASES = [
-    ("all", "All"), ("general", "General"), ("coding", "Coding"),
-    ("reasoning", "Reasoning"), ("chat", "Chat"),
-    ("multimodal", "Multimodal"), ("embedding", "Embedding"),
-]
+CATEGORY_MAP: dict[str, dict] = {
+    "All": {"pipeline": None, "heuristic": None},
+    "General": {"pipeline": "text-generation", "heuristic": None},
+    "Coding": {"pipeline": "text-generation", "heuristic": "coding"},
+    "Reasoning": {"pipeline": "text-generation", "heuristic": "reasoning"},
+    "Chat": {"pipeline": "text-generation", "heuristic": "chat"},
+    "Multimodal": {"pipeline": "image-text-to-text", "heuristic": None},
+    "Embedding": {"pipeline": "feature-extraction", "heuristic": None},
+}
+
+_CODING_RX = re.compile(
+    r"\b(coder?|starcoder\d*|deepseek[-_]?coder|qwen[-_]?coder|wizardcoder|codellama|codegemma)\b",
+    re.I,
+)
+_REASONING_RX = re.compile(r"\b(r1|qwq|reasoner?|o1|phi[-_]?reason|deepseek[-_]?r)\b", re.I)
+_CHAT_RX = re.compile(r"\b(chat|instruct|sft|assistant|rp|roleplay)\b", re.I)
+_HEURISTIC_RX = {"coding": _CODING_RX, "reasoning": _REASONING_RX, "chat": _CHAT_RX}
+
+
+def apply_category_heuristic(category: str, models: list) -> list:
+    """Apply client-side category filtering for tags HF cannot express cleanly."""
+    cfg = CATEGORY_MAP.get(category)
+    if not cfg or not cfg["heuristic"]:
+        return models
+    rx = _HEURISTIC_RX[cfg["heuristic"]]
+    return [model for model in models if rx.search(model.name) or any(rx.search(tag) for tag in model.tags)]
 
 
 class DiscoverView(QWidget):
-    download_requested = Signal(str, str)
-    refresh_requested = Signal(str, str)
+    download_requested = Signal(int, str, str)
+    setup_requested = Signal(int)
+    wipe_requested = Signal(int)
+    cancel_requested = Signal(str)
+    resume_requested = Signal(str)
+    discard_requested = Signal(str)
     back_requested = Signal()
+    instances_requested = Signal()
 
-    def __init__(self, store, parent=None):
+    def __init__(self, store, job_registry: JobRegistry | None = None, parent=None):
         super().__init__(parent)
+        self.setObjectName("discover-view")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"""
+            QWidget#discover-view {{
+                background: {t.BG_DEEP};
+            }}
+            QWidget#discover-topbar {{
+                background: #05080d;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+            }}
+            QLabel#discover-brand {{
+                color: {t.TEXT_HI};
+                font-size: 14px;
+                font-weight: 800;
+            }}
+            QWidget#discover-left-pane {{
+                background: {t.BG_DEEP};
+            }}
+            QLineEdit {{
+                background: rgba(255,255,255,0.03);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: {t.TEXT_HI};
+            }}
+            QLineEdit:focus {{
+                border-color: {t.ACCENT};
+                background: rgba(255,255,255,0.05);
+            }}
+            QComboBox {{
+                background: rgba(255,255,255,0.03);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: {t.TEXT_HI};
+            }}
+            QPushButton#discover-search-btn {{
+                background: {t.ACCENT};
+                border: none;
+                border-radius: 6px;
+                color: white;
+                font-weight: 600;
+                padding: 6px 16px;
+            }}
+            QPushButton#discover-search-btn:hover {{
+                background: {t.ACCENT_HI};
+            }}
+            QPushButton#discover-close-btn {{
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 6px;
+                color: {t.TEXT_HI};
+                font-weight: 600;
+            }}
+            QPushButton#discover-close-btn:hover {{
+                background: rgba(255,255,255,0.08);
+            }}
+            """
+        )
+
         self.store = store
+        self.registry = job_registry
+        self.scorer = InstanceFitScorer()
+        self.worker = None
+        self.current_models: list[HFModel] = []
+        self._next_cursor: str | None = None
+        self._append_mode = False
+        self._pending_splitter_sizes = None
+
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(200)
+        self._render_timer.timeout.connect(self._render)
+
+        self._splitter_save_timer = QTimer(self)
+        self._splitter_save_timer.setSingleShot(True)
+        self._splitter_save_timer.setInterval(400)
+        self._splitter_save_timer.timeout.connect(self._flush_splitter_sizes)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
-        root.setSpacing(t.SPACE_5)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Breadcrumb
-        breadcrumb = QHBoxLayout()
-        breadcrumb.setSpacing(t.SPACE_2)
-        back_btn = QPushButton("\u2190  Back")
-        back_btn.setProperty("variant", "ghost")
-        back_btn.setFixedWidth(80)
-        back_btn.clicked.connect(self.back_requested.emit)
-        breadcrumb.addWidget(back_btn)
-        self.ctx_lbl = QLabel("Studio \u203a Discover Models")
-        self.ctx_lbl.setStyleSheet(
-            f"color: {t.TEXT_MID}; font-weight: 500;"
-            f" font-size: {t.FONT_SIZE_SMALL}px;"
-        )
-        breadcrumb.addWidget(self.ctx_lbl)
-        breadcrumb.addStretch()
-        root.addLayout(breadcrumb)
+        self.topbar = QWidget()
+        self.topbar.setObjectName("discover-topbar")
+        self.topbar.setFixedHeight(56)
+        top_lay = QHBoxLayout(self.topbar)
+        top_lay.setContentsMargins(14, 0, 14, 0)
+        top_lay.setSpacing(t.SPACE_3)
 
-        # Header
-        head = QHBoxLayout()
-        head.setSpacing(t.SPACE_3)
-        title_group = QVBoxLayout()
-        title_group.setSpacing(4)
-        title = QLabel("Model Recommendations")
-        title.setStyleSheet(
-            f"color: {t.TEXT_HERO}; font-size: 24px; font-weight: 700;"
-        )
-        sub = QLabel("Locally ranked models for your rented hardware")
-        sub.setStyleSheet(
-            f"color: {t.TEXT_MID}; font-size: {t.FONT_SIZE_SMALL}px;"
-        )
-        title_group.addWidget(title)
-        title_group.addWidget(sub)
-        head.addLayout(title_group)
-        head.addStretch()
+        # 1. Left Section (Brand)
+        left_sect = QWidget()
+        left_sect_lay = QHBoxLayout(left_sect)
+        left_sect_lay.setContentsMargins(0, 0, 0, 0)
+        left_sect_lay.setSpacing(t.SPACE_3)
+        brand = QLabel("Model Store")
+        brand.setObjectName("discover-brand")
+        left_sect_lay.addWidget(brand)
+        left_sect_lay.addStretch()
+        top_lay.addWidget(left_sect, 1)
 
+        # 2. Center Section (Consolidated Search Bar)
+        center_sect = QWidget()
+        center_sect_lay = QHBoxLayout(center_sect)
+        center_sect_lay.setContentsMargins(0, 0, 0, 0)
+        center_sect_lay.setSpacing(t.SPACE_2)
+        
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("\U0001F50D Search models...")
-        self.search_input.setFixedWidth(220)
-        self.search_input.returnPressed.connect(self._refresh)
-        head.addWidget(self.search_input)
+        self.search_input.setPlaceholderText("Search Hugging Face...")
+        self.search_input.setFixedWidth(280)
+        self.search_input.returnPressed.connect(lambda: self._search())
+        center_sect_lay.addWidget(self.search_input)
 
         self.filter = QComboBox()
-        for key, label in USE_CASES:
-            self.filter.addItem(label, key)
-        self.filter.currentIndexChanged.connect(lambda _: self._refresh())
-        head.addWidget(self.filter)
+        self.filter.addItems(list(CATEGORY_MAP.keys()))
+        self.filter.setFixedWidth(100)
+        self.filter.currentIndexChanged.connect(lambda _: self._search())
+        center_sect_lay.addWidget(self.filter)
 
-        self.refresh_btn = QPushButton("\u21BB")
-        self.refresh_btn.setFixedWidth(38)
-        self.refresh_btn.setFixedHeight(38)
-        self.refresh_btn.clicked.connect(self._refresh)
-        head.addWidget(self.refresh_btn)
-        root.addLayout(head)
+        self.size_filter = QComboBox()
+        self.size_filter.addItems(["All Sizes", "< 7B", "7B - 14B", "14B - 35B", "35B - 80B", "> 80B"])
+        self.size_filter.setFixedWidth(100)
+        self.size_filter.currentIndexChanged.connect(self._render)
+        center_sect_lay.addWidget(self.size_filter)
 
-        # Status
-        self.status_lbl = QLabel(
-            "Select an instance and refresh to score the local catalog."
-        )
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Downloads", "Best Fit"])
+        self.sort_combo.setFixedWidth(110)
+        self.sort_combo.currentIndexChanged.connect(self._render)
+        center_sect_lay.addWidget(self.sort_combo)
+
+        self.search_btn = QPushButton("Search")
+        self.search_btn.setObjectName("discover-search-btn")
+        self.search_btn.setProperty("size", "sm")
+        self.search_btn.clicked.connect(lambda: self._search())
+        center_sect_lay.addWidget(self.search_btn)
+        
+        top_lay.addWidget(center_sect, 0, Qt.AlignCenter)
+
+        # 3. Right Section (System Actions)
+        right_sect = QWidget()
+        right_sect_lay = QHBoxLayout(right_sect)
+        right_sect_lay.setContentsMargins(0, 0, 0, 0)
+        right_sect_lay.setSpacing(t.SPACE_2)
+        right_sect_lay.addStretch()
+
+        self.close_panel_btn = QPushButton("Close")
+        self.close_panel_btn.setObjectName("discover-close-btn")
+        self.close_panel_btn.setProperty("variant", "secondary")
+        self.close_panel_btn.setFixedWidth(92)
+        self.close_panel_btn.setVisible(False)
+        self.close_panel_btn.clicked.connect(self._toggle_side_panel)
+        right_sect_lay.addWidget(self.close_panel_btn)
+
+        top_lay.addWidget(right_sect, 1)
+
+        root.addWidget(self.topbar)
+
+        self.layout_stack = QStackedWidget()
+        root.addWidget(self.layout_stack, 1)
+
+        self.lock_widget = self._build_lock_widget()
+        self.layout_stack.addWidget(self.lock_widget)
+
+        self.content_widget = QWidget()
+        self.content_widget.setObjectName("discover-workspace")
+        self.content_widget.setStyleSheet(f"QWidget#discover-workspace {{ background: {t.BG_DEEP}; }}")
+        content_lay = QVBoxLayout(self.content_widget)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(0)
+
+        self.left_pane = QWidget()
+        self.left_pane.setObjectName("discover-left-pane")
+        left_lay = QVBoxLayout(self.left_pane)
+        left_lay.setContentsMargins(t.SPACE_4, t.SPACE_3, t.SPACE_4, 0)
+        left_lay.setSpacing(t.SPACE_4)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+        self.progress.setFixedHeight(4)
+        left_lay.addWidget(self.progress)
+
+        self.status_lbl = QLabel("Enter a search term to find GGUF models on Hugging Face.")
         self.status_lbl.setProperty("role", "muted")
         self.status_lbl.setWordWrap(True)
-        root.addWidget(self.status_lbl)
+        left_lay.addWidget(self.status_lbl)
 
-        # Model list
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self.list_host = QWidget()
         self.list_lay = QVBoxLayout(self.list_host)
-        self.list_lay.setContentsMargins(0, 0, 0, 0)
+        self.list_lay.setContentsMargins(0, 0, t.SPACE_3, 0)
         self.list_lay.setSpacing(t.SPACE_3)
         self.scroll.setWidget(self.list_host)
-        root.addWidget(self.scroll, 1)
 
-        # Store connections
-        self.store.instance_changed.connect(self._on_instance_changed)
-        self.store.scored_models_changed.connect(self._render)
-        self.store.instance_state_updated.connect(self._on_instance_state_updated)
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.setChildrenCollapsible(True)
+        self._splitter.setHandleWidth(1)
+        self._splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {t.BORDER_LOW}; }}"
+        )
+        self._splitter.addWidget(self.left_pane)
+        self.side_panel = InstallPanelSide(self.store, self.registry, self)
+        self._splitter.addWidget(self.side_panel)
+        self._splitter.setStretchFactor(0, 3)
+        self._splitter.setStretchFactor(1, 2)
+        saved = self._load_splitter_sizes()
+        self._splitter.setSizes(saved if saved and len(saved) == 2 else [720, 360])
+        self._splitter.splitterMoved.connect(lambda *_: self._queue_splitter_save(self._splitter.sizes()))
 
-    def _check_busy(self, iid: int):
-        if iid == self.store.selected_instance_id:
-            busy = "discover" in self.store.get_state(iid).busy_keys
-            self.refresh_btn.setEnabled(not busy)
-            self.search_input.setEnabled(not busy)
-            self.filter.setEnabled(not busy)
+        self.load_more_btn = QPushButton("Load more")
+        self.load_more_btn.clicked.connect(lambda: self._search(append=True))
+        self.load_more_btn.hide()
+        left_lay.addWidget(self.scroll, 1)
+        left_lay.addWidget(self.load_more_btn, 0, Qt.AlignCenter)
 
-    def _on_instance_changed(self, iid: int):
-        if iid:
-            self.ctx_lbl.setText(
-                f"Studio \u203a Instance #{iid} \u203a Discover"
-            )
-            self._render(self.store.get_state(iid).scored_models)
-        else:
-            self.ctx_lbl.setText("Studio \u203a Discover Models")
-            self._render([])
+        content_lay.addWidget(self._splitter, 1)
 
-    def _on_instance_state_updated(self, iid: int, _state):
-        self._check_busy(iid)
-        selected = self.store.selected_instance_id
-        if selected:
-            self._render(self.store.get_state(selected).scored_models)
+        self.side_panel.close_requested.connect(self._toggle_side_panel)
+        self.side_panel.install_requested.connect(self.download_requested.emit)
+        self.side_panel.setup_requested.connect(self.setup_requested.emit)
+        self.side_panel.wipe_requested.connect(self.wipe_requested.emit)
+        self.side_panel.cancel_requested.connect(self.cancel_requested.emit)
+        self.side_panel.resume_requested.connect(self.resume_requested.emit)
+        self.side_panel.discard_requested.connect(self.discard_requested.emit)
+        self.side_panel.hide()
 
-    def _refresh(self):
-        iid = self.store.selected_instance_id
-        if iid and "discover" in self.store.get_state(iid).busy_keys:
+        self.layout_stack.addWidget(self.content_widget)
+
+        self.store.instance_state_updated.connect(lambda *_: self._update_lock_state())
+        self.registry.job_updated.connect(lambda _key: self._schedule_render())
+        self.registry.job_started.connect(lambda _key: self._schedule_render())
+        self.registry.job_finished.connect(lambda *_: self._schedule_render())
+        self._update_lock_state()
+
+
+    def _build_lock_widget(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(t.SPACE_8, t.SPACE_8, t.SPACE_8, t.SPACE_8)
+        lay.setSpacing(t.SPACE_4)
+
+        center = QVBoxLayout()
+        center.setAlignment(Qt.AlignCenter)
+        center.setSpacing(t.SPACE_4)
+        lock_icon = QLabel()
+        lock_icon.setAlignment(Qt.AlignCenter)
+        try:
+            import qtawesome as qta
+
+            lock_icon.setPixmap(qta.icon("mdi.lock-outline", color=t.ACCENT_SOFT).pixmap(42, 42))
+        except Exception:
+            lock_icon.hide()
+        title = QLabel("SSH Tunnel Required")
+        title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 24px; font-weight: 700;")
+        title.setAlignment(Qt.AlignCenter)
+        msg = QLabel(
+            "The Model Store requires an active SSH connection to calculate hardware fit scores "
+            "and enable remote installations.\n\nPlease connect an instance via SSH to continue."
+        )
+        msg.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 14px;")
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setFixedWidth(400)
+        msg.setWordWrap(True)
+        goto_btn = QPushButton("Go to Instances")
+        goto_btn.setFixedWidth(200)
+        goto_btn.clicked.connect(self.instances_requested.emit)
+        center.addStretch()
+        center.addWidget(lock_icon)
+        center.addWidget(title)
+        center.addWidget(msg)
+        center.addSpacing(t.SPACE_4)
+        center.addWidget(goto_btn, 0, Qt.AlignCenter)
+        center.addStretch()
+        lay.addLayout(center, 1)
+        return widget
+
+    def _ui_state_path(self) -> pathlib.Path:
+        return pathlib.Path.home() / ".vastai-app" / "ui_state.json"
+
+    def _load_splitter_sizes(self) -> list[int] | None:
+        path = self._ui_state_path()
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        sizes = data.get("discover_splitter")
+        if isinstance(sizes, list) and all(isinstance(item, int) for item in sizes):
+            return sizes
+        return None
+
+    def _save_splitter_sizes(self, sizes: list[int]) -> None:
+        path = self._ui_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception:
+            data = {}
+        data["discover_splitter"] = sizes
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+
+    def _queue_splitter_save(self, sizes: list[int]) -> None:
+        self._pending_splitter_sizes = list(sizes)
+        self._splitter_save_timer.start()
+
+    def _flush_splitter_sizes(self) -> None:
+        if self._pending_splitter_sizes is None:
             return
-        uc = self.filter.currentData() or "all"
-        search = self.search_input.text().strip()
-        self.refresh_requested.emit(uc, search)
+        sizes = self._pending_splitter_sizes
+        self._pending_splitter_sizes = None
+        self._save_splitter_sizes(sizes)
 
-    def _render(self, models):
-        if models is None:
-            models = []
+    def _update_lock_state(self):
+        has_tunnels = len(self.store.all_instance_ids()) > 0
+        target_idx = 1 if has_tunnels else 0
+        if self.layout_stack.currentIndex() != target_idx:
+            self.layout_stack.setCurrentIndex(target_idx)
+            if target_idx == 1 and not self.current_models:
+                self._search("llama")
+        if target_idx == 1:
+            self._render()
 
+    def _search(self, query: str = "", append: bool = False):
+        if self.worker and self.worker.isRunning():
+            return
+
+        term = query if isinstance(query, str) and query else self.search_input.text().strip()
+        category = self.filter.currentText()
+        cfg = CATEGORY_MAP.get(category, CATEGORY_MAP["All"])
+        cursor = self._next_cursor if append else None
+        self._append_mode = append
+
+        self.progress.setVisible(True)
+        self.search_btn.setEnabled(False)
+        self.search_input.setEnabled(False)
+        self.load_more_btn.setEnabled(False)
+        self.status_lbl.setText(
+            "Loading more..." if append else f"Searching Hugging Face for '{term or 'GGUF'}'..."
+        )
+
+        self.worker = HFSearchWorker(
+            query=term,
+            limit=40,
+            pipeline_tag=cfg["pipeline"],
+            cursor=cursor,
+            parent=self,
+        )
+        self.worker.finished.connect(lambda models, next_cursor: self._on_search_finished(models, next_cursor, category))
+        self.worker.error.connect(self._on_search_error)
+        self.worker.start()
+
+    def _on_search_finished(self, models: list[HFModel], next_cursor: str | None, category: str):
+        self.progress.setVisible(False)
+        self.search_btn.setEnabled(True)
+        self.search_input.setEnabled(True)
+        self.load_more_btn.setEnabled(True)
+
+        filtered = apply_category_heuristic(category, models)
+        if self._append_mode:
+            seen = {model.id for model in self.current_models}
+            self.current_models.extend([model for model in filtered if model.id not in seen])
+        else:
+            self.current_models = filtered
+        self._next_cursor = next_cursor
+        self.load_more_btn.setVisible(bool(next_cursor))
+        self.status_lbl.setText(
+            "No GGUF models found for that search." if not self.current_models else f"Found {len(self.current_models)} models."
+        )
+        self._render()
+
+    def _on_search_error(self, error: str):
+        self.progress.setVisible(False)
+        self.search_btn.setEnabled(True)
+        self.search_input.setEnabled(True)
+        self.load_more_btn.setEnabled(bool(self._next_cursor))
+        self.status_lbl.setText(f"Search failed: {error}")
+
+    def _render(self):
         while self.list_lay.count():
             item = self.list_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        if not models:
-            lbl = QLabel("No models scored yet. Select an instance to refresh.")
-            lbl.setProperty("role", "muted")
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("padding: 60px 0; font-size: 12pt;")
-            self.list_lay.addWidget(lbl)
+        if not self.current_models:
             self.list_lay.addStretch()
             return
 
-        other_ids = [
-            iid for iid in self.store.all_instance_ids()
-            if iid != self.store.selected_instance_id
-        ]
+        instance_ids = self.store.all_instance_ids()
+        model_scores: dict[str, float] = {}
+        score_labels: dict[str, list[str]] = {}
+        # Quality weights for tie-breaking same scores (higher is better quality)
+        QUANT_QUALITY = {
+            "BF16": 100, "FP16": 100, "F16": 100,
+            "Q8_0": 90, "Q6_K": 80, "Q5_K_M": 75, "Q5_K_S": 70,
+            "Q4_K_M": 60, "Q4_K_S": 55, "Q3_K_M": 40, "Q2_K": 20,
+        }
 
-        for m in models:
-            card = GlassCard()
-
-            header = QHBoxLayout()
-            title = QLabel(m.name)
-            title.setStyleSheet(
-                f"color: {t.TEXT_HI}; font-size: 14pt; font-weight: 700;"
-            )
-            header.addWidget(title)
-            header.addStretch()
-            level = _FIT_LEVEL.get(m.fit_level, "info")
-            header.addWidget(
-                StatusPill(m.fit_label or m.fit_level.upper(), level)
-            )
-            card.body().addLayout(header)
-
-            meta_parts = [m.provider, f"{m.params_b:.1f}B", m.best_quant, m.use_case]
-            if m.estimated_tps:
-                meta_parts.append(f"~{m.estimated_tps:.0f} tok/s")
-            meta = QLabel("  \u00b7  ".join([part for part in meta_parts if part]))
-            meta.setProperty("role", "muted")
-            card.body().addWidget(meta)
-
-            chip_row = QHBoxLayout()
-            iid = self.store.selected_instance_id
-            chip_row.addWidget(
-                self._chip(
-                    f"#{iid} \u2022 {m.score:.0f}",
-                    _FIT_LEVEL.get(m.fit_level, "info"),
-                )
-            )
-            for other in other_ids:
-                other_models = self.store.get_state(other).scored_models
-                other_entry = next((entry for entry in other_models if entry.name == m.name), None)
-                if other_entry is None:
+        for model in self.current_models:
+            max_score = 0.0
+            labels: list[dict] = []
+            
+            for iid in instance_ids:
+                state = self.store.get_state(iid)
+                if not (state and state.system):
                     continue
-                chip_row.addWidget(
-                    self._chip(
-                        f"#{other} \u2022 {other_entry.score:.0f}",
-                        _FIT_LEVEL.get(other_entry.fit_level, "info"),
-                    )
-                )
-            chip_row.addStretch()
 
-            dl_btn = QPushButton("Install")
-            dl_btn.setEnabled(m.fit_level != "too_tight")
-            dl_btn.clicked.connect(
-                lambda _=False, name=m.name, q=m.best_quant:
-                    self.download_requested.emit(name, q)
-            )
-            chip_row.addWidget(dl_btn)
-            card.body().addLayout(chip_row)
+                best_file_match = None
+                best_file_score = -1.0
+                best_file_quality = -1
+                
+                # If no files found (search might not have returned siblings for some reason), 
+                # use fallback Q4_K_M heuristic
+                files_to_test = model.files if model.files else [None]
+                
+                for f in files_to_test:
+                    if f:
+                        size_gb = f.size_bytes / (1024 ** 3)
+                        quant = f.quantization or "Unknown"
+                        entry = CatalogEntry(
+                            name=model.name,
+                            provider=model.author,
+                            params_b=model.params_b,
+                            best_quant=quant,
+                            memory_required_gb=size_gb + 0.5, # Small overhead
+                            estimated_tps_7b=50.0,
+                            gguf_sources=[model.id],
+                        )
+                    else:
+                        # Fallback heuristic
+                        entry = CatalogEntry(
+                            name=model.name,
+                            provider=model.author,
+                            params_b=model.params_b,
+                            best_quant="Q4_K_M",
+                            memory_required_gb=(model.params_b * 0.7) if model.params_b > 0 else 5.0,
+                            estimated_tps_7b=50.0,
+                            gguf_sources=[model.id],
+                        )
+                    
+                    scored = self.scorer.score(entry, state.system)
+                    quality = QUANT_QUALITY.get(entry.best_quant, 0)
+                    
+                    # Tie break: keep the highest quality quantization that still yields the highest score
+                    # (e.g. if both Q4 and Q8 have score 100 on a 80GB GPU, pick Q8)
+                    if scored.score > best_file_score or (scored.score == best_file_score and quality > best_file_quality):
+                        best_file_score = scored.score
+                        best_file_match = {
+                            "iid": iid,
+                            "score": scored.score,
+                            "fit": _FIT_LABEL.get(scored.fit_level, "Fit Available"),
+                            "level": _FIT_LEVEL.get(scored.fit_level, "info"),
+                            "best_quant": entry.best_quant if f else None
+                        }
+                        best_file_quality = quality
+                
+                if best_file_match:
+                    labels.append(best_file_match)
+                    max_score = max(max_score, best_file_score)
 
+            model_scores[model.id] = max_score
+            score_labels[model.id] = labels
+
+        display_models = list(self.current_models)
+        size_idx = self.size_filter.currentIndex()
+        if size_idx > 0:
+            display_models = [model for model in display_models if self._matches_size(model, size_idx)]
+        if self.sort_combo.currentIndex() == 1:
+            display_models.sort(key=lambda model: model_scores.get(model.id, 0), reverse=True)
+
+        installing_by_model = {
+            desc.repo_id: (desc.iid, desc.percent)
+            for _key, desc in self.registry.active_items()
+        }
+
+        for model in display_models:
+            card = ModelCard(model)
+            card.set_instance_scores(score_labels.get(model.id, []))
+            if model.id in installing_by_model:
+                iid, percent = installing_by_model[model.id]
+                card.set_installing(iid, percent)
+            card.details_clicked.connect(self._show_details)
+            card.open_hf_clicked.connect(self._open_hf)
             self.list_lay.addWidget(card)
-
         self.list_lay.addStretch()
 
-    def _chip(self, text: str, level: str) -> QLabel:
-        palette = {
-            "ok": (t.OK, "rgba(80,200,120,0.15)"),
-            "info": (getattr(t, "INFO", t.ACCENT), "rgba(124,92,255,0.15)"),
-            "warn": (t.WARN, "rgba(255,176,46,0.15)"),
-            "err": (t.ERR, "rgba(255,80,80,0.15)"),
-        }
-        fg, bg = palette.get(level, palette["info"])
-        label = QLabel(text)
-        label.setStyleSheet(
-            f"color: {fg}; background: {bg}; border-radius: 8px;"
-            f" padding: 3px 8px; font-weight: 600; font-size: 10pt;"
-        )
-        return label
+    def _schedule_render(self) -> None:
+        if not self._render_timer.isActive():
+            self._render_timer.start()
+
+    def _matches_size(self, model: HFModel, size_idx: int) -> bool:
+        params = model.params_b
+        if size_idx == 1:
+            return params < 7
+        if size_idx == 2:
+            return 7 <= params < 14
+        if size_idx == 3:
+            return 14 <= params < 35
+        if size_idx == 4:
+            return 35 <= params < 80
+        if size_idx == 5:
+            return params >= 80
+        return True
+
+    def _show_details(self, model: HFModel):
+        for idx in range(self.list_lay.count()):
+            widget = self.list_lay.itemAt(idx).widget()
+            if hasattr(widget, "set_selected"):
+                widget.set_selected(getattr(widget, "model", None) is model)
+        self.side_panel.set_model(model)
+        self.side_panel.show()
+        self.close_panel_btn.setVisible(True)
+
+    def _toggle_side_panel(self) -> None:
+        visible = not self.side_panel.isVisible()
+        self.side_panel.setVisible(visible)
+        self.close_panel_btn.setVisible(visible)
+
+    def _open_hf(self, model_id: str):
+        webbrowser.open(f"https://huggingface.co/{model_id}")

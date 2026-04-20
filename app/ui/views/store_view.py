@@ -1,12 +1,13 @@
 """Top-level Store page: filters, offer results, and rent flow."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from app import theme as t
 from app.controller import AppController
 from app.models_rental import Offer, OfferQuery, RentResult, SshKey, Template
 from app.ui.toast import Toast
+from app.ui.components.page_header import PageHeader
 from app.ui.views.store.filter_sidebar import FilterSidebar
 from app.ui.views.store.offer_details_dialog import OfferDetailsDialog
 from app.ui.views.store.offer_list import OfferList
@@ -26,17 +27,13 @@ class StoreView(QWidget):
         self._last_query: OfferQuery | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_4)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
         root.setSpacing(t.SPACE_4)
 
-        title = QLabel("Store")
-        title.setProperty("role", "display")
-        root.addWidget(title)
-
-        sub = QLabel("Search Vast.ai GPU offers, compare hosts, and rent into your account.")
-        sub.setProperty("role", "muted")
-        sub.setWordWrap(True)
-        root.addWidget(sub)
+        root.addWidget(PageHeader(
+            "Store",
+            "Search Vast.ai GPU offers, compare hosts, and rent into your account.",
+        ))
 
         body = QHBoxLayout()
         body.setSpacing(t.SPACE_5)

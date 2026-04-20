@@ -10,6 +10,7 @@ from PySide6.QtCore import Signal
 from app import theme as t
 from app.models import AppConfig
 from app.services.vast_service import VastService, VastAuthError
+from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard
 
 
@@ -22,21 +23,14 @@ class SettingsView(QWidget):
         self._config = config or AppConfig()
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
-        root.setSpacing(t.SPACE_5)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
+        root.setSpacing(t.SPACE_4)
 
         # Header
-        title = QLabel("Settings")
-        title.setStyleSheet(
-            f"color: {t.TEXT_HERO}; font-size: {t.FONT_SIZE_DISPLAY}px;"
-            f" font-weight: 700;"
-        )
-        root.addWidget(title)
-        sub = QLabel("Configure your Vast.ai Manager experience")
-        sub.setStyleSheet(
-            f"color: {t.TEXT_MID}; font-size: {t.FONT_SIZE_SMALL}px;"
-        )
-        root.addWidget(sub)
+        root.addWidget(PageHeader(
+            "Settings",
+            "Configure your Vast.ai Manager experience.",
+        ))
 
         # Scroll area
         self.scroll = QScrollArea()

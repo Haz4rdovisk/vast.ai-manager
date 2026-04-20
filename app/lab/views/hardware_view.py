@@ -6,6 +6,7 @@ from app import theme as t
 from app.lab.state.store import LabStore
 from app.lab.views.hardware_card import HardwareCard
 from app.lab.views.hardware_placeholder import HardwarePlaceholderCard
+from app.ui.components.page_header import PageHeader
 
 
 class HardwareView(QWidget):
@@ -18,20 +19,14 @@ class HardwareView(QWidget):
         self._arrange_pending = False
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(t.SPACE_5, t.SPACE_5, t.SPACE_5, t.SPACE_4)
-        lay.setSpacing(t.SPACE_2)
+        lay.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
+        lay.setSpacing(t.SPACE_3)
 
-        header = QLabel("Hardware Monitoring")
-        header.setStyleSheet(
-            f"color: {t.TEXT_HERO}; font-size: {t.FONT_SIZE_DISPLAY}px;"
-            f" font-weight: 700;"
+        self.header = PageHeader(
+            "Hardware Monitoring",
+            "Real-time telemetry for all active remote instances.",
         )
-        lay.addWidget(header)
-
-        self.subtitle = QLabel("Real-time telemetry for all active remote instances.")
-        self.subtitle.setProperty("role", "muted")
-        lay.addWidget(self.subtitle)
-        lay.addSpacing(t.SPACE_3)
+        lay.addWidget(self.header)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -80,7 +75,7 @@ class HardwareView(QWidget):
             card.update_state(state)
 
         n = len(self.cards)
-        self.subtitle.setText(
+        self.header.set_subtitle(
             f"Monitoring {n} instance{'s' if n != 1 else ''}"
             if n > 0
             else "Real-time telemetry for all active remote instances."

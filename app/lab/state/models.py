@@ -168,3 +168,30 @@ class DiagnosticsItem:
     title: str
     detail: str
     fix_action: str | None = None
+
+
+@dataclass
+class JobDescriptor:
+    """Durable descriptor for an install/download job on a remote instance."""
+
+    key: str
+    iid: int
+    repo_id: str
+    filename: str
+    quant: str
+    size_bytes: int
+    needs_llamacpp: bool
+    remote_state_path: str
+    remote_log_path: str
+    started_at: float
+    stage: str = "starting"
+    percent: int = 0
+    bytes_downloaded: int = 0
+    speed: str = ""
+    error: str | None = None
+
+
+def build_job_key(iid: int, repo_id: str, quant: str) -> str:
+    """Build a stable, filesystem-safe key for a remote job."""
+    slug = repo_id.replace("/", "-").lower()
+    return f"{iid}-{slug}-{quant.lower()}"

@@ -4,12 +4,13 @@ import time
 from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLabel, QPushButton, QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
+from PySide6.QtWidgets import QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from app.models import Instance, InstanceState, TunnelStatus, UserInfo
 from app.services.instance_filter import FilterState, apply, gpu_key
-from app.theme import FONT_DISPLAY, TEXT_HI
+from app import theme as t
 from app.ui.components import icons
+from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard, IconButton, SkeletonBlock
 from app.ui.views.instances.bulk_action_bar import BulkActionBar
 from app.ui.views.instances.confirm_bulk_dialog import ConfirmBulkDialog
@@ -71,37 +72,31 @@ class InstancesView(QWidget):
 
     def _build(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
         outer.setSpacing(10)
 
-        head = QHBoxLayout()
-        head.setSpacing(8)
-        self.title = QLabel("My Instances (0)")
-        font = self.title.font()
-        font.setPointSize(14)
-        font.setBold(True)
-        font.setFamily(FONT_DISPLAY)
-        self.title.setFont(font)
-        self.title.setStyleSheet(f"color: {TEXT_HI};")
-        head.addWidget(self.title)
-        head.addStretch(1)
+        header = PageHeader(
+            "My Instances (0)",
+            "Manage cloud instances, SSH tunnels, and bulk actions.",
+        )
+        self.title = header.title_label
 
         self.btn_select = IconButton(icons.SELECT, "Select instances")
         self.btn_select.clicked.connect(self._toggle_select_mode)
-        head.addWidget(self.btn_select)
+        header.add_action(self.btn_select)
 
         self.btn_logs = IconButton(icons.LOG, "Open global logs")
         self.btn_logs.clicked.connect(self.open_logs_requested)
-        head.addWidget(self.btn_logs)
+        header.add_action(self.btn_logs)
 
         self.btn_settings = IconButton(icons.SETTINGS, "Settings")
         self.btn_settings.clicked.connect(self.open_settings_requested)
-        head.addWidget(self.btn_settings)
+        header.add_action(self.btn_settings)
 
         self.btn_start_all = QPushButton("Start All")
         self.btn_start_all.clicked.connect(lambda: self._bulk_from_visible("start"))
-        head.addWidget(self.btn_start_all)
-        outer.addLayout(head)
+        header.add_action(self.btn_start_all)
+        outer.addWidget(header)
 
         self.filter_bar = FilterBar(self._filter)
         self.filter_bar.changed.connect(self._on_filter_changed)

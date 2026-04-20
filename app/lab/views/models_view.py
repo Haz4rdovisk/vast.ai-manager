@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, Qt
 from app import theme as t
+from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard, StatusPill
 from app.ui.components.model_config_form import ModelConfigForm
 
@@ -24,40 +25,26 @@ class ModelsView(QWidget):
         self._forms: dict[str, ModelConfigForm] = {}
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_6, t.SPACE_6, t.SPACE_6, t.SPACE_6)
-        root.setSpacing(t.SPACE_5)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
+        root.setSpacing(t.SPACE_4)
 
-        # Breadcrumbs
-        nav_lay = QHBoxLayout()
+        # Header
+        header = PageHeader("Manage Models", "Studio > Instance > Models")
         self.back_btn = QPushButton("\u2190 Back")
         self.back_btn.setProperty("variant", "ghost")
         self.back_btn.clicked.connect(self.back_requested.emit)
-        nav_lay.addWidget(self.back_btn)
-        self.ctx_lbl = QLabel("Studio \u203a Instance \u203a Models")
-        self.ctx_lbl.setProperty("role", "muted")
-        self.ctx_lbl.setStyleSheet(f"font-size: {t.FONT_SIZE_SMALL}px;")
-        nav_lay.addWidget(self.ctx_lbl)
-        nav_lay.addStretch()
-        root.addLayout(nav_lay)
-
-        # Header
-        head = QHBoxLayout()
-        title = QLabel("Manage Models")
-        title.setStyleSheet(
-            f"color: {t.TEXT_HERO}; font-size: 24px; font-weight: 700;"
-        )
-        head.addWidget(title)
-        head.addStretch()
+        header.add_action(self.back_btn)
+        self.ctx_lbl = header.subtitle_label
         refresh_btn = QPushButton("\u21BB Rescan")
         refresh_btn.setProperty("variant", "ghost")
         refresh_btn.clicked.connect(self.rescan_requested.emit)
-        head.addWidget(refresh_btn)
+        header.add_action(refresh_btn)
         dl_btn = QPushButton("\u2726 Discover More")
         dl_btn.clicked.connect(
             lambda: self.navigate_requested.emit("discover")
         )
-        head.addWidget(dl_btn)
-        root.addLayout(head)
+        header.add_action(dl_btn)
+        root.addWidget(header)
 
         # Scroll list
         self.scroll = QScrollArea()

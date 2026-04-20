@@ -238,8 +238,68 @@ cat /tmp/llmfit-serve.log 2>/dev/null | tail -20
 """
 
 
-def script_install_llamacpp() -> str:
+def script_install_llamacpp(job_key: str | None = None) -> str:
     """Install/build llama.cpp with CUDA on the remote instance."""
+    if job_key is not None:
+        state = f"/workspace/.vastai-app/jobs/{job_key}.json"
+        log = f"/tmp/install-{job_key}.log"
+        return f"""
+mkdir -p /workspace/.vastai-app/jobs
+STATE_PATH="{state}"
+LOG_PATH="{log}"
+JOB_PID=$$
+exec > >(tee -a "$LOG_PATH") 2>&1
+
+write_state() {{
+  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" <<'PYEOF'
+import json, sys, time
+path, pid, stage, pct, bytes_d = sys.argv[1:6]
+with open(path, "w") as fh:
+    json.dump({{"pid": int(pid), "stage": stage,
+               "percent": int(pct or 0),
+               "bytes_downloaded": int(bytes_d or 0),
+               "updated_at": int(time.time())}}, fh)
+PYEOF
+}}
+
+echo "Installing llama.cpp with CUDA..."
+write_state apt 0
+apt-get update -qq && apt-get install -y -qq cmake build-essential git 2>/dev/null
+
+write_state clone 10
+SKIP_BUILD=0
+if [ -d /opt/llama.cpp ]; then
+    cd /opt/llama.cpp
+    PULL_OUT=$(git pull 2>&1)
+    if echo "$PULL_OUT" | grep -q "Already up to date" && [ -f build/bin/llama-server ]; then
+        echo "LLAMACPP_ALREADY_UP_TO_DATE"
+        write_state done 100
+        echo "INSTALL_LLAMACPP_DONE"
+        SKIP_BUILD=1
+    fi
+else
+    git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp
+fi
+
+if [ "$SKIP_BUILD" -ne 1 ]; then
+    write_state cmake 30
+    cd /opt/llama.cpp
+    cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native 2>&1
+
+    write_state build 60
+    cmake --build build --config Release -j$(nproc) -- llama-server llama-cli 2>&1
+
+    if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
+        write_state done 100
+        echo "INSTALL_LLAMACPP_DONE"
+        /opt/llama.cpp/build/bin/llama-server --version 2>/dev/null || true
+    else
+        write_state failed 0
+        echo "INSTALL_LLAMACPP_FAILED"
+    fi
+fi
+"""
+
     return r"""
 echo "Installing llama.cpp with CUDA..."
 apt-get update -qq && apt-get install -y -qq cmake build-essential git 2>/dev/null
@@ -308,10 +368,56 @@ def parse_model_list(output: str) -> list[dict]:
     return models
 
 
-def script_download_model(repo_id: str, filename: str, dest_dir: str = "/workspace") -> str:
+def script_download_model(
+    repo_id: str,
+    filename: str,
+    dest_dir: str = "/workspace",
+    job_key: str | None = None,
+) -> str:
     """Download a GGUF from HuggingFace onto the instance."""
     url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
     dest = f"{dest_dir}/{filename}"
+    if job_key is not None:
+        state = f"/workspace/.vastai-app/jobs/{job_key}.json"
+        log = f"/tmp/install-{job_key}.log"
+        return f"""
+mkdir -p /workspace/.vastai-app/jobs
+STATE_PATH="{state}"
+LOG_PATH="{log}"
+JOB_PID=$$
+exec > >(tee -a "$LOG_PATH") 2>&1
+
+write_state() {{
+  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" <<'PYEOF'
+import json, sys, time
+path, pid, stage, pct, bytes_d = sys.argv[1:6]
+with open(path, "w") as fh:
+    json.dump({{"pid": int(pid), "stage": stage,
+               "percent": int(pct or 0),
+               "bytes_downloaded": int(bytes_d or 0),
+               "updated_at": int(time.time())}}, fh)
+PYEOF
+}}
+
+echo "Downloading {filename} from HuggingFace..."
+write_state download 0
+mkdir -p "{dest_dir}"
+cd "{dest_dir}"
+if command -v wget &>/dev/null; then
+    wget -c --progress=dot:giga -O "{dest}" "{url}" 2>&1
+elif command -v curl &>/dev/null; then
+    curl -L -C - -o "{dest}" "{url}" 2>&1
+fi
+
+if [ -f "{dest}" ]; then
+    SIZE=$(stat -c%s "{dest}" 2>/dev/null || echo 0)
+    write_state done 100 "$SIZE"
+    echo "DOWNLOAD_DONE|{dest}|$SIZE"
+else
+    write_state failed 0
+    echo "DOWNLOAD_FAILED"
+fi
+"""
     return f"""
 echo "Downloading {filename} from HuggingFace..."
 mkdir -p "{dest_dir}"
@@ -399,4 +505,75 @@ else
 fi
 
 echo "===UPDATE_CHECK_END==="
+"""
+
+
+def script_check_job(job_key: str) -> str:
+    state = f"/workspace/.vastai-app/jobs/{job_key}.json"
+    return f"""
+STATE="{state}"
+if [ ! -f "$STATE" ]; then
+    echo "MISSING"
+    exit 0
+fi
+PID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$STATE" 2>/dev/null)
+STAGE=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('stage',''))" "$STATE" 2>/dev/null)
+if [ "$STAGE" = "done" ]; then
+    echo "DONE"
+    cat "$STATE"
+    exit 0
+fi
+if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+    echo "RUNNING"
+    cat "$STATE"
+    exit 0
+fi
+echo "STALE"
+cat "$STATE"
+"""
+
+
+def script_cancel_job(job_key: str) -> str:
+    state = f"/workspace/.vastai-app/jobs/{job_key}.json"
+    return f"""
+STATE="{state}"
+if [ -f "$STATE" ]; then
+    PID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$STATE" 2>/dev/null)
+    if [ -n "$PID" ]; then
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+    rm -f "$STATE"
+    echo "CANCEL_OK"
+else
+    echo "CANCEL_NOOP"
+fi
+"""
+
+
+def parse_check_job_output(output: str) -> tuple[str, dict]:
+    """Parse script_check_job output into a status and state dict."""
+    import json
+
+    lines = output.strip().splitlines()
+    if not lines:
+        return "MISSING", {}
+    status = lines[0].strip()
+    if status not in {"RUNNING", "DONE", "STALE", "MISSING"}:
+        return "MISSING", {}
+    if len(lines) < 2:
+        return status, {}
+    try:
+        state = json.loads("\n".join(lines[1:]))
+    except Exception:
+        return status, {}
+    return status, state if isinstance(state, dict) else {}
+
+
+def script_wipe_llamacpp() -> str:
+    """Safely remove the llama.cpp installation for a fresh setup test."""
+    return r"""
+echo "Wiping llama.cpp from /opt/llama.cpp..."
+pkill -f "llama-server" 2>/dev/null || true
+rm -rf /opt/llama.cpp
+echo "WIPE_DONE"
 """

@@ -54,5 +54,8 @@ class RemoteSetupWorker(QThread):
             return script_stop_llama_server()
         elif self.action == "delete_model":
             return script_delete_model(self.kwargs["path"])
+        elif self.action == "wipe_llamacpp":
+            from app.lab.services.remote_setup import script_wipe_llamacpp
+            return script_wipe_llamacpp()
         else:
             raise ValueError(f"Unknown action: {self.action}")

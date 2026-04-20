@@ -25,6 +25,7 @@ _FIT_LABEL = {
     "good": "Good fit",
     "marginal": "Tight fit",
     "too_tight": "Too large",
+    "pending": "Analyzing...",
 }
 
 
@@ -32,6 +33,20 @@ class InstanceFitScorer:
     def score(self, entry: CatalogEntry, sys: RemoteSystem) -> ScoredModel:
         needed = max(entry.memory_required_gb, 0.1)
         notes: list[str] = []
+
+        # GUARD: If system hasn't been probed (missing basic RAM/GPU info)
+        if sys.ram_total_gb == 0 and not sys.has_gpu:
+            return ScoredModel(
+                entry=entry,
+                fit_level="pending",
+                fit_label="Analyzing...",
+                run_mode="none",
+                score=0.0,
+                utilization_pct=0.0,
+                memory_available_gb=0.0,
+                estimated_tps=0.0,
+                notes=["No hardware data available for this instance. Connect via SSH to probe."],
+            )
 
         if sys.has_gpu and sys.gpu_vram_gb:
             available = float(sys.gpu_vram_gb)
@@ -48,15 +63,16 @@ class InstanceFitScorer:
             elif util > 90:
                 fit = "marginal"
                 run_mode = "gpu"
-                score = 45.0
+                score = 55.0  # Increased from 45
             elif util > 70:
                 fit = "good"
                 run_mode = "gpu"
-                score = 72.0
+                score = 80.0  # Increased from 72
             else:
                 fit = "perfect"
                 run_mode = "gpu"
-                score = 92.0
+                # Dynamic score: 100 base, minus a small penalty for utilization
+                score = 100.0 - (util / 5.0) 
         else:
             available = float(sys.ram_total_gb)
             util = (needed / max(available, 0.1)) * 100
@@ -66,20 +82,20 @@ class InstanceFitScorer:
 
             if util > 70:
                 fit = "too_tight"
-                score = 20.0
+                score = 15.0
             elif util > 40:
                 fit = "marginal"
-                score = 45.0
+                score = 40.0
             else:
                 fit = "good"
-                score = 60.0
+                score = 70.0  # increased from 60
 
         return ScoredModel(
             entry=entry,
             fit_level=fit,
-            fit_label=_FIT_LABEL[fit],
+            fit_label=_FIT_LABEL.get(fit, "Unknown"),
             run_mode=run_mode,
-            score=round(score, 1),
+            score=round(max(0, score), 1),
             utilization_pct=round(util, 1),
             memory_available_gb=round(available, 2),
             estimated_tps=round(tps, 1),

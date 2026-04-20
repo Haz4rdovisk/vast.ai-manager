@@ -1,6 +1,6 @@
 """Custom integrated title bar for frameless window — glassmorphism edition."""
 from __future__ import annotations
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from PySide6.QtCore import Qt, QPoint
 from app import theme as t
 
@@ -18,7 +18,6 @@ class TitleBar(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        # Control Buttons
         lay.addStretch()
 
         # Control Buttons
@@ -39,7 +38,7 @@ class TitleBar(QWidget):
 
     # ── Public API ──────────────────────────────────────────────────────
     def setPageTitle(self, text: str):
-        """No-op: titles are now handled by views directly."""
+        """No-op: view titles live inside the views, not in the window chrome."""
         pass
 
     # ── Window controls ─────────────────────────────────────────────────
