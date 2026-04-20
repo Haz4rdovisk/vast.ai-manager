@@ -102,6 +102,7 @@ class SetupStatus:
     llamacpp_path: str = ""
     llama_server_running: bool = False
     llama_server_model: str = ""
+    llama_server_port: int = 11434
     model_count: int = 0
     probed: bool = False        # True after first probe completes
 

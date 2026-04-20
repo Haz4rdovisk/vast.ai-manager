@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QProgressBar,
+    QPlainTextEdit,
 )
 
 from app import theme as t
@@ -40,6 +41,10 @@ class _InstanceCard(QFrame):
     Keeps hardware info always visible while stretching down for actions."""
     
     confirmed = Signal(str, int)  # mode, iid
+    setup_requested = Signal(int)
+    reset_requested = Signal(int)
+    deploy_requested = Signal(int)
+    cancel_confirm_requested = Signal()
     
     def __init__(self, iid: int, parent=None):
         super().__init__(parent)
@@ -90,6 +95,27 @@ class _InstanceCard(QFrame):
             QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {t.ACCENT}, stop:1 {t.ACCENT_HI}); border-radius: 2px; }}
         """)
         prog_lay.addWidget(self._prog_bar)
+        
+        # Log Toggle & Content
+        log_row = QHBoxLayout()
+        log_row.setContentsMargins(0, 4, 0, 0)
+        self._log_toggle = QPushButton("> Show Install Log")
+        self._log_toggle.setCursor(Qt.PointingHandCursor)
+        self._log_toggle.setStyleSheet("QPushButton { border: none; background: transparent; color: #888; text-align: left; font-size: 10px; font-weight: 600; } QPushButton:hover { color: #ccc; }")
+        self._log_toggle.clicked.connect(self.toggle_log)
+        log_row.addWidget(self._log_toggle)
+        log_row.addStretch()
+        prog_lay.addLayout(log_row)
+        
+        self._log_view = QPlainTextEdit()
+        self._log_view.setReadOnly(True)
+        self._log_view.setUndoRedoEnabled(False)
+        self._log_view.setMaximumBlockCount(100)
+        self._log_view.setFixedHeight(120)
+        self._log_view.hide()
+        self._log_view.setStyleSheet(f"background: {t.BG_VOID}; color: {t.TEXT_MID}; font-family: {t.FONT_MONO}; font-size: 9px; border: 1px solid {t.BORDER_LOW}; border-radius: 4px;")
+        prog_lay.addWidget(self._log_view)
+
         self._prog_widget.hide()
         self._root_lay.addWidget(self._prog_widget)
 
@@ -133,6 +159,7 @@ class _InstanceCard(QFrame):
         self._btn_confirm = QPushButton("Confirm")
         self._btn_confirm.setProperty("role", "primary")
         self._btn_confirm.setProperty("size", "sm")
+        self._btn_confirm.clicked.connect(lambda: self.confirmed.emit(getattr(self, "_active_mode", "deploy"), self.iid))
         
         conf_btns.addStretch()
         conf_btns.addWidget(self._btn_cancel)
@@ -152,6 +179,7 @@ class _InstanceCard(QFrame):
         self._btn_setup = QPushButton("Setup Environment")
         self._btn_setup.setProperty("role", "primary")
         self._btn_setup.setProperty("size", "sm")
+        self._btn_setup.clicked.connect(lambda: self.setup_requested.emit(self.iid))
         
         self._btn_ready = QPushButton("Ready")
         self._btn_ready.setEnabled(False)
@@ -161,10 +189,12 @@ class _InstanceCard(QFrame):
         self._btn_reset.setProperty("role", "danger")
         self._btn_reset.setProperty("size", "sm")
         self._btn_reset.setFixedWidth(60)
+        self._btn_reset.clicked.connect(lambda: self.reset_requested.emit(self.iid))
         
         self._btn_deploy = QPushButton("Deploy Model")
         self._btn_deploy.setProperty("role", "primary")
         self._btn_deploy.setProperty("size", "sm")
+        self._btn_deploy.clicked.connect(lambda: self.deploy_requested.emit(self.iid))
         
         act_lay.addWidget(self._btn_setup, 1)
         act_lay.addWidget(self._btn_ready, 1)
@@ -182,48 +212,65 @@ class _InstanceCard(QFrame):
         self._confirm_widget.hide()
         self._prog_widget.hide()
         self._action_widget.show()
-        self.setMinimumHeight(120)
+        self._update_height()
 
     def show_confirm(self, mode: str, summary: str):
         self._summary_lbl.setText(summary)
+        # Store mode in property for the connected signal
+        self._active_mode = mode
         self._btn_confirm.setProperty("role", "primary" if mode != "wipe" else "danger")
-        self._btn_confirm.setStyleSheet("") # Force style refresh
-        
-        # Re-wire confirm button once per display
-        try: self._btn_confirm.clicked.disconnect()
-        except: pass
-        self._btn_confirm.clicked.connect(lambda: self.confirmed.emit(mode, self.iid))
+        self._btn_confirm.style().unpolish(self._btn_confirm)
+        self._btn_confirm.style().polish(self._btn_confirm)
         
         self._action_widget.hide()
         self._prog_widget.hide()
         self._confirm_widget.show()
-        self.setMinimumHeight(180) # Stretch down
+        self._update_height()
 
     def show_progress(self, stage: str, percent: int):
         self._prog_status.setText(f"{stage.upper()}... {percent}%")
         self._prog_bar.setValue(percent)
         
-        self._confirm_widget.hide()
-        self._action_widget.hide()
-        self._prog_widget.show()
-        self.setMinimumHeight(120)
+        if not self._prog_widget.isVisible():
+            self._confirm_widget.hide()
+            self._action_widget.hide()
+            self._prog_widget.show()
+            self._update_height()
 
-    def populate_info(self, iid, state, selected_file, busy: bool, active_job, parent_view):
+    def toggle_log(self):
+        visible = not self._log_view.isVisible()
+        self._log_view.setVisible(visible)
+        self._log_toggle.setText(("> " if not visible else "v ") + "Show Install Log")
+        self._update_height()
+
+    def append_log(self, text: str):
+        self._log_view.appendPlainText(text.rstrip())
+
+    def _update_height(self):
+        if self._confirm_widget.isVisible(): self.setMinimumHeight(180)
+        elif self._prog_widget.isVisible():
+            h = 240 if self._log_view.isVisible() else 125
+            self.setMinimumHeight(h)
+        else: self.setMinimumHeight(120)
+
+    def populate_info(self, iid, state, selected_file, busy: bool, active_job, scorer):
         self._vram_badge.setText(f"{(state.system.gpu_vram_gb or 0):.0f} GB VRAM")
         self._gpu_lbl.setText(state.system.gpu_name or "Unknown GPU")
 
-        if selected_file is not None and parent_view.current_model:
+        if selected_file is not None:
             size_gb = selected_file.size_bytes / (1024 ** 3) if selected_file.size_bytes else 0
+            # Simple scoring without complex CatalogEntry dependencies if possible, or just use what we have
+            from app.lab.services.model_catalog import CatalogEntry
             entry = CatalogEntry(
-                name=parent_view.current_model.name,
-                provider=parent_view.current_model.author,
-                params_b=parent_view.current_model.params_b,
+                name="Temp",
+                provider="Temp",
+                params_b=0.0,
                 best_quant=selected_file.quantization or "Unknown",
                 memory_required_gb=size_gb + 0.5 if size_gb else 5.0,
-                estimated_tps_7b=50.0,
-                gguf_sources=[parent_view.current_model.id],
+                estimated_tps_7b=0.0,
+                gguf_sources=[],
             )
-            scored = parent_view.scorer.score(entry, state.system)
+            scored = scorer.score(entry, state.system)
             self._fit_pill.set_status(
                 f"{scored.score:.0f} score | {_FIT_LABEL.get(scored.fit_level, 'Unknown Fit')}",
                 _FIT_LEVEL.get(scored.fit_level, "info"),
@@ -233,30 +280,31 @@ class _InstanceCard(QFrame):
             self._fit_pill.hide()
 
         if busy and active_job:
-            self._busy_lbl.setText(f"Busy with {active_job.filename or active_job.stage}")
-            self._busy_lbl.show()
-            self._action_widget.hide()
+            status_text = f"Busy with {active_job.filename or active_job.stage}"
+            if self._busy_lbl.text() != status_text:
+                self._busy_lbl.setText(status_text)
+                self._busy_lbl.show()
+                self._action_widget.hide()
+                self._confirm_widget.hide()
         else:
             self._busy_lbl.hide()
-            # If we were busy, we reset to idle
             has_setup = state.setup.llamacpp_installed
-            self._btn_setup.setVisible(not has_setup)
-            self._btn_ready.setVisible(has_setup)
-            self._btn_reset.setVisible(has_setup)
             
-            self._btn_deploy.setEnabled(has_setup and selected_file is not None)
+            # Avoid redundant setVisible calls which can trigger layout flickers
+            if self._btn_setup.isVisible() == has_setup:
+                self._btn_setup.setVisible(not has_setup)
+            if self._btn_ready.isVisible() != has_setup:
+                self._btn_ready.setVisible(has_setup)
+            if self._btn_reset.isVisible() != has_setup:
+                self._btn_reset.setVisible(has_setup)
+                
+            can_deploy = has_setup and selected_file is not None
+            if self._btn_deploy.isEnabled() != can_deploy:
+                self._btn_deploy.setEnabled(can_deploy)
             
-            # Re-wire action buttons
-            try: self._btn_setup.clicked.disconnect()
-            except: pass
-            try: self._btn_reset.clicked.disconnect()
-            except: pass
-            try: self._btn_deploy.clicked.disconnect()
-            except: pass
-            
-            self._btn_setup.clicked.connect(lambda: parent_view.show_confirm_overlay(iid, mode="setup"))
-            self._btn_reset.clicked.connect(lambda: parent_view.show_confirm_overlay(iid, mode="wipe"))
-            self._btn_deploy.clicked.connect(lambda: parent_view.show_confirm_overlay(iid, mode="deploy"))
+            if not busy and not self._confirm_widget.isVisible() and not self._prog_widget.isVisible():
+                if not self._action_widget.isVisible():
+                    self._action_widget.show()
 
 
 class InstallPanelSide(QWidget):
@@ -571,15 +619,19 @@ class InstallPanelSide(QWidget):
             if iid not in self._instance_cards:
                 card = _InstanceCard(iid, self)
                 card.confirmed.connect(self._on_action_confirmed)
+                card.setup_requested.connect(self._on_card_setup)
+                card.reset_requested.connect(self._on_card_reset)
+                card.deploy_requested.connect(self._on_card_deploy)
                 self._instance_cards[iid] = card
                 self._instance_lay.insertWidget(self._instance_lay.count() - 1, card)
             
             card = self._instance_cards[iid]
             if active: card.show_progress(active.stage, active.percent)
             else:
-                card.populate_info(iid, state, sel_file, False, None, self)
+                card.populate_info(iid, state, sel_file, False, None, self.scorer)
                 # Auto-collapse if no longer busy/confirming
-                if not card._confirm_widget.isVisible(): card.show_idle()
+                if not card._confirm_widget.isVisible() and not card._prog_widget.isVisible():
+                    card.show_idle()
 
     def show_confirm_overlay(self, iid: int, mode: str = "deploy") -> None:
         if iid not in self._instance_cards: return
@@ -617,6 +669,26 @@ class InstallPanelSide(QWidget):
 
     def _on_registry_finished(self, key: str, ok: bool) -> None:
         self._refresh()
+
+    def append_log(self, key: str, text: str):
+        # 1. Update Master Log (top)
+        active = self._current_active_job()
+        if active and active.key == key:
+            self._progress.append_log(text)
+            
+        # 2. Route to specific card
+        job = self.registry.get(key)
+        if job and job.iid in self._instance_cards:
+            self._instance_cards[job.iid].append_log(text)
+            
+    def _on_card_setup(self, iid: int):
+        self.show_confirm_overlay(iid, mode="setup")
+
+    def _on_card_reset(self, iid: int):
+        self.show_confirm_overlay(iid, mode="wipe")
+
+    def _on_card_deploy(self, iid: int):
+        self.show_confirm_overlay(iid, mode="deploy")
 
     def _show_cancel_confirm(self) -> None:
         self._cancel_strip.show()

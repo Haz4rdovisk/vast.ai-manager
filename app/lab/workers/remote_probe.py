@@ -63,6 +63,7 @@ class RemoteProbeWorker(QThread):
                     llamacpp_path=info.get("LLAMACPP_PATH", ""),
                     llama_server_running=info.get("LLAMA_RUNNING") == "yes",
                     llama_server_model=info.get("LLAMA_MODEL", ""),
+                    llama_server_port=int(info.get("LLAMA_PORT", "11434") or "11434"),
                     model_count=int(info.get("MODEL_COUNT", "0") or "0"),
                     probed=True,
                 )

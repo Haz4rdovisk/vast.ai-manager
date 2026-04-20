@@ -3,9 +3,23 @@ All functions return shell script strings — the caller runs them via SSHServic
 from __future__ import annotations
 
 
+_DETECTION_LOOP = r"""
+LLAMA_PATH=""
+for p in "/opt/llama.cpp/build/bin/llama-server" "/opt/llama.cpp/llama-server" "/usr/local/bin/llama-server" "/root/llama.cpp/build/bin/llama-server" "/workspace/llama.cpp/build/bin/llama-server"; do
+    if [ -f "$p" ]; then
+        LLAMA_PATH="$p"
+        break
+    fi
+done
+if [ -z "$LLAMA_PATH" ] && command -v llama-server &>/dev/null; then
+    LLAMA_PATH=$(which llama-server)
+fi
+"""
+
+
 def script_master_probe() -> str:
     """Unified probe for status, health and models in one SSH call."""
-    return r"""
+    return f"""
 echo "===SETUP_START==="
 # Check llmfit
 if command -v llmfit &>/dev/null; then
@@ -29,12 +43,7 @@ else
 fi
 
 # Check llama.cpp
-LLAMA_PATH=""
-if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
-    LLAMA_PATH="/opt/llama.cpp/build/bin/llama-server"
-elif command -v llama-server &>/dev/null; then
-    LLAMA_PATH=$(which llama-server)
-fi
+{_DETECTION_LOOP}
 
 if [ -n "$LLAMA_PATH" ]; then
     echo "LLAMACPP_INSTALLED=yes"
@@ -47,11 +56,12 @@ fi
 # Check if llama-server is running
 if pgrep -f "llama-server" &>/dev/null; then
     echo "LLAMA_RUNNING=yes"
-    LLAMA_MODEL=$(pgrep -fa "llama-server" | grep -oP '(?<=-m )\S+' | head -1)
-    echo "LLAMA_MODEL=$LLAMA_MODEL"
+    # Robust port/model extraction using ps
+    RAW_CMD=$(ps -ww -fp $(pgrep -f "llama-server" | head -1) -o args= 2>/dev/null)
+    echo "LLAMA_MODEL=$(echo "$RAW_CMD" | grep -oE '\-m [^ ]+' | cut -d' ' -f2 | head -1)"
+    echo "LLAMA_PORT=$(echo "$RAW_CMD" | grep -oE '\-\-port [0-9]+' | cut -d' ' -f2 | head -1 | grep -E '^[0-9]+$' || echo 11434)"
 else
     echo "LLAMA_RUNNING=no"
-    echo "LLAMA_MODEL="
 fi
 
 # Count GGUF models
@@ -68,7 +78,7 @@ echo "===MODELS_END==="
 
 if [ "$SERVING" -eq 1 ]; then
     echo "===SYSTEM_START==="
-    curl -s http://127.0.0.1:8787/system || echo "{}"
+    curl -s http://127.0.0.1:8787/system || echo "{{}}"
     echo "===SYSTEM_END==="
     
     echo "===RECOMMEND_START==="
@@ -78,13 +88,13 @@ fi
 
 echo "===TELEMETRY_START==="
 # 1. CPU Load & Cores
-IDLE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+IDLE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\\([0-9.]*\\)%* id.*/\\1/" | awk '{{print 100 - $1}}')
 echo "CPU_LOAD=$IDLE"
 echo "CPU_CORES=$(nproc 2>/dev/null || echo 0)"
 
 # 2. RAM Usage
-read TOTAL USED <<< $(free -m | awk '/Mem:/ {print $2, $3}')
-PERCENT=$(awk "BEGIN {print ($USED/$TOTAL)*100}")
+read TOTAL USED <<< $(free -m | awk '/Mem:/ {{print $2, $3}}')
+PERCENT=$(awk "BEGIN {{print ($USED/$TOTAL)*100}}")
 echo "RAM_TOTAL_MB=$TOTAL"
 echo "RAM_USED_MB=$USED"
 echo "RAM_PERCENT=$PERCENT"
@@ -97,22 +107,22 @@ if command -v nvidia-smi &>/dev/null; then
         echo "GPU_LOAD=$GPU_UTIL"
         echo "GPU_TEMP=$TEMP"
         GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-        echo "GPU_NAME=${GPU_NAME:-GPU}"
+        echo "GPU_NAME=${{GPU_NAME:-GPU}}"
         echo "VRAM_TOTAL_MB=$VRAM_TOTAL"
         echo "VRAM_USED_MB=$VRAM_USED"
-        VRAM_PCT=$(awk "BEGIN {print ($VRAM_USED/$VRAM_TOTAL)*100}")
+        VRAM_PCT=$(awk "BEGIN {{print ($VRAM_USED/$VRAM_TOTAL)*100}}")
         echo "VRAM_PERCENT=$VRAM_PCT"
     fi
 fi
 
 # 4. Disk Usage (/workspace as reference)
-read D_TOT D_USED D_PCT <<< $(df -m /workspace 2>/dev/null | tail -1 | awk '{print $2, $3, $5}' | sed 's/%//')
-echo "DISK_TOTAL_MB=${D_TOT:-0}"
-echo "DISK_USED_MB=${D_USED:-0}"
-echo "DISK_PERCENT=${D_PCT:-0}"
+read D_TOT D_USED D_PCT <<< $(df -m /workspace 2>/dev/null | tail -1 | awk '{{print $2, $3, $5}}' | sed 's/%//')
+echo "DISK_TOTAL_MB=${{D_TOT:-0}}"
+echo "DISK_USED_MB=${{D_USED:-0}}"
+echo "DISK_PERCENT=${{D_PCT:-0}}"
 
 # 5. Network Throughput (1s delta)
-IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
+IFACE=$(ip route | grep default | awk '{{print $5}}' | head -1)
 if [ -n "$IFACE" ]; then
     R1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
     T1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
@@ -127,14 +137,14 @@ else
 fi
 
 # 6. Uptime
-echo "UPTIME_SEC=$(awk '{print int($1)}' /proc/uptime)"
+echo "UPTIME_SEC=$(awk '{{print int($1)}}' /proc/uptime)"
 echo "===TELEMETRY_END==="
 """
 
 
 def script_check_setup() -> str:
     """Probe what's installed on the instance. Outputs structured markers."""
-    return r"""
+    return f"""
 echo "===PROBE_START==="
 # Check llmfit
 if command -v llmfit &>/dev/null; then
@@ -155,12 +165,7 @@ else
 fi
 
 # Check llama.cpp
-LLAMA_PATH=""
-if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
-    LLAMA_PATH="/opt/llama.cpp/build/bin/llama-server"
-elif command -v llama-server &>/dev/null; then
-    LLAMA_PATH=$(which llama-server)
-fi
+{_DETECTION_LOOP}
 
 if [ -n "$LLAMA_PATH" ]; then
     echo "LLAMACPP_INSTALLED=yes"
@@ -173,7 +178,7 @@ fi
 # Check if llama-server is running
 if pgrep -f "llama-server" &>/dev/null; then
     echo "LLAMA_RUNNING=yes"
-    LLAMA_MODEL=$(pgrep -fa "llama-server" | grep -oP '(?<=-m )\S+' | head -1)
+    LLAMA_MODEL=$(pgrep -fa "llama-server" | grep -oP '(?<=-m )\\S+' | head -1)
     echo "LLAMA_MODEL=$LLAMA_MODEL"
 else
     echo "LLAMA_RUNNING=no"
@@ -271,8 +276,12 @@ SKIP_BUILD=0
 if [ -d /opt/llama.cpp ]; then
     cd /opt/llama.cpp
     PULL_OUT=$(git pull 2>&1)
-    if echo "$PULL_OUT" | grep -q "Already up to date" && [ -f build/bin/llama-server ]; then
-        echo "LLAMACPP_ALREADY_UP_TO_DATE"
+
+    # Use detection loop logic locally too for consistency
+    {_DETECTION_LOOP}
+    
+    if echo "$PULL_OUT" | grep -q "Already up to date" && [ -n "$LLAMA_PATH" ]; then
+        echo "LLAMACPP_ALREADY_UP_TO_DATE (Found at: $LLAMA_PATH)"
         write_state done 100
         echo "INSTALL_LLAMACPP_DONE"
         SKIP_BUILD=1
@@ -282,17 +291,26 @@ else
 fi
 
 if [ "$SKIP_BUILD" -ne 1 ]; then
-    write_state cmake 30
-    cd /opt/llama.cpp
-    cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native 2>&1
+    # 3. Build llama.cpp
+    # We detect CUDA arch manually because 'native' often fails in Docker/minimal images
+    CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1 | tr -d '.')
+    if [ -z "$CUDA_ARCH" ]; then CUDA_ARCH="native"; fi
+    
+    write_state cmake 20
+    cd /workspace/llama.cpp
+    cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCH 2>&1
+    
+    write_state build 40
+    cmake --build build --config Release -j $(nproc) 2>&1
+    
+    write_state build 90
+    # Search for server binary
+    {_DETECTION_LOOP}
 
-    write_state build 60
-    cmake --build build --config Release -j$(nproc) -- llama-server llama-cli 2>&1
-
-    if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
+    if [ -n "$LLAMA_PATH" ]; then
         write_state done 100
         echo "INSTALL_LLAMACPP_DONE"
-        /opt/llama.cpp/build/bin/llama-server --version 2>/dev/null || true
+        "$LLAMA_PATH" --version 2>/dev/null || true
     else
         write_state failed 0
         echo "INSTALL_LLAMACPP_FAILED"
@@ -300,14 +318,17 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
 fi
 """
 
-    return r"""
+    return f"""
 echo "Installing llama.cpp with CUDA..."
 apt-get update -qq && apt-get install -y -qq cmake build-essential git 2>/dev/null
 
 if [ -d /opt/llama.cpp ]; then
     cd /opt/llama.cpp
     PULL_OUT=$(git pull 2>&1)
-    if echo "$PULL_OUT" | grep -q "Already up to date" && [ -f build/bin/llama-server ]; then
+    
+    {_DETECTION_LOOP}
+
+    if echo "$PULL_OUT" | grep -q "Already up to date" && [ -n "$LLAMA_PATH" ]; then
         echo "LLAMACPP_ALREADY_UP_TO_DATE"
         echo "INSTALL_LLAMACPP_DONE"
         exit 0
@@ -320,9 +341,11 @@ cd /opt/llama.cpp
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native 2>&1
 cmake --build build --config Release -j$(nproc) -- llama-server llama-cli 2>&1
 
-if [ -f /opt/llama.cpp/build/bin/llama-server ]; then
+{_DETECTION_LOOP}
+
+if [ -n "$LLAMA_PATH" ]; then
     echo "INSTALL_LLAMACPP_DONE"
-    /opt/llama.cpp/build/bin/llama-server --version 2>/dev/null || true
+    "$LLAMA_PATH" --version 2>/dev/null || true
 else
     echo "INSTALL_LLAMACPP_FAILED"
 fi
@@ -488,16 +511,12 @@ fi
 # 2. Check LLMfit updates
 if command -v llmfit &>/dev/null; then
     # Simple check: compare local version with latest available on pypi/github (conceptually)
-    # For now, we'll check if a refresh is 'forced' by the installer logic or just check git if it was git-installed
-    # Improving: check the repo version vs local specifically if it's a clone
     if [ -d /root/llmfit ]; then
         cd /root/llmfit
         git fetch &>/dev/null
         LLMFIT_BEHIND=$(git rev-list HEAD..origin/master --count 2>/dev/null || echo 0)
         echo "LLMFIT_BEHIND=$LLMFIT_BEHIND"
     else
-        # If it was pip installed, we can't easily check without a slow pip check. 
-        # But we can assume 'no' for now or 'yes' if we want to be safe.
         echo "LLMFIT_BEHIND=0"
     fi
 else

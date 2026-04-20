@@ -11,7 +11,8 @@ from app.lab.services.model_params import build_launch_script
 
 class RemoteSetupWorker(QThread):
     """Runs a single remote operation. Reusable for different actions."""
-    progress = Signal(str)          # status message
+    progress = Signal(str)          # status msg
+    line = Signal(str)              # raw ssh line
     finished = Signal(bool, str)    # success, output
 
     def __init__(self, ssh_service, host: str, port: int,
@@ -27,23 +28,28 @@ class RemoteSetupWorker(QThread):
         try:
             script = self._build_script()
             self.progress.emit(f"Running: {self.action}...")
-            ok, output = self.ssh.run_script(self.host, self.port, script)
+            ok, output = self.ssh.stream_script(
+                self.host, self.port, script,
+                on_line=lambda l: self.line.emit(l)
+            )
             self.finished.emit(ok, output)
         except Exception as e:
             self.finished.emit(False, str(e))
 
     def _build_script(self) -> str:
+        job_key = self.kwargs.get("job_key")
         if self.action == "install_llmfit":
             return script_install_llmfit()
         elif self.action == "start_llmfit":
             return script_start_llmfit_serve()
         elif self.action == "install_llamacpp":
-            return script_install_llamacpp()
+            return script_install_llamacpp(job_key=job_key)
         elif self.action == "download_model":
             return script_download_model(
                 self.kwargs["repo_id"],
                 self.kwargs["filename"],
                 self.kwargs.get("dest_dir", "/workspace"),
+                job_key=job_key
             )
         elif self.action == "launch_server":
             return build_launch_script(

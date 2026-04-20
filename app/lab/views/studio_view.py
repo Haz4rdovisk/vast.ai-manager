@@ -1,7 +1,8 @@
 """Studio view for loading an installed GGUF on a selected instance."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtCore import Qt, Signal, QUrl, QTimer, QStandardPaths
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -14,10 +15,12 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
 
 from app import theme as t
 from app.lab.state.models import ServerParams
@@ -72,6 +75,65 @@ _EMPTY_WEBUI_HTML = f"""
       The chat input appears here inside the llama.cpp webui after launch.
     </section>
   </main>
+</body>
+</html>
+"""
+
+
+_LOADING_WEBUI_HTML = f"""
+<!doctype html>
+<html>
+<head>
+  <style>
+    body {{
+      margin: 0;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+      background: {t.BG_DEEP};
+      color: {t.TEXT_MID};
+      font-family: Inter, sans-serif;
+    }}
+    .loader {{
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(255,255,255,0.05);
+      border-radius: 50%;
+      display: inline-block;
+      position: relative;
+      box-sizing: border-box;
+      animation: rotation 1s linear infinite;
+    }}
+    .loader::after {{
+      content: '';  
+      box-sizing: border-box;
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border-bottom: 3px solid {t.ACCENT};
+      animation: rotation 1s linear infinite;
+    }}
+    @keyframes rotation {{
+      0% {{ transform: rotate(0deg); }}
+      100% {{ transform: rotate(360deg); }}
+    }} 
+    .status {{
+      margin-top: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }}
+  </style>
+</head>
+<body>
+  <div style="text-align: center;">
+    <span class="loader"></span>
+    <div class="status">Establishing Secure Tunnel...</div>
+  </div>
 </body>
 </html>
 """
@@ -362,11 +424,69 @@ class StudioView(QWidget):
 
         self.banner = DiagnosticBanner()
         self.banner.fix_requested.connect(self.fix_requested.emit)
-        workspace_lay.addWidget(self.banner)
-
+        workspace_lay.setSpacing(0)
+        
+        # Setup persistent profile for caching heavy assets (bundle.js, etc.)
+        cache_path = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation) + "/studio_cache"
+        self.profile = QWebEngineProfile("studio_profile", self)
+        self.profile.setPersistentStoragePath(cache_path)
+        self.profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
+        self.profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+        self.profile.setHttpCacheMaximumSize(100 * 1024 * 1024) 
+        
+        # Force dark background via script injection (runs before any CSS)
+        dark_script = QWebEngineScript()
+        dark_script.setSourceCode("""
+            (function() {
+                var css = 'html, body { background: #0a0a0b !important; color: #c7cedc !important; }';
+                var style = document.createElement('style');
+                style.type = 'text/css';
+                style.id = 'force-dark-style';
+                style.appendChild(document.createTextNode(css));
+                
+                function inject() {
+                    var target = document.documentElement || document.head;
+                    if (target && !document.getElementById('force-dark-style')) {
+                        target.appendChild(style);
+                        return true;
+                    }
+                    return false;
+                }
+                
+                if (!inject()) {
+                    var observer = new MutationObserver(function() {
+                        if (inject()) observer.disconnect();
+                    });
+                    observer.observe(document, { childList: true, subtree: true });
+                }
+            })();
+        """)
+        dark_script.setInjectionPoint(QWebEngineScript.DocumentCreation)
+        dark_script.setWorldId(QWebEngineScript.MainWorld)
+        dark_script.setRunsOnSubFrames(True)
+        self.profile.scripts().insert(dark_script)
+        
+        self._ui_probe_timer = QTimer(self)
+        self._ui_probe_timer.setInterval(600)
+        self._ui_probe_timer.timeout.connect(self._run_ui_probe)
+        
         self.webui = QWebEngineView()
+        self.webui.setPage(QWebEnginePage(self.profile, self.webui)) 
+        self.webui.page().setBackgroundColor(QColor("#0a0a0b"))
+        self.webui.loadFinished.connect(self._on_webui_load_finished)
         self.webui.setHtml(_EMPTY_WEBUI_HTML)
-        workspace_lay.addWidget(self.webui, 1)
+        
+        # Proper stacked widget for loading state
+        self.webui_stack = QStackedWidget()
+        self.webui_overlay = QWebEngineView()
+        self.webui_overlay.page().setBackgroundColor(QColor("#0a0a0b"))
+        self.webui_overlay.setHtml(_LOADING_WEBUI_HTML)
+        
+        self.webui_stack.addWidget(self.webui)         # Index 0
+        self.webui_stack.addWidget(self.webui_overlay) # Index 1
+        self.webui_stack.setCurrentIndex(0)
+        
+        workspace_lay.addWidget(self.webui_stack, 1)
 
         self.launch_log = LaunchLogPanel()
         self.launch_log.setVisible(False)
@@ -404,6 +524,13 @@ class StudioView(QWidget):
         self.log_toggle_btn = QPushButton("Show Launch Log")
         self.log_toggle_btn.setProperty("variant", "ghost")
         self.log_toggle_btn.clicked.connect(self._toggle_launch_log)
+        self._set_launch_log_visible(False)
+        
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setInterval(250) # Faster polling (4 times per second)
+        self._retry_timer.timeout.connect(self._check_tunnel_and_load)
+        self._target_local_port = 0
+        self._retry_count = 0
         side_lay.addWidget(self.log_toggle_btn)
 
         hint = QLabel("Model configuration")
@@ -517,8 +644,67 @@ class StudioView(QWidget):
     def open_webui(self, local_port: int):
         self._set_launch_status("Ready", "ready")
         self.stop_btn.setEnabled(True)
-        self.webui.setUrl(QUrl(f"http://127.0.0.1:{local_port}/"))
-        self._set_launch_log_visible(False)
+        self.webui_stack.setCurrentIndex(1) # Switch to loading layer
+        self._target_local_port = local_port
+        self._retry_count = 0
+        self._retry_timer.start()
+        # Don't setUrl yet, wait for timer to confirm port is open
+
+    def _check_tunnel_and_load(self):
+        from app.services.ssh_service import is_port_open
+        self._retry_count += 1
+        
+        if is_port_open("127.0.0.1", self._target_local_port):
+            self._retry_timer.stop()
+            self.webui.setUrl(QUrl(f"http://127.0.0.1:{self._target_local_port}/"))
+            # We don't hide the log yet, we wait for loadFinished signal!
+        elif self._retry_count > 30: # 15 seconds timeout
+            self._retry_timer.stop()
+            self.mark_launch_failed()
+            self.banner.error(f"Tunnel timed out on port {self._target_local_port}. Try manual reload.")
+
+    def _on_webui_load_finished(self, ok: bool):
+        if ok and not self._retry_timer.isActive() and self._target_local_port > 0:
+            # Main HTML is here, start probing for the real UI elements (textarea)
+            self._ui_probe_timer.start()
+
+    def _run_ui_probe(self):
+        # We look for a textarea or a specifically common llama.cpp ID
+        js = "!!(document.querySelector('textarea') || document.querySelector('#input-chat'))"
+        self.webui.page().runJavaScript(js, self._handle_probe_result)
+
+    def _handle_probe_result(self, found: bool):
+        if found:
+            self._ui_probe_timer.stop()
+            
+            # Helper JS to "wake up" the textarea sizing (multi-pulse retry + force focus/click)
+            js_fix = """
+                (function() {
+                    var count = 0;
+                    var itv = setInterval(function() {
+                        var ta = document.querySelector('textarea') || document.querySelector('#input-chat');
+                        if (ta) {
+                            ta.focus();
+                            ta.click();
+                            var val = ta.value || '';
+                            ta.value = val + ' ';
+                            ta.dispatchEvent(new Event('input', { bubbles: true }));
+                            ta.value = val;
+                            ta.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        if (++count > 4) clearInterval(itv);
+                    }, 150);
+                })();
+            """
+            self.webui.page().runJavaScript(js_fix)
+            
+            # Reveal only after the pulsations have likely finished
+            def reveal():
+                self.webui_stack.setCurrentIndex(0)
+                self._set_launch_status("Ready", "ready")
+                QTimer.singleShot(1000, lambda: self._set_launch_log_visible(False))
+            
+            QTimer.singleShot(800, reveal)
 
     def clear_webui(self):
         self._set_launch_status("Idle", "idle")

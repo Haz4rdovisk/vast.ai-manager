@@ -62,6 +62,12 @@ class AppShell(QWidget):
         self._config = config
         self._config_store = config_store
         self._ssh = ssh_service
+        from app.services.port_allocator import PortAllocator
+        self.studio_port_allocator = PortAllocator(
+            default_port=12000,
+            initial_map=self._config.studio_port_map if self._config else {},
+            persist=self._persist_studio_port_map
+        )
         self.analytics_store = analytics_store
         self._controller = None
         self._current_view = ""
@@ -73,6 +79,7 @@ class AppShell(QWidget):
         self._probe_workers: dict[int, RemoteProbeWorker] = {}
         self._probe_callbacks: dict[int, callable] = {}
         self._setup_workers: dict[int, RemoteSetupWorker] = {}
+        self._setup_cooldowns: dict[int, float] = {}
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -326,13 +333,39 @@ class AppShell(QWidget):
         worker = RemoteProbeWorker(self._ssh, inst.ssh_host, inst.ssh_port, self)
         self._probe_workers[iid] = worker
         
-        worker.setup_ready.connect(lambda s: self.store.set_setup_status(iid, s))
+        worker.setup_ready.connect(lambda s: self._on_probe_status_ready(iid, s))
         worker.system_ready.connect(lambda s: self.store.set_remote_system(iid, s))
         worker.models_ready.connect(lambda m: self.store.set_remote_models(iid, m))
         worker.gguf_ready.connect(lambda g: self.store.set_remote_gguf(iid, g))
         
         worker.finished.connect(lambda: self._on_probe_done(iid))
+        worker.failed.connect(lambda msg: self._controller.log_line.emit(f"#{iid} Probe error: {msg}"))
         worker.start()
+
+    def _on_probe_status_ready(self, iid: int, status):
+        import time
+        now = time.time()
+        
+        # Guard: if we just installed it, don't let a "no" from probe revert it for 15s
+        if not status.llamacpp_installed and iid in self._setup_cooldowns:
+            if now - self._setup_cooldowns[iid] < 15.0:
+                status.llamacpp_installed = True
+            else:
+                self._setup_cooldowns.pop(iid)
+                
+        self.store.set_setup_status(iid, status)
+        
+        # Proactive Reattachment Logic
+        if status.llama_server_running and iid == self.store.selected_instance_id:
+            # Check if we need to open the WebUI
+            if self.studio.launch_status.text().strip().endswith("Idle") or "error" in self.studio.launch_status.text().lower():
+                inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+                if inst and inst.ssh_host:
+                    remote_port = status.llama_server_port or 11434
+                    local_port = self.studio_port_allocator.get(iid)
+                    self._ssh.start_tunnel(iid, inst.ssh_host, inst.ssh_port, remote_port, local_port)
+                    self.studio.open_webui(local_port)
+                    self._controller.log_line.emit(f"#{iid}: Reattached to running server on port {remote_port}")
 
     def _on_probe_done(self, iid: int):
         self.store.set_instance_busy(iid, "probe", False)
@@ -452,10 +485,14 @@ class AppShell(QWidget):
 
         def on_line(line: str):
             event = parse_cmake_build_stage(line)
-            if event.stage != "unknown":
-                self.job_registry.update(key, stage=event.stage, percent=event.percent or 0)
+            if event.stage == "done":
+                # Instant success! Don't wait for SSH closure
+                self._on_install_done_registry(True, "Success confirmed via log", key, iid)
+            elif event.stage != "unknown":
+                self.job_registry.update(key, stage=event.stage, percent=event.percent or 100 if event.stage == "done" else 0)
 
         worker.line.connect(on_line)
+        worker.line.connect(lambda l: self.discover.side_panel.append_log(key, l))
         worker.finished.connect(lambda ok, out: self._on_install_done_registry(ok, out, key, iid))
         self.job_registry.update(key, stage="apt", percent=0)
         worker.start()
@@ -473,6 +510,9 @@ class AppShell(QWidget):
         def on_done(ok, out):
             self.store.set_instance_busy(iid, "setup", False)
             if ok:
+                st = self.store.get_state(iid)
+                st.setup.llamacpp_installed = False
+                self.store.set_setup_status(iid, st.setup)
                 self._controller.log_line.emit(f"#{iid}: Environment wiped.")
                 self._probe_instance(iid)
             else:
@@ -603,6 +643,7 @@ class AppShell(QWidget):
             if progress_state["phase"] == "install":
                 event = parse_cmake_build_stage(line)
                 if event.stage == "done":
+                    # Proactive phase skip
                     self.job_registry.update(key, stage="download", percent=0)
                     progress_state["phase"] = "download"
                     return
@@ -624,12 +665,25 @@ class AppShell(QWidget):
                 self.job_registry.update(key, stage="done", percent=100)
 
         worker.line.connect(on_line)
+        worker.line.connect(lambda l: self.discover.side_panel.append_log(key, l))
         worker.finished.connect(lambda ok, out: self._on_install_done_registry(ok, out, key, iid))
         self.job_registry.update(key, stage="apt" if needs_install else "download", percent=0)
         worker.start()
 
     def _on_install_done_registry(self, ok: bool, output: str, key: str, iid: int):
+        desc = self.job_registry.get(key)
+        if not desc:
+            return  # Already handled by proactive trigger
         self.job_registry.finish(key, ok=ok, error=(output[-200:] if not ok else None))
+        
+        # Proactive sync: if we just installed llamacpp, update store immediately
+        if ok and desc and desc.needs_llamacpp:
+            import time
+            self._setup_cooldowns[iid] = time.time()
+            st = self.store.get_state(iid)
+            st.setup.llamacpp_installed = True
+            self.store.set_setup_status(iid, st.setup)
+            
         self._probe_instance(iid)
 
     def _cancel_job(self, key: str) -> None:
@@ -788,27 +842,44 @@ class AppShell(QWidget):
             script,
             self,
         )
-        worker.line.connect(lambda line: self.studio.append_launch_log(line))
+        def handle_line(line):
+            self.studio.append_launch_log(line)
+            # Instant launch trigger - wait for slots to be idle for absolute stability
+            lowered = line.lower()
+            if "all slots are idle" in lowered:
+                self._establish_studio_tunnel(iid)
+            elif "listening" in lowered and not "all slots are idle" in lowered:
+                # Log a subtle hint that we are waiting for the idle signal
+                pass 
+
+        worker.line.connect(handle_line)
         worker.finished.connect(lambda ok, out: self._on_launch_done(ok, out, iid))
         worker.start()
         self._setup_workers[iid] = worker
 
-    def _on_launch_done(self, ok: bool, output: str, iid: int):
-        from app.lab.services.diagnostics import classify_server_log
+    def _establish_studio_tunnel(self, iid: int):
+        """Immediately establish the SSH tunnel and open the WebUI for a running server."""
+        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        st = self.store.get_state(iid)
+        
+        # Guard: don't re-trigger if already ready or different instance
+        if not inst or iid != self.store.selected_instance_id:
+            return
+            
+        # If we already have a tunnel and WebUI is open, don't flicker
+        if not self.studio.launch_status.text().strip().endswith("Ready"):
+            remote_port = st.server_params.port or 11434
+            local_port = self.studio_port_allocator.get(iid)
+            self._ssh.start_tunnel(iid, inst.ssh_host, inst.ssh_port, remote_port, local_port)
+            self.studio.open_webui(local_port)
+            self._controller.log_line.emit(f"#{iid}: WebUI ready at http://127.0.0.1:{local_port}")
 
+    def _on_launch_done(self, ok: bool, output: str, iid: int):
         self.store.set_instance_busy(iid, "launch", False)
-        if ok and "LAUNCH_OK" in output:
-            tunnel = self._ssh.get(iid) if self._ssh else None
-            port = (
-                tunnel.local_port
-                if tunnel
-                else self.store.get_state(iid).server_params.port
-            )
-            if iid == self.store.selected_instance_id:
-                self._go("studio")
-                self.studio.open_webui(port)
-            self._probe_instance(iid)
+        if ok:
+            self._establish_studio_tunnel(iid)
         else:
+            from app.lab.services.diagnostics import classify_server_log
             diag = classify_server_log(output)
             if diag and iid == self.store.selected_instance_id:
                 self.studio.banner.set_diagnostic(diag)
@@ -818,6 +889,7 @@ class AppShell(QWidget):
     def _stop_server(self):
         iid = self.store.selected_instance_id
         if iid:
+            self.studio.clear_webui()
             self._run_single_setup("stop_server", iid)
         else:
             self._run_single_setup("stop_server", iid)
@@ -854,3 +926,9 @@ class AppShell(QWidget):
             self._run_setup("install_llamacpp", iid=iid)
         elif action == "pick_model":
             self._go("models")
+
+    def _persist_studio_port_map(self, m):
+        if self._config:
+            self._config.studio_port_map = m
+            if self._config_store:
+                self._config_store.save(self._config)

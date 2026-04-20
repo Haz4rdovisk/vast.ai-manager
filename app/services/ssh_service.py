@@ -41,14 +41,15 @@ def build_ssh_command(host: str, port: int, key_path: str = "") -> list[str]:
     return cmd
 
 
-def build_tunnel_command(host: str, port: int, local_port: int, key_path: str = "", use_askpass: bool = False) -> list[str]:
-    cmd = ["ssh", "-p", str(port)]
+def build_tunnel_command(host: str, port: int, remote_port: int, key_path: str = "", use_askpass: bool = False, local_port: int | None = None) -> list[str]:
+    target_local = local_port or remote_port
+    cmd = ["ssh", "-p", str(port), "-C"]
     if key_path:
         # IdentitiesOnly ensures ssh uses only this key, not also agent/default keys
         cmd += ["-i", key_path, "-o", "IdentitiesOnly=yes"]
     cmd += [
         f"root@{host}",
-        "-L", f"{local_port}:127.0.0.1:{local_port}",
+        "-L", f"{target_local}:127.0.0.1:{remote_port}",
         "-N",
         "-o", "ServerAliveInterval=30",
         "-o", "ExitOnForwardFailure=yes",
@@ -219,11 +220,12 @@ class SSHService:
             creationflags = subprocess.CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
         subprocess.Popen(launch, creationflags=creationflags)
 
-    def start_tunnel(self, instance_id: int, host: str, port: int, local_port: int) -> TunnelHandle:
+    def start_tunnel(self, instance_id: int, host: str, port: int, remote_port: int, local_port: int | None = None) -> TunnelHandle:
         self.stop_tunnel(instance_id)
 
+        target_local = local_port or remote_port
         use_askpass, env = self._create_askpass_env()
-        cmd = build_tunnel_command(host, port, local_port, self.ssh_key_path, use_askpass)
+        cmd = build_tunnel_command(host, port, remote_port, self.ssh_key_path, use_askpass, target_local)
         
         creationflags = 0
         if sys.platform == "win32":
@@ -238,7 +240,7 @@ class SSHService:
             env=env,
             text=True,
         )
-        handle = TunnelHandle(instance_id=instance_id, local_port=local_port, process=proc)
+        handle = TunnelHandle(instance_id=instance_id, local_port=target_local, process=proc)
         self._tunnels[instance_id] = handle
         return handle
 
@@ -261,10 +263,14 @@ class SSHService:
     def run_script(self, host: str, port: int, script: str) -> tuple[bool, str]:
         """Runs a blocking SSH command by piping script into bash -s."""
         use_askpass, env = self._create_askpass_env()
-        
-        cmd = ["ssh", "-p", str(port)]
-        if self.ssh_key_path:
-            cmd += ["-i", self.ssh_key_path, "-o", "IdentitiesOnly=yes"]
+        cmd = [
+            "ssh", "-p", str(port),
+            "-C", # Compression
+            "-o", "ConnectTimeout=10",
+            "-o", "ConnectionAttempts=3",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "IdentitiesOnly=yes"]
         cmd += [
             "-o", "StrictHostKeyChecking=accept-new",
         ]

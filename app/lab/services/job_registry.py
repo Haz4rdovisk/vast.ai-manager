@@ -34,6 +34,12 @@ class JobRegistry(QObject):
     def active_items(self) -> list[tuple[str, JobDescriptor]]:
         return [(desc.key, desc) for desc in self._active.values()]
 
+    def active_values(self) -> list[JobDescriptor]:
+        return list(self._active.values())
+
+    def active_keys(self) -> list[str]:
+        return [desc.key for desc in self._active.values()]
+
     def get(self, key: str) -> JobDescriptor | None:
         return self._by_key.get(key)
 
