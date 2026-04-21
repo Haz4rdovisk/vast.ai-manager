@@ -21,10 +21,13 @@ from app.models_rental import Offer, RentRequest, SshKey, Template
 
 
 DEFAULT_IMAGES: list[tuple[str, str]] = [
-    ("PyTorch CUDA 12.4", "pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel"),
+    ("PyTorch (CUDA 12.4)", "pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel"),
+    ("PyTorch (CUDA 12.1)", "pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel"),
     ("NVIDIA CUDA 12.4 devel", "nvidia/cuda:12.4.1-devel-ubuntu22.04"),
+    ("NVIDIA CUDA 12.1 devel", "nvidia/cuda:12.1.1-devel-ubuntu22.04"),
+    ("NVIDIA CUDA 11.8 devel", "nvidia/cuda:11.8.0-devel-ubuntu22.04"),
     ("TensorFlow GPU", "tensorflow/tensorflow:2.16.1-gpu"),
-    ("Ubuntu 22.04", "vastai/ubuntu:22.04"),
+    ("Ubuntu 22.04", "ubuntu:22.04"),
     ("vLLM OpenAI", "vllm/vllm-openai:latest"),
 ]
 
@@ -50,15 +53,24 @@ class RentDialog(QDialog):
         meta.setProperty("role", "muted")
         root.addWidget(meta)
 
-        root.addWidget(self._section("Image"))
+        root.addWidget(self._section("Machine Image"))
+        
         self.template_cb = QComboBox()
-        self.template_cb.addItem("Select an image or template", None)
-        for label, image in DEFAULT_IMAGES:
-            self.template_cb.addItem(label, {"image": image, "template_hash": None})
+        self.template_cb.addItem("1. Select an environment or community template", None)
+        for label, img in DEFAULT_IMAGES:
+            self.template_cb.addItem(label, {"image": img, "template_hash": None})
         root.addWidget(self.template_cb)
 
+        self.vast_base_cb = QComboBox()
+        self.vast_base_cb.addItem("2. Or use Vast's Official Python Base Image", None)
+        self.vast_base_cb.addItem("Vast Base - CUDA 13.2 (cuda-13.2.0-auto)", "vastai/base-image:cuda-13.2.0-auto")
+        self.vast_base_cb.addItem("Vast Base - CUDA 12.4 (cuda-12.4.1-auto)", "vastai/base-image:cuda-12.4.1-auto")
+        self.vast_base_cb.addItem("Vast Base - CUDA 12.1 (cuda-12.1.1-auto)", "vastai/base-image:cuda-12.1.1-auto")
+        self.vast_base_cb.addItem("Vast Base - CUDA 11.8 (cuda-11.8.0-auto)", "vastai/base-image:cuda-11.8.0-auto")
+        root.addWidget(self.vast_base_cb)
+
         self.custom_image = QLineEdit()
-        self.custom_image.setPlaceholderText("Custom Docker image, optional")
+        self.custom_image.setPlaceholderText("3. Or paste a Custom Docker image URL")
         root.addWidget(self.custom_image)
 
         fields = QWidget()
@@ -121,6 +133,9 @@ class RentDialog(QDialog):
         for tpl in templates[:30]:
             if not tpl.hash_id or tpl.hash_id in existing:
                 continue
+            # Filter out known broken template images (Vast.ai natively deleted theirs)
+            if tpl.image and any(x in tpl.image for x in ["vastai/", "runpod/", "ghcr.io/selkies"]):
+                continue
             self.template_cb.addItem(
                 tpl.name,
                 {"image": tpl.image, "template_hash": tpl.hash_id},
@@ -174,15 +189,42 @@ class RentDialog(QDialog):
 
     def _confirm(self) -> None:
         data = self.template_cb.currentData()
+        base_data = self.vast_base_cb.currentData()
         image = self.custom_image.text().strip()
         template_hash = None
-        if isinstance(data, dict):
-            image = image or data.get("image") or ""
+
+        # Priority 1: Custom Image (already in `image` variable)
+        # Priority 2: Vast Base Dropdown
+        if not image and base_data:
+            image = base_data
+        # Priority 3: Community/Default Template Dropdown
+        elif not image and isinstance(data, dict):
+            image = data.get("image") or ""
             template_hash = data.get("template_hash")
+            
         if not image and not template_hash:
             self.custom_image.setPlaceholderText("Required: choose an image or paste a Docker image")
             self.custom_image.setFocus()
             return
+
+        import re
+        from PySide6.QtWidgets import QMessageBox
+
+        if image and self.offer.cuda_max_good:
+            match = re.search(r'cuda[-_:]?(\d+\.\d+)', image, re.IGNORECASE)
+            if match:
+                try:
+                    req_cuda = float(match.group(1))
+                    if req_cuda > self.offer.cuda_max_good:
+                        QMessageBox.warning(
+                            self,
+                            "CUDA Version Conflict",
+                            f"This image requires CUDA {req_cuda}, but the selected instance only supports up to CUDA {self.offer.cuda_max_good}.\n\nPlease choose an older CUDA image or rent a different machine.",
+                        )
+                        return
+                except ValueError:
+                    pass
+
         self.confirmed.emit(
             RentRequest(
                 offer_id=self.offer.id,
@@ -194,6 +236,7 @@ class RentDialog(QDialog):
                 env=self._parse_env(),
                 onstart_cmd=self.onstart.toPlainText().strip() or None,
                 jupyter_lab=self.jupyter.isChecked(),
+                runtype="jupyter" if self.jupyter.isChecked() else "ssh",
                 price=float(self.bid_price.value())
                 if self.offer.min_bid is not None and self.bid_price.value() > 0
                 else None,

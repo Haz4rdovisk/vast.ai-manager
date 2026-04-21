@@ -58,8 +58,8 @@ if pgrep -f "llama-server" &>/dev/null; then
     echo "LLAMA_RUNNING=yes"
     # Robust port/model extraction using ps
     RAW_CMD=$(ps -ww -fp $(pgrep -f "llama-server" | head -1) -o args= 2>/dev/null)
-    echo "LLAMA_MODEL=$(echo "$RAW_CMD" | grep -oE '\-m [^ ]+' | cut -d' ' -f2 | head -1)"
-    echo "LLAMA_PORT=$(echo "$RAW_CMD" | grep -oE '\-\-port [0-9]+' | cut -d' ' -f2 | head -1 | grep -E '^[0-9]+$' || echo 11434)"
+    echo "LLAMA_MODEL=$(echo "$RAW_CMD" | grep -oE '\\-m [^ ]+' | cut -d' ' -f2 | head -1)"
+    echo "LLAMA_PORT=$(echo "$RAW_CMD" | grep -oE '\\-\\-port [0-9]+' | cut -d' ' -f2 | head -1 | grep -E '^[0-9]+$' || echo 11434)"
 else
     echo "LLAMA_RUNNING=no"
 fi
@@ -297,7 +297,7 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
     if [ -z "$CUDA_ARCH" ]; then CUDA_ARCH="native"; fi
     
     write_state cmake 20
-    cd /workspace/llama.cpp
+    cd /opt/llama.cpp
     cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCH 2>&1
     
     write_state build 40

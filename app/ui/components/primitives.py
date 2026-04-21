@@ -16,18 +16,14 @@ from app import theme as t
 #  GlassCard — true glassmorphism surface with painted glass effect
 # ═══════════════════════════════════════════════════════════════════════════════
 class GlassCard(QFrame):
-    """Primary surface with real painted glassmorphism:
-    - Multi-layer gradient background (not flat color)
-    - Top-edge inner highlight (simulates refraction)
-    - Subtle radial glow at center
-    - Hover: accent border glow
-    """
+    """Primary surface with premium solid dark theme (replaces legacy glassmorphism)."""
 
     def __init__(self, raised: bool = False, parent=None):
         super().__init__(parent)
         self._raised = raised
+        self.setObjectName("SolidCard")
         self.setProperty("role", "card-raised" if raised else "card")
-        self.setAttribute(Qt.WA_StyledBackground, False)  # we paint ourselves
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         self._lay.setSpacing(t.SPACE_3)
@@ -39,80 +35,32 @@ class GlassCard(QFrame):
         shadow.setColor(QColor(0, 0, 0, 100 if raised else 70))
         self.setGraphicsEffect(shadow)
 
-        self._hover = False
+        self._apply_style()
 
     def body(self) -> QVBoxLayout:
         return self._lay
 
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        r = t.RADIUS_LG
-
-        # Clip to rounded rect
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), r, r)
-        p.setClipPath(path)
-
-        # Layer 1: Base fill — vertical gradient (darker at bottom)
-        if self._raised:
-            base_top = QColor(24, 30, 46)
-            base_bot = QColor(16, 21, 34)
-        else:
-            base_top = QColor(17, 22, 34)
-            base_bot = QColor(11, 15, 25)
-        bg = QLinearGradient(0, 0, 0, h)
-        bg.setColorAt(0.0, base_top)
-        bg.setColorAt(1.0, base_bot)
-        p.fillRect(0, 0, w, h, bg)
-
-        # Layer 2: Center radial glow (subtle purple warmth)
-        glow = QRadialGradient(w * 0.5, h * 0.3, max(w, h) * 0.6)
-        glow.setColorAt(0.0, QColor(124, 92, 255, 8))   # very subtle accent
-        glow.setColorAt(0.5, QColor(124, 92, 255, 3))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(0, 0, w, h, glow)
-
-        # Layer 3: Top-edge highlight (glass refraction)
-        highlight = QLinearGradient(0, 0, 0, 60)
-        highlight.setColorAt(0.0, QColor(255, 255, 255, 12 if self._raised else 8))
-        highlight.setColorAt(0.3, QColor(255, 255, 255, 4))
-        highlight.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.fillRect(0, 0, w, 60, highlight)
-
-        # Border
-        p.setClipping(False)
-        border_color = QColor(124, 92, 255, 40) if self._hover else QColor(255, 255, 255, 16 if self._raised else 10)
-        pen = QPen(border_color, 1.0)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), r, r)
-
-        # Hover: extra glow at top edge
-        if self._hover:
-            hover_glow = QLinearGradient(0, 0, 0, 40)
-            hover_glow.setColorAt(0.0, QColor(124, 92, 255, 15))
-            hover_glow.setColorAt(1.0, QColor(124, 92, 255, 0))
-            p.setClipPath(path)
-            p.fillRect(0, 0, w, 40, hover_glow)
-
-        p.end()
+    def _apply_style(self):
+        bg = "#111722" if self._raised else "#101620"
+        border = "#33405a" if self._raised else "#202838"
+        hover_bg = "#141b28" if self._raised else "#111722"
+        hover_border = t.ACCENT if self._raised else "#33405a"
+        self.setStyleSheet(
+            f"""
+            QFrame#SolidCard {{
+                background: {bg};
+                border: 1px solid {border};
+                border-radius: 8px;
+            }}
+            QFrame#SolidCard:hover {{
+                background: {hover_bg};
+                border-color: {hover_border};
+            }}
+            """
+        )
 
     def setGlow(self, on: bool):
-        """Manual glow toggle (for programmatic use)."""
-        self._hover = on
-        self.update()
+        pass  # Legacy API, kept for compatibility
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

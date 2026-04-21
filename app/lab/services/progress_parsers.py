@@ -19,7 +19,7 @@ class BuildEvent:
 
 
 _WGET_RE = re.compile(r"(\d+)%\s+(\S+)")
-_CMAKE_PCT_RE = re.compile(r"^\[\s*(\d+)%\]")
+_CMAKE_PCT_RE = re.compile(r"\[\s*(\d+)%\]")
 
 
 def parse_wget_progress(line: str) -> WgetEvent | None:
@@ -50,7 +50,7 @@ def parse_cmake_build_stage(line: str) -> BuildEvent:
     if line.startswith("-- "):
         return BuildEvent(stage="cmake", detail=line)
 
-    match = _CMAKE_PCT_RE.match(line)
+    match = _CMAKE_PCT_RE.search(line)
     if match:
         return BuildEvent(stage="build", detail=line, percent=int(match.group(1)))
 

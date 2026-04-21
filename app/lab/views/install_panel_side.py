@@ -105,6 +105,15 @@ class _InstanceCard(QFrame):
         self._log_toggle.clicked.connect(self.toggle_log)
         log_row.addWidget(self._log_toggle)
         log_row.addStretch()
+        
+        self._prog_dismiss = QPushButton("Clear & Retry")
+        self._prog_dismiss.setProperty("size", "sm")
+        self._prog_dismiss.setStyleSheet(f"background: {t.SURFACE_3}; color: {t.TEXT}; font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px solid {t.BORDER_LOW};")
+        self._prog_dismiss.setCursor(Qt.PointingHandCursor)
+        self._prog_dismiss.clicked.connect(self.show_idle)
+        self._prog_dismiss.hide()
+        log_row.addWidget(self._prog_dismiss)
+        
         prog_lay.addLayout(log_row)
         
         self._log_view = QPlainTextEdit()
@@ -212,6 +221,7 @@ class _InstanceCard(QFrame):
         self._confirm_widget.hide()
         self._prog_widget.hide()
         self._action_widget.show()
+        self._prog_dismiss.hide()
         self._update_height()
 
     def show_confirm(self, mode: str, summary: str):
@@ -228,7 +238,10 @@ class _InstanceCard(QFrame):
         self._update_height()
 
     def show_progress(self, stage: str, percent: int):
+        self._prog_dismiss.hide()
         self._prog_status.setText(f"{stage.upper()}... {percent}%")
+        self._prog_status.setStyleSheet(f"color: {t.ACCENT}; font-size: 9px; font-weight: 800; letter-spacing: 1px;")
+        self._prog_bar.setStyleSheet(f"QProgressBar {{ background: rgba(255,255,255,0.05); border: none; border-radius: 2px; }} QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {t.ACCENT}, stop:1 {t.ACCENT_HI}); border-radius: 2px; }}")
         self._prog_bar.setValue(percent)
         
         if not self._prog_widget.isVisible():
@@ -236,6 +249,22 @@ class _InstanceCard(QFrame):
             self._action_widget.hide()
             self._prog_widget.show()
             self._update_height()
+
+    def show_failed(self, error_msg: str):
+        self._prog_dismiss.show()
+        self._prog_status.setText(f"FAILED: {error_msg}")
+        self._prog_status.setStyleSheet(f"color: {t.ERR}; font-size: 10px; font-weight: 800; letter-spacing: 1px;")
+        self._prog_bar.setStyleSheet(f"QProgressBar {{ background: rgba(255,255,255,0.05); border: none; border-radius: 2px; }} QProgressBar::chunk {{ background: {t.ERR}; border-radius: 2px; }}")
+        self._prog_bar.setValue(100)
+        
+        if not self._prog_widget.isVisible():
+            self._confirm_widget.hide()
+            self._action_widget.hide()
+            self._prog_widget.show()
+            self._update_height()
+        
+        if not self._log_view.isVisible():
+            self.toggle_log()
 
     def toggle_log(self):
         visible = not self._log_view.isVisible()
@@ -626,11 +655,14 @@ class InstallPanelSide(QWidget):
                 self._instance_lay.insertWidget(self._instance_lay.count() - 1, card)
             
             card = self._instance_cards[iid]
-            if active: card.show_progress(active.stage, active.percent)
+            if active: 
+                card.show_progress(active.stage, active.percent)
             else:
                 card.populate_info(iid, state, sel_file, False, None, self.scorer)
-                # Auto-collapse if no longer busy/confirming
-                if not card._confirm_widget.isVisible() and not card._prog_widget.isVisible():
+                # Auto-collapse if no longer busy/confirming, BUT preserve the FAILED state (dismiss button)
+                if card._prog_dismiss.isVisible():
+                    pass  # Keep the failed state visible so user can read log and click Clear
+                elif not card._confirm_widget.isVisible() and not card._prog_widget.isVisible():
                     card.show_idle()
 
     def show_confirm_overlay(self, iid: int, mode: str = "deploy") -> None:
@@ -668,6 +700,12 @@ class InstallPanelSide(QWidget):
                 if m_a.speed: self._progress.append_log(f"{m_a.percent}% - {m_a.speed}")
 
     def _on_registry_finished(self, key: str, ok: bool) -> None:
+        if not ok:
+            # The job is finished but failed. Find the card that was tracking it and lock it into the error state.
+            for card in self._instance_cards.values():
+                if card._prog_widget.isVisible() and not card._prog_dismiss.isVisible():
+                    card.show_failed("Operation aborted or crashed.")
+                    break
         self._refresh()
 
     def append_log(self, key: str, text: str):
