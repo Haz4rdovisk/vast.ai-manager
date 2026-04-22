@@ -18,6 +18,7 @@ from app.ui.views.instances.filter_bar import FilterBar
 from app.ui.views.instances.instance_card import InstanceCard
 from app.ui.views.instances.label_tabs import LabelTabs
 from app.ui.views.instances.log_modal import LogModal
+from app.ui.views.console_drawer import ConsoleDrawer
 from app.ui.views.instances.action_bar import SCHEDULING_TOOLTIP
 
 
@@ -34,6 +35,7 @@ class InstancesView(QWidget):
     open_settings_requested = Signal()
     open_logs_requested = Signal()
     open_analytics_requested = Signal()
+    jobs_requested = Signal()
     bulk_requested = Signal(str, list, dict)
     fix_ssh_requested = Signal(int)
 
@@ -94,6 +96,10 @@ class InstancesView(QWidget):
         self.btn_logs.clicked.connect(self.open_logs_requested)
         header.add_action(self.btn_logs)
 
+        self.btn_jobs = IconButton(icons.CLOUD_SYNC, "Global Setup Jobs")
+        self.btn_jobs.clicked.connect(self.jobs_requested.emit)
+        header.add_action(self.btn_jobs)
+
         self.btn_settings = IconButton(icons.SETTINGS, "Settings")
         self.btn_settings.clicked.connect(self.open_settings_requested)
         header.add_action(self.btn_settings)
@@ -127,6 +133,12 @@ class InstancesView(QWidget):
         self.bulk_bar.clear_clicked.connect(self._clear_selection)
         self.bulk_bar.setVisible(False)
         outer.addWidget(self.bulk_bar)
+
+        self.console_drawer = ConsoleDrawer()
+        outer.addWidget(self.console_drawer)
+        self.console_drawer._expanded = False
+        self.console_drawer.view.setVisible(False)
+        self.console_drawer.toggle_btn.setText("▸  Console")
 
     def handle_refresh(self, instances: list[Instance], user: UserInfo) -> None:
         self._clear_loading()
@@ -391,6 +403,8 @@ class InstancesView(QWidget):
         self._log_history.append(line)
         if len(self._log_history) > 2000:
             self._log_history = self._log_history[-2000:]
+        if hasattr(self, "console_drawer"):
+            self.console_drawer.log(line)
 
     def _open_log_modal(self, iid: int) -> None:
         modal = LogModal(iid, self._log_history, parent=self)

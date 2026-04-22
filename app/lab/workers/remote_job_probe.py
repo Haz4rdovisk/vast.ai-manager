@@ -24,11 +24,15 @@ class RemoteJobProbe(QThread):
                 self.port,
                 script_check_job(self.desc.key),
             )
-        except Exception:
-            self.result.emit("MISSING", {})
+        except Exception as e:
+            print(f"RemoteJobProbe failed connection: {e}")
+            self.result.emit("OFFLINE", {})
             return
+            
         if not ok:
-            self.result.emit("MISSING", {})
+            print(f"RemoteJobProbe ssh execution failed: {output}")
+            self.result.emit("OFFLINE", {})
             return
+            
         status, state = parse_check_job_output(output)
         self.result.emit(status, state)

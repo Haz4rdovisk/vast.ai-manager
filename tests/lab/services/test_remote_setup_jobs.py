@@ -4,6 +4,7 @@ from app.lab.services.remote_setup import (
     script_check_job,
     script_download_model,
     script_install_llamacpp,
+    script_stream_job_log,
 )
 
 
@@ -30,6 +31,8 @@ def test_download_model_accepts_job_key_and_writes_state():
     )
     assert "/workspace/.vastai-app/jobs/iid-y-q.json" in script
     assert "write_state download" in script
+    assert "DOWNLOAD_PROGRESS|" in script
+    assert "TOTAL_BYTES" in script
     assert "write_state done 100" in script
 
 
@@ -42,3 +45,9 @@ def test_check_cancel_and_parser():
     assert status == "RUNNING"
     assert state["percent"] == 43
     assert parse_check_job_output("garbage\n") == ("MISSING", {})
+
+
+def test_stream_job_log_script_targets_job_files():
+    script = script_stream_job_log("iid-x-q")
+    assert "/workspace/.vastai-app/jobs/iid-x-q.json" in script
+    assert "/tmp/install-iid-x-q.log" in script

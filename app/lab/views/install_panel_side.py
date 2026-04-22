@@ -1,7 +1,9 @@
 """Right-side install panel embedded in DiscoverView."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from types import SimpleNamespace
+
+from PySide6.QtCore import QEvent, Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -20,10 +22,11 @@ from PySide6.QtWidgets import (
 from app import theme as t
 from app.lab.services.fit_scorer import InstanceFitScorer
 from app.lab.services.huggingface import HFModel, HFModelFile
+from app.lab.services.job_registry import JobRegistry
 from app.lab.services.model_catalog import CatalogEntry
 from app.lab.workers.huggingface_worker import HFModelDetailWorker
 from app.ui.components.install_progress import InstallProgress
-from app.ui.components.primitives import Badge, GlassCard, StatusPill
+from app.ui.components.primitives import Badge, StatusPill
 
 
 _FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err", "pending": "muted"}
@@ -34,6 +37,22 @@ _FIT_LABEL = {
     "too_tight": "Too Large",
     "pending": "Analyzing...",
 }
+
+
+def _remote_has_selected_file(state, selected_file: HFModelFile | None) -> bool:
+    if selected_file is None:
+        return False
+    wanted = (selected_file.filename or "").strip().lower()
+    if not wanted:
+        return False
+    for item in getattr(state, "gguf", []) or []:
+        filename = getattr(item, "filename", "") or ""
+        path = getattr(item, "path", "") or ""
+        if filename.strip().lower() == wanted:
+            return True
+        if path.strip().lower().endswith(f"/{wanted}") or path.strip().lower().endswith(f"\\{wanted}"):
+            return True
+    return False
 
 
 class _InstanceCard(QFrame):
@@ -55,7 +74,7 @@ class _InstanceCard(QFrame):
         
         self._root_lay = QVBoxLayout(self)
         self._root_lay.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
-        self._root_lay.setSpacing(t.SPACE_2)
+        self._root_lay.setSpacing(t.SPACE_3)
         
         # 1. Header (Always Visible)
         # -------------------------
@@ -72,8 +91,23 @@ class _InstanceCard(QFrame):
         self._gpu_lbl.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 11px; font-weight: 500;")
         self._root_lay.addWidget(self._gpu_lbl)
 
-        self._fit_pill = StatusPill("Calculating...", "muted")
-        self._root_lay.addWidget(self._fit_pill)
+        metric_row = QHBoxLayout()
+        metric_row.setContentsMargins(0, 0, 0, 0)
+        metric_row.setSpacing(t.SPACE_3)
+        self._score_value = QLabel("--")
+        self._score_value.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 28px; font-weight: 900;")
+        metric_row.addWidget(self._score_value)
+        metric_text = QVBoxLayout()
+        metric_text.setContentsMargins(0, 0, 0, 0)
+        metric_text.setSpacing(0)
+        self._fit_pill = StatusPill("Calculating fit...", "muted")
+        self._action_hint = QLabel("Select action.")
+        self._action_hint.setWordWrap(True)
+        self._action_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 11px;")
+        metric_text.addWidget(self._fit_pill)
+        metric_text.addWidget(self._action_hint)
+        metric_row.addLayout(metric_text, 1)
+        self._root_lay.addLayout(metric_row)
 
         # 2. Progress Strip (Visible during jobs)
         # ---------------------------------------
@@ -83,30 +117,30 @@ class _InstanceCard(QFrame):
         prog_lay.setSpacing(t.SPACE_1)
         
         self._prog_status = QLabel("INITIALIZING...")
-        self._prog_status.setStyleSheet(f"color: {t.ACCENT}; font-size: 9px; font-weight: 800; letter-spacing: 1px;")
+        self._prog_status.setStyleSheet(f"color: {t.ACCENT}; font-size: 11px; font-weight: 800; letter-spacing: 0.8px;")
         prog_lay.addWidget(self._prog_status)
         
         self._prog_bar = QProgressBar()
-        self._prog_bar.setFixedHeight(4)
+        self._prog_bar.setFixedHeight(8)
         self._prog_bar.setRange(0, 100)
         self._prog_bar.setTextVisible(False)
         self._prog_bar.setStyleSheet(f"""
-            QProgressBar {{ background: rgba(255,255,255,0.05); border: none; border-radius: 2px; }}
-            QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {t.ACCENT}, stop:1 {t.ACCENT_HI}); border-radius: 2px; }}
+            QProgressBar {{ background: rgba(255,255,255,0.05); border: none; border-radius: 4px; }}
+            QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {t.ACCENT}, stop:1 {t.ACCENT_HI}); border-radius: 4px; }}
         """)
         prog_lay.addWidget(self._prog_bar)
         
         # Log Toggle & Content
         log_row = QHBoxLayout()
         log_row.setContentsMargins(0, 4, 0, 0)
-        self._log_toggle = QPushButton("> Show Install Log")
+        self._log_toggle = QPushButton("> Log")
         self._log_toggle.setCursor(Qt.PointingHandCursor)
         self._log_toggle.setStyleSheet("QPushButton { border: none; background: transparent; color: #888; text-align: left; font-size: 10px; font-weight: 600; } QPushButton:hover { color: #ccc; }")
         self._log_toggle.clicked.connect(self.toggle_log)
         log_row.addWidget(self._log_toggle)
         log_row.addStretch()
         
-        self._prog_dismiss = QPushButton("Clear & Retry")
+        self._prog_dismiss = QPushButton("Clear")
         self._prog_dismiss.setProperty("size", "sm")
         self._prog_dismiss.setStyleSheet(f"background: {t.SURFACE_3}; color: {t.TEXT}; font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px solid {t.BORDER_LOW};")
         self._prog_dismiss.setCursor(Qt.PointingHandCursor)
@@ -141,6 +175,10 @@ class _InstanceCard(QFrame):
         review_head.setProperty("role", "section")
         review_head.setStyleSheet("font-size: 10px;")
         conf_lay.addWidget(review_head)
+
+        self._confirm_title = QLabel("")
+        self._confirm_title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 14px; font-weight: 800;")
+        conf_lay.addWidget(self._confirm_title)
         
         self._summary_box = QWidget()
         summary_lay = QHBoxLayout(self._summary_box)
@@ -154,14 +192,14 @@ class _InstanceCard(QFrame):
         
         self._summary_lbl = QLabel("")
         self._summary_lbl.setWordWrap(True)
-        self._summary_lbl.setStyleSheet(f"color: {t.TEXT}; font-size: 11px; line-height: 1.25;")
+        self._summary_lbl.setStyleSheet(f"color: {t.TEXT}; font-size: 11px; line-height: 1.45;")
         summary_lay.addWidget(self._summary_lbl, 1)
         conf_lay.addWidget(self._summary_box)
         
         conf_btns = QHBoxLayout()
         conf_btns.setSpacing(t.SPACE_2)
-        self._btn_cancel = QPushButton("Cancel")
-        self._btn_cancel.setFixedWidth(85)
+        self._btn_cancel = QPushButton("Back")
+        self._btn_cancel.setFixedWidth(110)
         self._btn_cancel.setProperty("size", "sm")
         self._btn_cancel.clicked.connect(self.show_idle)
         
@@ -169,6 +207,7 @@ class _InstanceCard(QFrame):
         self._btn_confirm.setProperty("role", "primary")
         self._btn_confirm.setProperty("size", "sm")
         self._btn_confirm.clicked.connect(lambda: self.confirmed.emit(getattr(self, "_active_mode", "deploy"), self.iid))
+        self._confirm_btn = self._btn_confirm
         
         conf_btns.addStretch()
         conf_btns.addWidget(self._btn_cancel)
@@ -181,34 +220,47 @@ class _InstanceCard(QFrame):
         # 4. Action Buttons (Standard visible state)
         # ------------------------------------------
         self._action_widget = QWidget()
-        act_lay = QHBoxLayout(self._action_widget)
+        act_lay = QVBoxLayout(self._action_widget)
         act_lay.setContentsMargins(0, t.SPACE_2, 0, 0)
         act_lay.setSpacing(t.SPACE_2)
+
+        runtime_row = QHBoxLayout()
+        runtime_row.setContentsMargins(0, 0, 0, 0)
+        runtime_row.setSpacing(t.SPACE_2)
+        self._runtime_chip = QLabel("Setup required")
+        self._runtime_chip.setStyleSheet(
+            f"color: {t.ACCENT_SOFT}; background: rgba(124,92,255,0.10); border: 1px solid rgba(124,92,255,0.22);"
+            "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
+        )
+        self._runtime_detail = QLabel("Prepare runtime before deploy.")
+        self._runtime_detail.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 11px;")
+        runtime_row.addWidget(self._runtime_chip)
+        runtime_row.addWidget(self._runtime_detail, 1)
+        act_lay.addLayout(runtime_row)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(t.SPACE_2)
         
-        self._btn_setup = QPushButton("Setup Environment")
+        self._btn_setup = QPushButton("Prepare Runtime")
         self._btn_setup.setProperty("role", "primary")
         self._btn_setup.setProperty("size", "sm")
         self._btn_setup.clicked.connect(lambda: self.setup_requested.emit(self.iid))
-        
-        self._btn_ready = QPushButton("Ready")
-        self._btn_ready.setEnabled(False)
-        self._btn_ready.setProperty("size", "sm")
-        
-        self._btn_reset = QPushButton("Reset")
-        self._btn_reset.setProperty("role", "danger")
+
+        self._btn_reset = QPushButton("Rebuild")
+        self._btn_reset.setProperty("variant", "ghost")
         self._btn_reset.setProperty("size", "sm")
-        self._btn_reset.setFixedWidth(60)
         self._btn_reset.clicked.connect(lambda: self.reset_requested.emit(self.iid))
         
-        self._btn_deploy = QPushButton("Deploy Model")
+        self._btn_deploy = QPushButton("Deploy Now")
         self._btn_deploy.setProperty("role", "primary")
         self._btn_deploy.setProperty("size", "sm")
         self._btn_deploy.clicked.connect(lambda: self.deploy_requested.emit(self.iid))
         
-        act_lay.addWidget(self._btn_setup, 1)
-        act_lay.addWidget(self._btn_ready, 1)
-        act_lay.addWidget(self._btn_reset)
-        act_lay.addWidget(self._btn_deploy, 1)
+        button_row.addWidget(self._btn_setup, 1)
+        button_row.addWidget(self._btn_reset)
+        button_row.addWidget(self._btn_deploy, 2)
+        act_lay.addLayout(button_row)
         self._root_lay.addWidget(self._action_widget)
 
         self._busy_lbl = QLabel("")
@@ -228,6 +280,18 @@ class _InstanceCard(QFrame):
         self._summary_lbl.setText(summary)
         # Store mode in property for the connected signal
         self._active_mode = mode
+        title_map = {
+            "setup": "Prepare runtime?",
+            "wipe": "Rebuild runtime?",
+            "deploy": "Start deploy?",
+        }
+        cta_map = {
+            "setup": "Prepare Runtime",
+            "wipe": "Rebuild Runtime",
+            "deploy": "Start Deploy",
+        }
+        self._confirm_title.setText(title_map.get(mode, "Confirm action"))
+        self._btn_confirm.setText(cta_map.get(mode, "Confirm"))
         self._btn_confirm.setProperty("role", "primary" if mode != "wipe" else "danger")
         self._btn_confirm.style().unpolish(self._btn_confirm)
         self._btn_confirm.style().polish(self._btn_confirm)
@@ -239,7 +303,15 @@ class _InstanceCard(QFrame):
 
     def show_progress(self, stage: str, percent: int):
         self._prog_dismiss.hide()
-        self._prog_status.setText(f"{stage.upper()}... {percent}%")
+        pretty = {
+            "apt": "Preparing dependencies",
+            "clone": "Cloning llama.cpp",
+            "cmake": "Configuring build",
+            "build": "Building runtime",
+            "download": "Downloading model",
+            "verify": "Verifying files",
+        }.get(stage, stage.title())
+        self._prog_status.setText(f"{pretty} · {percent}%")
         self._prog_status.setStyleSheet(f"color: {t.ACCENT}; font-size: 9px; font-weight: 800; letter-spacing: 1px;")
         self._prog_bar.setStyleSheet(f"QProgressBar {{ background: rgba(255,255,255,0.05); border: none; border-radius: 2px; }} QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {t.ACCENT}, stop:1 {t.ACCENT_HI}); border-radius: 2px; }}")
         self._prog_bar.setValue(percent)
@@ -252,7 +324,7 @@ class _InstanceCard(QFrame):
 
     def show_failed(self, error_msg: str):
         self._prog_dismiss.show()
-        self._prog_status.setText(f"FAILED: {error_msg}")
+        self._prog_status.setText(f"Failed · {error_msg}")
         self._prog_status.setStyleSheet(f"color: {t.ERR}; font-size: 10px; font-weight: 800; letter-spacing: 1px;")
         self._prog_bar.setStyleSheet(f"QProgressBar {{ background: rgba(255,255,255,0.05); border: none; border-radius: 2px; }} QProgressBar::chunk {{ background: {t.ERR}; border-radius: 2px; }}")
         self._prog_bar.setValue(100)
@@ -269,7 +341,7 @@ class _InstanceCard(QFrame):
     def toggle_log(self):
         visible = not self._log_view.isVisible()
         self._log_view.setVisible(visible)
-        self._log_toggle.setText(("> " if not visible else "v ") + "Show Install Log")
+        self._log_toggle.setText(("> " if not visible else "v ") + "Log")
         self._update_height()
 
     def append_log(self, text: str):
@@ -282,7 +354,7 @@ class _InstanceCard(QFrame):
             self.setMinimumHeight(h)
         else: self.setMinimumHeight(120)
 
-    def populate_info(self, iid, state, selected_file, busy: bool, active_job, scorer):
+    def populate_info(self, iid, state, selected_file, busy: bool, active_job, scorer, model_installed: bool = False):
         self._vram_badge.setText(f"{(state.system.gpu_vram_gb or 0):.0f} GB VRAM")
         self._gpu_lbl.setText(state.system.gpu_name or "Unknown GPU")
 
@@ -300,12 +372,21 @@ class _InstanceCard(QFrame):
                 gguf_sources=[],
             )
             scored = scorer.score(entry, state.system)
+            self._score_value.setText(f"{scored.score:.0f}")
             self._fit_pill.set_status(
-                f"{scored.score:.0f} score | {_FIT_LABEL.get(scored.fit_level, 'Unknown Fit')}",
+                f"{_FIT_LABEL.get(scored.fit_level, 'Unknown Fit')}",
                 _FIT_LEVEL.get(scored.fit_level, "info"),
             )
+            if model_installed:
+                self._action_hint.setText("Already on instance.")
+            elif state.setup.llamacpp_installed:
+                self._action_hint.setText("Ready to install.")
+            else:
+                self._action_hint.setText("Runtime required.")
             self._fit_pill.show()
         else:
+            self._score_value.setText("--")
+            self._action_hint.setText("Pick quant.")
             self._fit_pill.hide()
 
         if busy and active_job:
@@ -317,19 +398,59 @@ class _InstanceCard(QFrame):
                 self._confirm_widget.hide()
         else:
             self._busy_lbl.hide()
+            if not state.setup.probed:
+                self._score_value.setText("...")
+                self._action_hint.setText("Checking over SSH.")
+                self._runtime_chip.setText("Checking")
+                self._runtime_chip.setStyleSheet(
+                    f"color: {t.WARN}; background: rgba(244,183,64,0.10); border: 1px solid rgba(244,183,64,0.22);"
+                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
+                )
+                self._runtime_detail.setText("Inspecting remote runtime.")
+                self._btn_setup.setText("Checking...")
+                self._btn_setup.setEnabled(False)
+                self._btn_setup.setVisible(True)
+                self._btn_reset.setVisible(False)
+                self._btn_deploy.setEnabled(False)
+                self._btn_deploy.setText("Deploy")
+                if not busy and not self._confirm_widget.isVisible() and not self._prog_widget.isVisible():
+                    if not self._action_widget.isVisible():
+                        self._action_widget.show()
+                return
+
+            self._btn_setup.setText("Prepare Runtime")
+            self._btn_setup.setEnabled(True)
             has_setup = state.setup.llamacpp_installed
-            
-            # Avoid redundant setVisible calls which can trigger layout flickers
-            if self._btn_setup.isVisible() == has_setup:
-                self._btn_setup.setVisible(not has_setup)
-            if self._btn_ready.isVisible() != has_setup:
-                self._btn_ready.setVisible(has_setup)
-            if self._btn_reset.isVisible() != has_setup:
-                self._btn_reset.setVisible(has_setup)
+
+            if model_installed:
+                self._runtime_chip.setText("Installed")
+                self._runtime_chip.setStyleSheet(
+                    f"color: {t.INFO}; background: rgba(78,168,255,0.10); border: 1px solid rgba(78,168,255,0.22);"
+                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
+                )
+                self._runtime_detail.setText("Selected GGUF already present")
+            elif has_setup:
+                self._runtime_chip.setText("Ready")
+                self._runtime_chip.setStyleSheet(
+                    f"color: {t.OK}; background: rgba(59,212,136,0.10); border: 1px solid rgba(59,212,136,0.22);"
+                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
+                )
+                self._runtime_detail.setText("llama.cpp installed")
+            else:
+                self._runtime_chip.setText("Setup required")
+                self._runtime_chip.setStyleSheet(
+                    f"color: {t.ACCENT_SOFT}; background: rgba(124,92,255,0.10); border: 1px solid rgba(124,92,255,0.22);"
+                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
+                )
+                self._runtime_detail.setText("Prepare runtime before deploy.")
+
+            self._btn_setup.setVisible(not has_setup)
+            self._btn_reset.setVisible(has_setup)
                 
-            can_deploy = has_setup and selected_file is not None
+            can_deploy = has_setup and selected_file is not None and not model_installed
             if self._btn_deploy.isEnabled() != can_deploy:
                 self._btn_deploy.setEnabled(can_deploy)
+            self._btn_deploy.setText("Installed" if model_installed else "Deploy Now")
             
             if not busy and not self._confirm_widget.isVisible() and not self._prog_widget.isVisible():
                 if not self._action_widget.isVisible():
@@ -352,11 +473,15 @@ class InstallPanelSide(QWidget):
     def __init__(self, store, job_registry, parent=None):
         super().__init__(parent)
         self.store = store
-        self.registry = job_registry
+        self.registry = job_registry or JobRegistry.in_memory()
         self.scorer = InstanceFitScorer()
         self.current_model: HFModel | None = None
         self.mode = self.MODE_IDLE
         self._instance_cards: dict[int, _InstanceCard] = {}
+        self._connected_instance_ids: list[int] | None = None
+        self._instance_render_signatures: dict[int, tuple] = {}
+        self._context_iid: int | None = None
+        self._pending_jobs: dict[int, object] = {}
         self._stale_desc = None
 
         self.setMinimumWidth(340)
@@ -369,6 +494,13 @@ class InstallPanelSide(QWidget):
                 background: {t.BG_BASE};
                 border-left: 1px solid {t.BORDER_LOW};
             }}
+            QFrame#inspector-card,
+            QFrame#stale-install-banner,
+            QFrame#danger-strip {{
+                background: {t.SURFACE_1};
+                border: 1px solid {t.BORDER_LOW};
+                border-radius: 14px;
+            }}
             QWidget#studio-settings QScrollArea,
             QWidget#studio-settings QScrollArea::viewport,
             QWidget#studio-settings QScrollArea > QWidget,
@@ -377,26 +509,26 @@ class InstallPanelSide(QWidget):
                 border: none;
             }}
             QFrame#deploy-target {{
-                background: {t.SURFACE_1};
+                background: #111722;
                 border: 1px solid {t.BORDER_MED};
-                border-radius: 12px;
+                border-radius: 16px;
             }}
             QFrame#deploy-target:hover {{
-                border-color: {t.ACCENT};
+                border-color: rgba(124,92,255,0.40);
             }}
             QComboBox {{
                 background: {t.SURFACE_3};
                 color: {t.TEXT_HI};
                 border: 1px solid {t.BORDER_MED};
-                border-radius: 8px;
-                padding: 6px 12px;
-                min-height: 28px;
+                border-radius: 12px;
+                padding: 8px 12px;
+                min-height: 32px;
             }}
             QComboBox:focus {{ border-color: {t.ACCENT}; }}
             QLabel#deploy-model-name {{
                 color: {t.TEXT_HI};
-                font-size: 16px;
-                font-weight: 800;
+                font-size: 20px;
+                font-weight: 900;
             }}
             QLabel#deploy-model-meta {{
                 color: {t.TEXT_MID};
@@ -414,6 +546,8 @@ class InstallPanelSide(QWidget):
         title.setProperty("role", "title")
         header.addWidget(title)
         header.addStretch()
+        self._panel_state = StatusPill("Awaiting model", "muted")
+        header.addWidget(self._panel_state)
         self._panel_meta = QLabel("0 models")
         self._panel_meta.setProperty("role", "muted")
         header.addWidget(self._panel_meta)
@@ -449,10 +583,10 @@ class InstallPanelSide(QWidget):
         self.stack.addWidget(self._ready)
         self.stack.addWidget(self._busy)
 
-        self.registry.job_started.connect(lambda _key: self._refresh())
+        self.registry.job_started.connect(self._on_registry_started)
         self.registry.job_updated.connect(self._on_registry_update)
         self.registry.job_finished.connect(self._on_registry_finished)
-        self.store.instance_state_updated.connect(lambda *_: self._refresh())
+        self.store.instance_state_updated.connect(self._on_instance_state_updated)
         self._set_mode(self.MODE_IDLE)
 
     def set_model(self, model: HFModel) -> None:
@@ -477,6 +611,11 @@ class InstallPanelSide(QWidget):
         self.current_model = None
         self._set_mode(self.MODE_IDLE)
 
+    def set_connected_instance_ids(self, ids: list[int] | None) -> None:
+        self._connected_instance_ids = list(ids) if ids is not None else None
+        if self.current_model is not None:
+            self._refresh()
+
     def show_stale(self, desc, state: dict) -> None:
         pct = state.get("percent", desc.percent) or 0
         stage = state.get("stage", desc.stage) or "unknown"
@@ -487,15 +626,34 @@ class InstallPanelSide(QWidget):
     def _build_idle(self) -> QWidget:
         widget = QWidget()
         lay = QVBoxLayout(widget)
-        lay.setContentsMargins(0, t.SPACE_8, 0, 0)
-        lay.setSpacing(t.SPACE_2)
-        title = QLabel("No model selected")
-        title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 15px; font-weight: 700;")
-        msg = QLabel("Pick a GGUF from the store to choose a quantization and target instance.")
+        lay.setContentsMargins(0, t.SPACE_6, 0, 0)
+        lay.setSpacing(t.SPACE_4)
+        card = QFrame()
+        card.setObjectName("inspector-card")
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        card_lay.setSpacing(t.SPACE_3)
+        eyebrow = QLabel("MODEL STORE SETTINGS")
+        eyebrow.setProperty("role", "section")
+        title = QLabel("Pick a model")
+        title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 18px; font-weight: 900;")
+        msg = QLabel("Quant. Target. Action.")
         msg.setWordWrap(True)
         msg.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 13px;")
-        lay.addWidget(title)
-        lay.addWidget(msg)
+        self._idle_stats = QLabel("")
+        self._idle_stats.setWordWrap(True)
+        self._idle_stats.setStyleSheet(
+            f"color: {t.TEXT}; background: rgba(255,255,255,0.03); border: 1px solid {t.BORDER_LOW}; border-radius: 12px; padding: 12px; font-size: 12px;"
+        )
+        self._idle_hint = QLabel("Auto-focus on first result.")
+        self._idle_hint.setWordWrap(True)
+        self._idle_hint.setStyleSheet(f"color: {t.ACCENT_SOFT}; font-size: 12px;")
+        card_lay.addWidget(eyebrow)
+        card_lay.addWidget(title)
+        card_lay.addWidget(msg)
+        card_lay.addWidget(self._idle_stats)
+        card_lay.addWidget(self._idle_hint)
+        lay.addWidget(card)
         lay.addStretch()
         return widget
 
@@ -505,9 +663,15 @@ class InstallPanelSide(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(t.SPACE_4)
 
-        sec_model = QLabel("Selected Model")
+        hero_card = QFrame()
+        hero_card.setObjectName("inspector-card")
+        hero_lay = QVBoxLayout(hero_card)
+        hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        hero_lay.setSpacing(t.SPACE_2)
+
+        sec_model = QLabel("Selected model")
         sec_model.setProperty("role", "section")
-        lay.addWidget(sec_model)
+        hero_lay.addWidget(sec_model)
 
         self._hero_name = QLabel("")
         self._hero_name.setObjectName("deploy-model-name")
@@ -516,20 +680,39 @@ class InstallPanelSide(QWidget):
         self._hero_author.setObjectName("deploy-model-meta")
         self._hero_stats = QLabel("")
         self._hero_stats.setObjectName("deploy-model-meta")
-        lay.addWidget(self._hero_name)
-        lay.addWidget(self._hero_author)
-        lay.addWidget(self._hero_stats)
+        self._hero_hint = QLabel("")
+        self._hero_hint.setWordWrap(True)
+        self._hero_hint.setStyleSheet(f"color: {t.TEXT}; font-size: 12px;")
+        hero_lay.addWidget(self._hero_name)
+        hero_lay.addWidget(self._hero_author)
+        hero_lay.addWidget(self._hero_stats)
+        hero_lay.addWidget(self._hero_hint)
+        lay.addWidget(hero_card)
 
+        quant_card = QFrame()
+        quant_card.setObjectName("inspector-card")
+        quant_lay = QVBoxLayout(quant_card)
+        quant_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        quant_lay.setSpacing(t.SPACE_2)
         sec_quant = QLabel("Target configuration")
         sec_quant.setProperty("role", "section")
-        lay.addWidget(sec_quant)
+        quant_lay.addWidget(sec_quant)
+        self._quant_hint = QLabel("Pick quant.")
+        self._quant_hint.setWordWrap(True)
+        self._quant_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px;")
+        quant_lay.addWidget(self._quant_hint)
         self._quant_combo = QComboBox()
         self._quant_combo.currentIndexChanged.connect(lambda _: self._render_instance_cards())
-        lay.addWidget(self._quant_combo)
+        quant_lay.addWidget(self._quant_combo)
+        lay.addWidget(quant_card)
 
-        sec_targets = QLabel("Deployment targets")
+        sec_targets = QLabel("Connected deployment targets")
         sec_targets.setProperty("role", "section")
         lay.addWidget(sec_targets)
+        self._targets_hint = QLabel("Ready or needs runtime.")
+        self._targets_hint.setWordWrap(True)
+        self._targets_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px;")
+        lay.addWidget(self._targets_hint)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -552,13 +735,24 @@ class InstallPanelSide(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(t.SPACE_4)
 
-        section = QLabel("Operations Hub")
+        hero_card = QFrame()
+        hero_card.setObjectName("inspector-card")
+        hero_lay = QVBoxLayout(hero_card)
+        hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        hero_lay.setSpacing(t.SPACE_2)
+        section = QLabel("Operations")
         section.setProperty("role", "section")
-        lay.addWidget(section)
-
+        hero_lay.addWidget(section)
         self._busy_title = QLabel("")
-        self._busy_title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 15px; font-weight: 700;")
-        lay.addWidget(self._busy_title)
+        self._busy_title.setWordWrap(True)
+        self._busy_title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 17px; font-weight: 800;")
+        hero_lay.addWidget(self._busy_title)
+        self._busy_hint = QLabel("Remote sync active.")
+        self._busy_hint.setWordWrap(True)
+        self._busy_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px;")
+        hero_lay.addWidget(self._busy_hint)
+        lay.addWidget(hero_card)
+
         self._progress = InstallProgress()
         lay.addWidget(self._progress)
 
@@ -568,10 +762,10 @@ class InstallPanelSide(QWidget):
         lay.addWidget(self._cancel_btn)
 
         self._cancel_strip = QFrame()
-        self._cancel_strip.setStyleSheet(f"background: {t.SURFACE_2}; border: 1px solid {t.BORDER_LOW}; border-radius: 8px;")
+        self._cancel_strip.setObjectName("danger-strip")
         strip_lay = QHBoxLayout(self._cancel_strip)
         strip_lay.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
-        strip_lay.addWidget(QLabel("Terminate remote job?"))
+        strip_lay.addWidget(QLabel("Terminate the remote job and stop syncing progress?"))
         strip_lay.addStretch()
         no = QPushButton("No")
         no.setProperty("size", "sm")
@@ -589,17 +783,22 @@ class InstallPanelSide(QWidget):
 
     def _refresh(self) -> None:
         if self.current_model is None:
+            self._refresh_idle_state()
+            self._panel_state.set_status("Awaiting model", "muted")
             self._set_mode(self.MODE_IDLE)
             return
         active = self._current_active_job()
         if active is not None:
-            self._busy_title.setText(f"Active Job on #{active.iid}")
+            self._busy_title.setText(f"{active.filename} on #{active.iid}")
             self._progress.set_stage(active.stage, percent=active.percent)
+            self._panel_state.set_status("Busy", "warn")
+            self._panel_meta.setText(f"#{active.iid}")
             self._set_mode(self.MODE_BUSY)
             return
-        self._populate_hero()
         self._populate_quants()
+        self._populate_hero()
         self._render_instance_cards()
+        self._panel_state.set_status("Ready", "ok")
         self._set_mode(self.MODE_READY)
 
     def _populate_hero(self) -> None:
@@ -609,6 +808,12 @@ class InstallPanelSide(QWidget):
         self._hero_author.setText(f"by {m.author}")
         params = f" | {m.params_b:.1f}B" if m.params_b > 0 else ""
         self._hero_stats.setText(f"{m.likes:,} likes | {m.downloads:,} downloads{params}")
+        chosen = self._quant_combo.currentData()
+        if chosen is not None:
+            size_gb = chosen.size_bytes / (1024 ** 3) if chosen.size_bytes else 0
+            self._hero_hint.setText(f"{chosen.quantization or 'Unknown'} · {size_gb:.1f} GB")
+        else:
+            self._hero_hint.setText("No quant selected.")
 
     def _populate_quants(self) -> None:
         if not self.current_model: return
@@ -625,9 +830,14 @@ class InstallPanelSide(QWidget):
             elif not curr and "Q4_K_M" in (item.quantization or "").upper(): default_idx = idx
         if files: self._quant_combo.setCurrentIndex(default_idx)
         self._quant_combo.blockSignals(False)
+        self._panel_meta.setText(f"{len(files)} quant" + ("" if len(files) == 1 else "s"))
 
     def _render_instance_cards(self) -> None:
-        ids = self.store.all_instance_ids()
+        ids = (
+            list(self._connected_instance_ids)
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
+        )
         to_del = [iid for iid in self._instance_cards if iid not in ids]
         for iid in to_del: self._instance_cards.pop(iid).deleteLater()
 
@@ -635,8 +845,10 @@ class InstallPanelSide(QWidget):
             while self._instance_lay.count() > 1:
                 it = self._instance_lay.takeAt(0)
                 if it.widget(): it.widget().deleteLater()
-            empty = QLabel("No active instances. Go to Instances to add one.")
-            empty.setStyleSheet(f"color: {t.TEXT_MID}; font-style: italic; padding: {t.SPACE_4}px;")
+            empty = QLabel("No connected targets.")
+            empty.setStyleSheet(
+                f"color: {t.TEXT_MID}; background: {t.SURFACE_1}; border: 1px solid {t.BORDER_LOW}; border-radius: 14px; padding: {t.SPACE_5}px; font-size: 12px;"
+            )
             empty.setAlignment(Qt.AlignCenter)
             self._instance_lay.insertWidget(0, empty)
             return
@@ -645,6 +857,7 @@ class InstallPanelSide(QWidget):
         for iid in ids:
             state = self.store.get_state(iid)
             active = self.registry.active_for(iid)
+            model_installed = _remote_has_selected_file(state, sel_file)
             if iid not in self._instance_cards:
                 card = _InstanceCard(iid, self)
                 card.confirmed.connect(self._on_action_confirmed)
@@ -658,7 +871,7 @@ class InstallPanelSide(QWidget):
             if active: 
                 card.show_progress(active.stage, active.percent)
             else:
-                card.populate_info(iid, state, sel_file, False, None, self.scorer)
+                card.populate_info(iid, state, sel_file, False, None, self.scorer, model_installed=model_installed)
                 # Auto-collapse if no longer busy/confirming, BUT preserve the FAILED state (dismiss button)
                 if card._prog_dismiss.isVisible():
                     pass  # Keep the failed state visible so user can read log and click Clear
@@ -667,31 +880,49 @@ class InstallPanelSide(QWidget):
 
     def show_confirm_overlay(self, iid: int, mode: str = "deploy") -> None:
         if iid not in self._instance_cards: return
+        self._context_iid = iid
         card = self._instance_cards[iid]
         state = self.store.get_state(iid)
         gpu = f"GPU: {state.system.gpu_name or '?'} | {(state.system.gpu_vram_gb or 0):.1f} GB"
         if mode == "setup":
-            summary = f"{gpu}\n\n• Installs cmake/git build tools\n• Compiles llama.cpp for CUDA backend"
+            summary = f"{gpu}\n\n• deps\n• build llama.cpp\n• enable deploy"
         elif mode == "wipe":
-            summary = f"{gpu}\n• Kills active servers\n• DELETES /opt/llama.cpp (destructive)"
+            summary = f"{gpu}\n\n• stop servers\n• remove runtime\n• clean rebuild"
         else:
             f = self._quant_combo.currentData()
             gb = f.size_bytes / (1024 ** 3) if f else 0
-            needs = "• Environment setup needed\n" if not state.setup.llamacpp_installed else ""
-            summary = f"{gpu}\nRepo: {self.current_model.id}\nFile: {f.filename if f else '?'}\nSize: {gb:.1f} GB\n\n{needs}• Downloads GGUF to local volume"
+            needs = "• runtime required\n" if not state.setup.llamacpp_installed else ""
+            summary = (
+                f"{gpu}\nRepo: {self.current_model.id}\nFile: {f.filename if f else '?'}\nSize: {gb:.1f} GB\n\n"
+                f"{needs}• download GGUF\n• sync progress here"
+            )
         card.show_confirm(mode, summary)
 
     def _on_action_confirmed(self, mode: str, iid: int) -> None:
-        if mode == "setup": self.setup_requested.emit(iid)
-        elif mode == "wipe": self.wipe_requested.emit(iid)
+        if mode == "setup":
+            self._start_pending_job(iid, "Preparing runtime...", "apt")
+            self.setup_requested.emit(iid)
+        elif mode == "wipe":
+            self._start_pending_job(iid, "Rebuilding runtime...", "apt")
+            self.wipe_requested.emit(iid)
         else:
             f = self._quant_combo.currentData()
             if f and self.current_model:
+                self._start_pending_job(iid, f.filename, "download")
                 self.install_requested.emit(iid, self.current_model.id, f.filename)
+
+    def _on_registry_started(self, key: str) -> None:
+        desc = self.registry.get(key)
+        if desc is not None:
+            self._pending_jobs.pop(desc.iid, None)
+            self._context_iid = desc.iid
+        self._refresh()
 
     def _on_registry_update(self, key: str) -> None:
         active = self.registry.get(key)
         if active and active.iid in self._instance_cards:
+            self._pending_jobs.pop(active.iid, None)
+            self._context_iid = active.iid
             self._instance_cards[active.iid].show_progress(active.stage, active.percent)
         if self.mode == self.MODE_BUSY:
             m_a = self._current_active_job()
@@ -700,6 +931,9 @@ class InstallPanelSide(QWidget):
                 if m_a.speed: self._progress.append_log(f"{m_a.percent}% - {m_a.speed}")
 
     def _on_registry_finished(self, key: str, ok: bool) -> None:
+        for iid, pending in list(self._pending_jobs.items()):
+            if getattr(pending, "key", None) == key:
+                self._pending_jobs.pop(iid, None)
         if not ok:
             # The job is finished but failed. Find the card that was tracking it and lock it into the error state.
             for card in self._instance_cards.values():
@@ -709,15 +943,23 @@ class InstallPanelSide(QWidget):
         self._refresh()
 
     def append_log(self, key: str, text: str):
+        stripped = text.strip()
+        if not stripped:
+            return
+        if stripped.startswith("DOWNLOAD_PROGRESS|"):
+            return
+        lower = stripped.lower()
+        if lower.startswith("awk: line "):
+            return
         # 1. Update Master Log (top)
         active = self._current_active_job()
         if active and active.key == key:
-            self._progress.append_log(text)
+            self._progress.append_log(stripped)
             
         # 2. Route to specific card
         job = self.registry.get(key)
         if job and job.iid in self._instance_cards:
-            self._instance_cards[job.iid].append_log(text)
+            self._instance_cards[job.iid].append_log(stripped)
             
     def _on_card_setup(self, iid: int):
         self.show_confirm_overlay(iid, mode="setup")
@@ -737,13 +979,40 @@ class InstallPanelSide(QWidget):
         if a: self.cancel_requested.emit(a.key)
 
     def _current_active_job(self):
-        if not self.current_model: return None
+        if self._context_iid is not None:
+            contextual = self.registry.active_for(self._context_iid)
+            if contextual is not None:
+                return contextual
+            pending = self._pending_jobs.get(self._context_iid)
+            if pending is not None:
+                return pending
+        for iid, pending in self._pending_jobs.items():
+            if self.registry.active_for(iid) is None:
+                return pending
+        if not self.current_model:
+            return None
         return next((d for _, d in self.registry.active_items() if d.repo_id == self.current_model.id), None)
 
     def _on_stale_resume(self) -> None:
         if self._stale_desc:
             self.resume_requested.emit(self._stale_desc.key)
             self._stale_banner.hide()
+
+    def _refresh_idle_state(self) -> None:
+        connected = (
+            list(self._connected_instance_ids)
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
+        )
+        active_ops = len(list(self.registry.active_items()))
+        self._panel_meta.setText(
+            f"{len(connected)} target" + ("" if len(connected) == 1 else "s") if connected else "no targets"
+        )
+        self._idle_stats.setText(
+            f"{len(connected)} target" + ("" if len(connected) == 1 else "s")
+            + f"\n{active_ops} operation"
+            + ("" if active_ops == 1 else "s")
+        )
 
     def _on_stale_discard(self) -> None:
         if self._stale_desc:
@@ -752,5 +1021,57 @@ class InstallPanelSide(QWidget):
 
     def _set_mode(self, mode: str) -> None:
         self.mode = mode
-        self._panel_meta.setText(f"{mode.upper()}")
         self.stack.setCurrentIndex({"idle": 0, "ready": 1, "busy": 2}.get(mode, 0))
+
+    def _on_instance_state_updated(self, iid: int, state) -> None:
+        visible_ids = (
+            set(self._connected_instance_ids)
+            if self._connected_instance_ids is not None
+            else set(self.store.all_instance_ids())
+        )
+        if iid not in visible_ids:
+            return
+        sig = self._instance_signature(state)
+        if self._instance_render_signatures.get(iid) == sig:
+            return
+        self._instance_render_signatures[iid] = sig
+        self._refresh()
+
+    def _instance_signature(self, state) -> tuple:
+        system = state.system
+        setup = state.setup
+        return (
+            system.gpu_name,
+            system.gpu_vram_gb,
+            system.ram_total_gb,
+            system.cpu_cores,
+            system.has_gpu,
+            setup.probed,
+            setup.llamacpp_installed,
+        )
+
+    def _start_pending_job(self, iid: int, label: str, stage: str) -> None:
+        self._context_iid = iid
+        key = f"pending:{iid}:{stage}"
+        self._pending_jobs[iid] = SimpleNamespace(
+            key=key,
+            iid=iid,
+            filename=label,
+            stage=stage,
+            percent=0,
+            speed="",
+            repo_id=self.current_model.id if self.current_model else "Environment",
+        )
+        if iid in self._instance_cards:
+            self._instance_cards[iid].show_progress(stage, 0)
+        self._refresh()
+        QTimer.singleShot(2500, lambda iid=iid, key=key: self._expire_pending_job(iid, key))
+
+    def _expire_pending_job(self, iid: int, key: str) -> None:
+        pending = self._pending_jobs.get(iid)
+        if pending is None or pending.key != key:
+            return
+        if self.registry.active_for(iid) is not None:
+            return
+        self._pending_jobs.pop(iid, None)
+        self._refresh()

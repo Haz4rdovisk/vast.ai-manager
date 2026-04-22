@@ -23,11 +23,16 @@ from app.lab.workers.remote_probe import RemoteProbeWorker
 from app.lab.workers.remote_setup_worker import RemoteSetupWorker
 from app.lab.workers.streaming_worker import StreamingRemoteWorker
 from app.lab.services.job_registry import JobRegistry
-from app.lab.services.progress_parsers import parse_cmake_build_stage, parse_wget_progress
+from app.lab.services.progress_parsers import (
+    parse_cmake_build_stage,
+    parse_download_progress,
+    parse_wget_progress,
+)
 from app.lab.services.remote_setup import (
     script_download_model,
     script_fetch_log,
     script_install_llamacpp,
+    script_stream_job_log,
     script_wipe_llamacpp,
 )
 from app.ui.dialogs import UpdateSelectionDialog
@@ -206,6 +211,7 @@ class AppShell(QWidget):
         self.instances.open_analytics_requested.connect(
             lambda: self._go("analytics")
         )
+        self.instances.jobs_requested.connect(self._open_jobs_modal)
         
         # Proactive: listen to tunnel status
         controller.tunnel_status_changed.connect(self._on_tunnel_status_changed)
@@ -213,6 +219,14 @@ class AppShell(QWidget):
         # Sync Studio and hardware with current active instances
         controller.instances_refreshed.connect(
             lambda instances, *_: self.studio.refresh_instances(
+                [i.id for i in instances if i.ssh_host]
+            )
+        )
+        controller.instances_refreshed.connect(
+            lambda *_: self._sync_discover_connection_state()
+        )
+        controller.instances_refreshed.connect(
+            lambda instances, *_: self._prime_lab_probes(
                 [i.id for i in instances if i.ssh_host]
             )
         )
@@ -237,6 +251,7 @@ class AppShell(QWidget):
         # Landing view
         self._switch("instances")
         self.nav.set_active("instances")
+        self._sync_discover_connection_state()
 
     def _sync_analytics(self, instances, user_info):
         self._analytics_api_sync_pending = False
@@ -267,9 +282,14 @@ class AppShell(QWidget):
             self.analytics.apply_config(cfg)
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
+        self._sync_discover_connection_state()
         if status == TunnelStatus.CONNECTED.value:
-            # Automatic probe!
+            # Automatic generic instance probe
             self._probe_instance(iid)
+            # Reattach active jobs for this instance specifically
+            if self._controller and self._controller.vast:
+                instances = self._controller.last_instances
+                self._probe_active_jobs_for(iid, instances)
 
     def _on_live_metrics_bridge(self, iid: int, data: dict):
         """Bridge metrics from AppController into the Lab store."""
@@ -315,6 +335,23 @@ class AppShell(QWidget):
         """Trigger probe for the CURRENT selected instance."""
         if self.store.selected_instance_id:
             self._probe_instance(self.store.selected_instance_id)
+
+    def _sync_discover_connection_state(self) -> None:
+        if self._controller is None:
+            return
+        connected_ids = sorted(
+            iid
+            for iid, tunnel in self._controller.tunnel_states.items()
+            if tunnel == TunnelStatus.CONNECTED
+        )
+        self.discover.set_connected_instance_ids(connected_ids)
+
+    def _prime_lab_probes(self, ids: list[int]) -> None:
+        """Hydrate setup state for known Lab instances so action cards are accurate."""
+        for offset, iid in enumerate(ids):
+            if self.store.get_state(iid).setup.probed:
+                continue
+            QTimer.singleShot(150 * offset, lambda iid=iid: self._probe_instance(iid))
 
     # --- Remote probe ---
 
@@ -406,6 +443,11 @@ class AppShell(QWidget):
 
         self._run_single_setup(what if what != "llamacpp" else "install_llamacpp", iid=iid)
 
+    def _open_jobs_modal(self) -> None:
+        from app.ui.views.instances.jobs_modal import JobsModal
+        modal = JobsModal(self.job_registry, parent=self)
+        modal.exec()
+
     def _show_update_dialog(self, iid: int):
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst: return
@@ -416,6 +458,45 @@ class AppShell(QWidget):
             if actions:
                 # User confirmed components - start real setup
                 self._chain_setup(actions, iid)
+
+    @staticmethod
+    def _phase_percent(raw_percent: int | None, start: int, end: int) -> int:
+        raw = max(0, min(100, int(raw_percent or 0)))
+        span = max(0, end - start)
+        return start + int((raw / 100) * span)
+
+    def _job_percent(self, desc, stage: str, raw_percent: int | None = None) -> int:
+        if stage == "done":
+            return 100
+
+        setup_only = desc.repo_id == "Environment"
+        combined = bool(desc.needs_llamacpp) and not setup_only
+
+        if setup_only:
+            mapping = {
+                "apt": 8,
+                "clone": 22,
+                "cmake": 36,
+            }
+            if stage == "build":
+                return self._phase_percent(raw_percent, 42, 96)
+            return mapping.get(stage, max(0, min(100, int(raw_percent or 0))))
+
+        if combined:
+            mapping = {
+                "apt": 6,
+                "clone": 14,
+                "cmake": 24,
+            }
+            if stage == "build":
+                return self._phase_percent(raw_percent, 30, 76)
+            if stage == "download":
+                return self._phase_percent(raw_percent, 78, 99)
+            return mapping.get(stage, max(0, min(100, int(raw_percent or 0))))
+
+        if stage == "download":
+            return max(0, min(100, int(raw_percent or 0)))
+        return max(0, min(100, int(raw_percent or 0)))
 
     def _chain_setup(self, actions: list[str], iid: int):
         if not actions:
@@ -489,7 +570,11 @@ class AppShell(QWidget):
                 # Instant success! Don't wait for SSH closure
                 self._on_install_done_registry(True, "Success confirmed via log", key, iid)
             elif event.stage != "unknown":
-                self.job_registry.update(key, stage=event.stage, percent=event.percent or 100 if event.stage == "done" else 0)
+                self.job_registry.update(
+                    key,
+                    stage=event.stage,
+                    percent=self._job_percent(desc, event.stage, event.percent),
+                )
 
         worker.line.connect(on_line)
         worker.line.connect(lambda l: self.discover.side_panel.append_log(key, l))
@@ -644,23 +729,43 @@ class AppShell(QWidget):
                 event = parse_cmake_build_stage(line)
                 if event.stage == "done":
                     # Proactive phase skip
-                    self.job_registry.update(key, stage="download", percent=0)
+                    self.job_registry.update(
+                        key,
+                        stage="download",
+                        percent=self._job_percent(desc, "download", 0),
+                    )
                     progress_state["phase"] = "download"
                     return
 
                 if event.stage != "unknown":
-                    percent = (
-                        event.percent
-                        if event.percent is not None
-                        else progress_state["percent"]
+                    progress_state["percent"] = self._job_percent(desc, event.stage, event.percent)
+                    self.job_registry.update(
+                        key,
+                        stage=event.stage,
+                        percent=progress_state["percent"],
                     )
-                    progress_state["percent"] = percent
-                    self.job_registry.update(key, stage=event.stage, percent=percent)
+                return
+
+            explicit = parse_download_progress(line)
+            if explicit is not None:
+                self.job_registry.update(
+                    key,
+                    stage="download",
+                    percent=self._job_percent(desc, "download", explicit.percent),
+                    bytes_downloaded=explicit.bytes_downloaded,
+                    size_bytes=explicit.bytes_total or desc.size_bytes,
+                    speed=explicit.speed,
+                )
                 return
 
             event = parse_wget_progress(line)
             if event is not None:
-                self.job_registry.update(key, stage="download", percent=event.percent, speed=event.speed)
+                self.job_registry.update(
+                    key,
+                    stage="download",
+                    percent=self._job_percent(desc, "download", event.percent),
+                    speed=event.speed,
+                )
             elif "DOWNLOAD_DONE" in line:
                 self.job_registry.update(key, stage="done", percent=100)
 
@@ -704,6 +809,9 @@ class AppShell(QWidget):
         if desc is None:
             return
         self.job_registry.drop(key)
+        if desc.repo_id == "Environment" or desc.quant == "SETUP":
+            self._setup_environment_job(desc.iid)
+            return
         self._download_model_by_name(desc.iid, desc.repo_id, desc.filename)
 
     def _discard_job(self, key: str) -> None:
@@ -719,28 +827,40 @@ class AppShell(QWidget):
         self.job_registry.drop(key)
 
     def _try_reattach_jobs_once(self, instances, _user=None):
-        if getattr(self, "_reattach_done", False):
-            return
-        self._reattach_done = True
         if self._ssh is None:
             return
 
-        from app.lab.workers.remote_job_probe import RemoteJobProbe
-
-        self._job_probes: dict[str, RemoteJobProbe] = {}
         for key, desc in self.job_registry.active_items():
-            inst = next((i for i in instances if i.id == desc.iid), None)
-            if not inst or not inst.ssh_host:
-                continue
-            probe = RemoteJobProbe(self._ssh, inst.ssh_host, inst.ssh_port, desc, self)
-            self._job_probes[key] = probe
-            probe.result.connect(
-                lambda status, state, d=desc: self._on_job_probe(d, status, state)
-            )
-            probe.finished.connect(lambda k=key: self._job_probes.pop(k, None))
-            probe.start()
+            self._probe_single_job(desc, instances)
+
+    def _probe_active_jobs_for(self, iid: int, instances: list):
+        if self._ssh is None:
+            return
+        for key, desc in self.job_registry.active_items():
+            if desc.iid == iid:
+                self._probe_single_job(desc, instances)
+
+    def _probe_single_job(self, desc, instances):
+        inst = next((i for i in instances if i.id == desc.iid), None)
+        if not inst or not inst.ssh_host:
+            return
+        if not hasattr(self, "_job_probes"):
+            self._job_probes = {}
+        if desc.key in self._job_probes:
+            return # Already probing
+            
+        from app.lab.workers.remote_job_probe import RemoteJobProbe
+        probe = RemoteJobProbe(self._ssh, inst.ssh_host, inst.ssh_port, desc, self)
+        self._job_probes[desc.key] = probe
+        probe.result.connect(
+            lambda status, state, d=desc: self._on_job_probe(d, status, state)
+        )
+        probe.finished.connect(lambda k=desc.key: self._job_probes.pop(k, None))
+        probe.start()
 
     def _on_job_probe(self, desc, status: str, state: dict):
+        if status == "OFFLINE":
+            return # Don't drop it. Connection failed, but maybe the machine is just rebooting.
         if status == "DONE":
             self.job_registry.finish(desc.key, ok=True)
             if self._controller:
@@ -753,6 +873,7 @@ class AppShell(QWidget):
             self.job_registry.drop(desc.key)
             return
         if status == "STALE":
+            self.job_registry.update(desc.key, stage="cancelled")
             self.discover.side_panel.show_stale(desc, state)
             return
         if status != "RUNNING":
@@ -761,8 +882,14 @@ class AppShell(QWidget):
         self.job_registry.update(
             desc.key,
             stage=state.get("stage", desc.stage),
-            percent=state.get("percent", desc.percent),
+            percent=self._job_percent(
+                desc,
+                state.get("stage", desc.stage),
+                state.get("percent", desc.percent),
+            ),
             bytes_downloaded=state.get("bytes_downloaded", desc.bytes_downloaded),
+            size_bytes=state.get("bytes_total", desc.size_bytes) or desc.size_bytes,
+            speed=state.get("speed", desc.speed),
         )
         self._reattach_stream(desc)
         self.job_registry.mark_reattached(desc.key)
@@ -777,29 +904,50 @@ class AppShell(QWidget):
         inst = next((i for i in self._controller.last_instances if i.id == desc.iid), None)
         if not inst or not inst.ssh_host:
             return
-        tail_script = f'tail -n +1 -f "{desc.remote_log_path}"'
+        tail_script = script_stream_job_log(desc.key)
         worker = StreamingRemoteWorker(self._ssh, inst.ssh_host, inst.ssh_port, tail_script, self)
         self._setup_workers[desc.iid] = worker
         key = desc.key
 
         def on_line(line: str):
+            explicit = parse_download_progress(line)
+            if explicit is not None:
+                self.job_registry.update(
+                    key,
+                    stage="download",
+                    percent=self._job_percent(desc, "download", explicit.percent),
+                    bytes_downloaded=explicit.bytes_downloaded,
+                    size_bytes=explicit.bytes_total or desc.size_bytes,
+                    speed=explicit.speed,
+                )
+                self.discover.side_panel.append_log(key, line)
+                return
+
             event = parse_wget_progress(line)
             if event is not None:
-                self.job_registry.update(key, stage="download", percent=event.percent, speed=event.speed)
+                self.job_registry.update(
+                    key,
+                    stage="download",
+                    percent=self._job_percent(desc, "download", event.percent),
+                    speed=event.speed,
+                )
+                self.discover.side_panel.append_log(key, line)
                 return
             build_event = parse_cmake_build_stage(line)
             if build_event.stage != "unknown":
-                current = self.job_registry.get(key)
                 self.job_registry.update(
                     key,
                     stage=build_event.stage,
-                    percent=build_event.percent or (current.percent if current else 0),
+                    percent=self._job_percent(desc, build_event.stage, build_event.percent),
                 )
+                self.discover.side_panel.append_log(key, line)
                 return
             if "DOWNLOAD_DONE" in line:
                 self.job_registry.update(key, stage="done", percent=100)
                 self.job_registry.finish(key, ok=True)
-                worker.requestInterruption()
+                self.discover.side_panel.append_log(key, line)
+                return
+            self.discover.side_panel.append_log(key, line)
 
         worker.line.connect(on_line)
         worker.start()

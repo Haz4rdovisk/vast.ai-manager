@@ -29,7 +29,6 @@ from app.lab.services.job_registry import JobRegistry
 from app.lab.services.model_catalog import CatalogEntry
 from app.lab.views.install_panel_side import InstallPanelSide
 from app.lab.workers.huggingface_worker import HFSearchWorker
-from app.ui.components.page_header import PageHeader
 from app.ui.components.model_card import ModelCard
 
 
@@ -95,17 +94,47 @@ class DiscoverView(QWidget):
             }}
             QLabel#discover-brand {{
                 color: {t.TEXT_HI};
-                font-size: 14px;
-                font-weight: 800;
+                font-size: 16px;
+                font-weight: 900;
+            }}
+            QLabel#discover-subbrand {{
+                color: {t.TEXT_MID};
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 1px;
+                text-transform: uppercase;
             }}
             QWidget#discover-left-pane {{
                 background: {t.BG_DEEP};
             }}
+            QFrame#discover-summary {{
+                background: #0d131c;
+                border: 1px solid rgba(255,255,255,0.07);
+                border-radius: 14px;
+            }}
+            QLabel#discover-summary-title {{
+                color: {t.TEXT_HI};
+                font-size: 18px;
+                font-weight: 800;
+            }}
+            QLabel#discover-summary-meta {{
+                color: {t.TEXT_MID};
+                font-size: 12px;
+            }}
+            QLabel#discover-summary-chip {{
+                color: {t.ACCENT_SOFT};
+                background: rgba(124,92,255,0.10);
+                border: 1px solid rgba(124,92,255,0.24);
+                border-radius: 999px;
+                padding: 6px 10px;
+                font-size: 11px;
+                font-weight: 800;
+            }}
             QLineEdit {{
                 background: rgba(255,255,255,0.03);
                 border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 6px;
-                padding: 6px 12px;
+                border-radius: 10px;
+                padding: 8px 14px;
                 color: {t.TEXT_HI};
             }}
             QLineEdit:focus {{
@@ -115,17 +144,17 @@ class DiscoverView(QWidget):
             QComboBox {{
                 background: rgba(255,255,255,0.03);
                 border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 6px;
-                padding: 4px 8px;
+                border-radius: 10px;
+                padding: 6px 10px;
                 color: {t.TEXT_HI};
             }}
             QPushButton#discover-search-btn {{
                 background: {t.ACCENT};
                 border: none;
-                border-radius: 6px;
+                border-radius: 10px;
                 color: white;
-                font-weight: 600;
-                padding: 6px 16px;
+                font-weight: 700;
+                padding: 8px 18px;
             }}
             QPushButton#discover-search-btn:hover {{
                 background: {t.ACCENT_HI};
@@ -133,7 +162,7 @@ class DiscoverView(QWidget):
             QPushButton#discover-close-btn {{
                 background: rgba(255,255,255,0.05);
                 border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 6px;
+                border-radius: 10px;
                 color: {t.TEXT_HI};
                 font-weight: 600;
             }}
@@ -144,10 +173,13 @@ class DiscoverView(QWidget):
         )
 
         self.store = store
-        self.registry = job_registry
+        self.registry = job_registry or JobRegistry.in_memory()
         self.scorer = InstanceFitScorer()
         self.worker = None
         self.current_models: list[HFModel] = []
+        self._connected_instance_ids: list[int] | None = None
+        self._instance_render_signatures: dict[int, tuple] = {}
+        self._connection_snapshot: tuple[int, ...] = ()
         self._next_cursor: str | None = None
         self._append_mode = False
         self._pending_splitter_sizes = None
@@ -168,9 +200,9 @@ class DiscoverView(QWidget):
 
         self.topbar = QWidget()
         self.topbar.setObjectName("discover-topbar")
-        self.topbar.setFixedHeight(56)
+        self.topbar.setFixedHeight(64)
         top_lay = QHBoxLayout(self.topbar)
-        top_lay.setContentsMargins(14, 0, 14, 0)
+        top_lay.setContentsMargins(16, 8, 16, 8)
         top_lay.setSpacing(t.SPACE_3)
 
         # 1. Left Section (Brand)
@@ -178,9 +210,16 @@ class DiscoverView(QWidget):
         left_sect_lay = QHBoxLayout(left_sect)
         left_sect_lay.setContentsMargins(0, 0, 0, 0)
         left_sect_lay.setSpacing(t.SPACE_3)
+        brand_box = QVBoxLayout()
+        brand_box.setContentsMargins(0, 0, 0, 0)
+        brand_box.setSpacing(1)
         brand = QLabel("Model Store")
         brand.setObjectName("discover-brand")
-        left_sect_lay.addWidget(brand)
+        brand_box.addWidget(brand)
+        subbrand = QLabel("Connected GGUF Catalog")
+        subbrand.setObjectName("discover-subbrand")
+        brand_box.addWidget(subbrand)
+        left_sect_lay.addLayout(brand_box)
         left_sect_lay.addStretch()
         top_lay.addWidget(left_sect, 1)
 
@@ -232,8 +271,8 @@ class DiscoverView(QWidget):
         self.close_panel_btn = QPushButton("Close")
         self.close_panel_btn.setObjectName("discover-close-btn")
         self.close_panel_btn.setProperty("variant", "secondary")
-        self.close_panel_btn.setFixedWidth(92)
-        self.close_panel_btn.setVisible(False)
+        self.close_panel_btn.setFixedWidth(124)
+        self.close_panel_btn.setVisible(True)
         self.close_panel_btn.clicked.connect(self._toggle_side_panel)
         right_sect_lay.addWidget(self.close_panel_btn)
 
@@ -257,8 +296,38 @@ class DiscoverView(QWidget):
         self.left_pane = QWidget()
         self.left_pane.setObjectName("discover-left-pane")
         left_lay = QVBoxLayout(self.left_pane)
-        left_lay.setContentsMargins(t.SPACE_4, t.SPACE_3, t.SPACE_4, 0)
+        left_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, 0)
         left_lay.setSpacing(t.SPACE_4)
+
+        self.summary_card = QWidget()
+        self.summary_card.setObjectName("discover-summary")
+        summary_lay = QHBoxLayout(self.summary_card)
+        summary_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        summary_lay.setSpacing(t.SPACE_4)
+
+        summary_text = QVBoxLayout()
+        summary_text.setContentsMargins(0, 0, 0, 0)
+        summary_text.setSpacing(2)
+        self.summary_title = QLabel("GGUF catalog ready")
+        self.summary_title.setObjectName("discover-summary-title")
+        self.summary_meta = QLabel("Search. Fit. Deploy.")
+        self.summary_meta.setObjectName("discover-summary-meta")
+        self.summary_meta.setWordWrap(True)
+        summary_text.addWidget(self.summary_title)
+        summary_text.addWidget(self.summary_meta)
+        summary_lay.addLayout(summary_text, 1)
+
+        summary_chips = QVBoxLayout()
+        summary_chips.setContentsMargins(0, 0, 0, 0)
+        summary_chips.setSpacing(t.SPACE_2)
+        self.summary_scope = QLabel("0 connected targets")
+        self.summary_scope.setObjectName("discover-summary-chip")
+        self.summary_ops = QLabel("0 active operations")
+        self.summary_ops.setObjectName("discover-summary-chip")
+        summary_chips.addWidget(self.summary_scope, 0, Qt.AlignRight)
+        summary_chips.addWidget(self.summary_ops, 0, Qt.AlignRight)
+        summary_lay.addLayout(summary_chips)
+        left_lay.addWidget(self.summary_card)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -266,7 +335,7 @@ class DiscoverView(QWidget):
         self.progress.setFixedHeight(4)
         left_lay.addWidget(self.progress)
 
-        self.status_lbl = QLabel("Enter a search term to find GGUF models on Hugging Face.")
+        self.status_lbl = QLabel("Searching starts automatically after an SSH connection is active.")
         self.status_lbl.setProperty("role", "muted")
         self.status_lbl.setWordWrap(True)
         left_lay.addWidget(self.status_lbl)
@@ -294,7 +363,7 @@ class DiscoverView(QWidget):
         self._splitter.setStretchFactor(0, 3)
         self._splitter.setStretchFactor(1, 2)
         saved = self._load_splitter_sizes()
-        self._splitter.setSizes(saved if saved and len(saved) == 2 else [720, 360])
+        self._splitter.setSizes(saved if saved and len(saved) == 2 else [1040, 420])
         self._splitter.splitterMoved.connect(lambda *_: self._queue_splitter_save(self._splitter.sizes()))
 
         self.load_more_btn = QPushButton("Load more")
@@ -312,15 +381,24 @@ class DiscoverView(QWidget):
         self.side_panel.cancel_requested.connect(self.cancel_requested.emit)
         self.side_panel.resume_requested.connect(self.resume_requested.emit)
         self.side_panel.discard_requested.connect(self.discard_requested.emit)
-        self.side_panel.hide()
+        self.side_panel.show()
+        self._sync_side_panel_button()
 
         self.layout_stack.addWidget(self.content_widget)
 
-        self.store.instance_state_updated.connect(lambda *_: self._update_lock_state())
+        self.store.instance_state_updated.connect(self._on_instance_state_updated)
         self.registry.job_updated.connect(lambda _key: self._schedule_render())
         self.registry.job_started.connect(lambda _key: self._schedule_render())
         self.registry.job_finished.connect(lambda *_: self._schedule_render())
         self._update_lock_state()
+
+    def set_connected_instance_ids(self, ids: list[int] | None) -> None:
+        self._connected_instance_ids = list(ids) if ids is not None else None
+        self.side_panel.set_connected_instance_ids(self._connected_instance_ids)
+        self._connection_snapshot = self._current_connection_snapshot()
+        self._update_lock_state()
+        self._refresh_summary()
+        self._schedule_render()
 
 
     def _build_lock_widget(self) -> QWidget:
@@ -404,14 +482,19 @@ class DiscoverView(QWidget):
         self._save_splitter_sizes(sizes)
 
     def _update_lock_state(self):
-        has_tunnels = len(self.store.all_instance_ids()) > 0
-        target_idx = 1 if has_tunnels else 0
+        connected = (
+            self._connected_instance_ids
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
+        )
+        has_connected = len(connected) > 0
+        target_idx = 1 if has_connected else 0
         if self.layout_stack.currentIndex() != target_idx:
             self.layout_stack.setCurrentIndex(target_idx)
             if target_idx == 1 and not self.current_models:
                 self._search("llama")
         if target_idx == 1:
-            self._render()
+            self._refresh_summary()
 
     def _search(self, query: str = "", append: bool = False):
         if self.worker and self.worker.isRunning():
@@ -430,6 +513,7 @@ class DiscoverView(QWidget):
         self.status_lbl.setText(
             "Loading more..." if append else f"Searching Hugging Face for '{term or 'GGUF'}'..."
         )
+        self._refresh_summary(search_text=term or "GGUF", searching=True)
 
         self.worker = HFSearchWorker(
             query=term,
@@ -459,6 +543,8 @@ class DiscoverView(QWidget):
         self.status_lbl.setText(
             "No GGUF models found for that search." if not self.current_models else f"Found {len(self.current_models)} models."
         )
+        self._adopt_default_selection()
+        self._refresh_summary()
         self._render()
 
     def _on_search_error(self, error: str):
@@ -467,6 +553,7 @@ class DiscoverView(QWidget):
         self.search_input.setEnabled(True)
         self.load_more_btn.setEnabled(bool(self._next_cursor))
         self.status_lbl.setText(f"Search failed: {error}")
+        self._refresh_summary()
 
     def _render(self):
         while self.list_lay.count():
@@ -476,9 +563,14 @@ class DiscoverView(QWidget):
 
         if not self.current_models:
             self.list_lay.addStretch()
+            self._refresh_summary()
             return
 
-        instance_ids = self.store.all_instance_ids()
+        instance_ids = (
+            list(self._connected_instance_ids)
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
+        )
         model_scores: dict[str, float] = {}
         score_labels: dict[str, list[str]] = {}
         # Quality weights for tie-breaking same scores (higher is better quality)
@@ -567,6 +659,10 @@ class DiscoverView(QWidget):
 
         for model in display_models:
             card = ModelCard(model)
+            card.set_selected(
+                self.side_panel.current_model is not None
+                and self.side_panel.current_model.id == model.id
+            )
             card.set_instance_scores(score_labels.get(model.id, []))
             if model.id in installing_by_model:
                 iid, percent = installing_by_model[model.id]
@@ -575,6 +671,7 @@ class DiscoverView(QWidget):
             card.open_hf_clicked.connect(self._open_hf)
             self.list_lay.addWidget(card)
         self.list_lay.addStretch()
+        self._refresh_summary(model_count=len(display_models))
 
     def _schedule_render(self) -> None:
         if not self._render_timer.isActive():
@@ -600,13 +697,105 @@ class DiscoverView(QWidget):
             if hasattr(widget, "set_selected"):
                 widget.set_selected(getattr(widget, "model", None) is model)
         self.side_panel.set_model(model)
-        self.side_panel.show()
-        self.close_panel_btn.setVisible(True)
+        self._set_side_panel_visible(True)
+        self._refresh_summary()
 
     def _toggle_side_panel(self) -> None:
-        visible = not self.side_panel.isVisible()
-        self.side_panel.setVisible(visible)
-        self.close_panel_btn.setVisible(visible)
+        self._set_side_panel_visible(not self.side_panel.isVisible())
 
     def _open_hf(self, model_id: str):
         webbrowser.open(f"https://huggingface.co/{model_id}")
+
+    def _on_instance_state_updated(self, iid: int, state) -> None:
+        snapshot = self._current_connection_snapshot()
+        if snapshot != self._connection_snapshot:
+            self._connection_snapshot = snapshot
+            self._update_lock_state()
+            self._refresh_summary()
+            self._schedule_render()
+            return
+
+        sig = self._instance_signature(state)
+        if self._instance_render_signatures.get(iid) == sig:
+            return
+        self._instance_render_signatures[iid] = sig
+        if self.layout_stack.currentIndex() == 1 and self.current_models:
+            self._schedule_render()
+
+    def _current_connection_snapshot(self) -> tuple[int, ...]:
+        ids = (
+            list(self._connected_instance_ids)
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
+        )
+        return tuple(sorted(ids))
+
+    def _instance_signature(self, state) -> tuple:
+        system = state.system
+        setup = state.setup
+        return (
+            system.gpu_name,
+            system.gpu_vram_gb,
+            system.ram_total_gb,
+            system.cpu_cores,
+            system.has_gpu,
+            setup.probed,
+            setup.llamacpp_installed,
+        )
+
+    def _set_side_panel_visible(self, visible: bool) -> None:
+        self.side_panel.setVisible(visible)
+        if visible:
+            sizes = self._splitter.sizes()
+            if len(sizes) == 2 and sizes[1] == 0:
+                self._splitter.setSizes([1040, 420])
+        else:
+            self._splitter.setSizes([1, 0])
+        self._sync_side_panel_button()
+
+    def _sync_side_panel_button(self) -> None:
+        self.close_panel_btn.setText("Hide Settings" if self.side_panel.isVisible() else "Show Settings")
+
+    def _adopt_default_selection(self) -> None:
+        if not self.current_models:
+            self.side_panel.clear()
+            return
+        current_id = self.side_panel.current_model.id if self.side_panel.current_model else None
+        chosen = next((model for model in self.current_models if model.id == current_id), None)
+        if chosen is None:
+            chosen = self.current_models[0]
+        self.side_panel.set_model(chosen)
+        self._set_side_panel_visible(True)
+
+    def _refresh_summary(
+        self,
+        *,
+        model_count: int | None = None,
+        search_text: str | None = None,
+        searching: bool = False,
+    ) -> None:
+        connected_ids = (
+            list(self._connected_instance_ids)
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
+        )
+        active_ops = len(list(self.registry.active_items()))
+        visible_models = model_count if model_count is not None else len(self.current_models)
+        selected = self.side_panel.current_model.name if self.side_panel.current_model else "No model selected"
+
+        if searching:
+            self.summary_title.setText(f"Searching {search_text}...")
+            self.summary_meta.setText("Refreshing catalog.")
+        elif visible_models:
+            self.summary_title.setText(f"{visible_models} models ready to inspect")
+            self.summary_meta.setText(f"Focus: {selected}")
+        else:
+            self.summary_title.setText("GGUF catalog ready")
+            self.summary_meta.setText("Search. Fit. Deploy.")
+
+        self.summary_scope.setText(
+            f"{len(connected_ids)} connected target" + ("" if len(connected_ids) == 1 else "s")
+        )
+        self.summary_ops.setText(
+            f"{active_ops} active operation" + ("" if active_ops == 1 else "s")
+        )

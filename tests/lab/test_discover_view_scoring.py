@@ -72,3 +72,33 @@ def test_discover_shows_per_instance_score_column(qt_app):
     texts = _card_texts(view)
     assert any("#1" in text for text in texts)
     assert any("#2" in text for text in texts)
+
+
+def test_discover_keeps_settings_open_and_auto_selects_first_result(qt_app):
+    from app.lab.services.huggingface import HFModel
+
+    store = LabStore()
+    store.selected_instance_id = 1
+    store.set_remote_system(
+        1,
+        RemoteSystem(cpu_cores=16, ram_total_gb=64, has_gpu=True, gpu_vram_gb=24),
+    )
+    view = DiscoverView(store)
+    view.show()
+    qt_app.processEvents()
+
+    model = HFModel(
+        id="Qwen/Qwen2.5-7B-Instruct-GGUF",
+        author="Qwen",
+        name="Qwen2.5-7B-Instruct-GGUF",
+        downloads=1000,
+        likes=100,
+        tags=["7b"],
+    )
+    view._on_search_finished([model], None, "All")
+    qt_app.processEvents()
+
+    assert view.side_panel.isVisible() is True
+    assert view.close_panel_btn.text() == "Hide Settings"
+    assert view.side_panel.current_model is not None
+    assert view.side_panel.current_model.id == model.id

@@ -52,27 +52,44 @@ _EMPTY_WEBUI_HTML = f"""
         {t.BG_DEEP};
     }}
     .empty {{
-      max-width: 420px;
+      max-width: 480px;
       text-align: center;
       color: {t.TEXT_LOW};
       font-size: 14px;
       letter-spacing: 0;
+      padding: 28px 32px;
+      background: rgba(12, 16, 22, 0.72);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 20px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.28);
+    }}
+    .eyebrow {{
+      color: {t.ACCENT_SOFT};
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      margin-bottom: 14px;
     }}
     strong {{
       display: block;
       color: {t.TEXT};
-      font-size: 16px;
-      font-weight: 700;
+      font-size: 24px;
+      font-weight: 800;
       margin-bottom: 10px;
+    }}
+    p {{
+      margin: 0;
+      line-height: 1.6;
     }}
   </style>
 </head>
 <body>
   <main class="stage">
     <section class="empty">
+      <div class="eyebrow">AI Lab Studio</div>
       <strong>No model loaded</strong>
-      Pick a model in the top selector, adjust Settings, then press Load Model.
-      The chat input appears here inside the llama.cpp webui after launch.
+      <p>Pick a model in the top selector, adjust Settings, then press Load Model. The chat input appears here inside the llama.cpp webui after launch.</p>
     </section>
   </main>
 </body>
@@ -273,13 +290,20 @@ class StudioView(QWidget):
             }}
             QLabel#studio-brand {{
                 color: {t.TEXT_HI};
-                font-size: 14px;
-                font-weight: 800;
+                font-size: 15px;
+                font-weight: 900;
+            }}
+            QLabel#studio-subbrand {{
+                color: {t.TEXT_MID};
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 1px;
+                text-transform: uppercase;
             }}
             QLabel#studio-status-pill {{
                 border: 1px solid rgba(255,255,255,0.10);
-                border-radius: 8px;
-                padding: 6px 10px;
+                border-radius: 10px;
+                padding: 8px 12px;
                 min-width: 76px;
                 font-weight: 800;
             }}
@@ -287,16 +311,18 @@ class StudioView(QWidget):
                 background: transparent;
                 border: 1px solid rgba(255,255,255,0.08);
                 color: {t.TEXT};
-                min-height: 28px;
-                padding: 4px 10px;
+                min-height: 30px;
+                padding: 6px 10px;
+                border-radius: 10px;
             }}
             QComboBox#studio-model-picker {{
                 background: #281f68;
                 border: 1px solid rgba(179,160,255,0.44);
                 color: white;
-                min-height: 32px;
-                padding: 5px 16px;
+                min-height: 34px;
+                padding: 7px 16px;
                 font-weight: 700;
+                border-radius: 10px;
             }}
             QComboBox#studio-model-picker:disabled {{
                 background: #101722;
@@ -357,9 +383,9 @@ class StudioView(QWidget):
 
         topbar = QWidget()
         topbar.setObjectName("studio-topbar")
-        topbar.setFixedHeight(52)
+        topbar.setFixedHeight(64)
         top = QHBoxLayout(topbar)
-        top.setContentsMargins(14, 7, 14, 7)
+        top.setContentsMargins(16, 8, 16, 8)
         top.setSpacing(t.SPACE_3)
 
         left_panel = QWidget()
@@ -367,9 +393,16 @@ class StudioView(QWidget):
         left_lay = QHBoxLayout(left_panel)
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(t.SPACE_3)
+        brand_box = QVBoxLayout()
+        brand_box.setContentsMargins(0, 0, 0, 0)
+        brand_box.setSpacing(1)
         brand = QLabel("AI Lab Studio")
         brand.setObjectName("studio-brand")
-        left_lay.addWidget(brand)
+        subbrand = QLabel("Runtime Workspace")
+        subbrand.setObjectName("studio-subbrand")
+        brand_box.addWidget(brand)
+        brand_box.addWidget(subbrand)
+        left_lay.addLayout(brand_box)
         self.instance_combo = QComboBox()
         self.instance_combo.setObjectName("studio-instance-picker")
         self.instance_combo.setMinimumWidth(230)
@@ -525,6 +558,13 @@ class StudioView(QWidget):
         settings_row.addWidget(self.models_count_label)
         side_lay.addLayout(settings_row)
 
+        self.runtime_scope_label = QLabel("Pick an instance and a model to configure the runtime.")
+        self.runtime_scope_label.setWordWrap(True)
+        self.runtime_scope_label.setStyleSheet(
+            f"color: {t.TEXT}; background: {t.SURFACE_1}; border: 1px solid {t.BORDER_LOW}; border-radius: 12px; padding: 12px; font-size: 12px;"
+        )
+        side_lay.addWidget(self.runtime_scope_label)
+
         self.launch_btn = QPushButton("Load Model")
         self.launch_btn.clicked.connect(self._on_launch)
         side_lay.addWidget(self.launch_btn)
@@ -592,6 +632,14 @@ class StudioView(QWidget):
 
     def _sync_sidebar_on_instance_change(self, iid: int):
         state = self.store.get_state(iid) if iid else None
+        if state is None:
+            self.runtime_scope_label.setText("Pick an instance and a model to configure the runtime.")
+        else:
+            self.runtime_scope_label.setText(
+                f"Instance #{iid} selected. {len(state.gguf)} local model"
+                + ("" if len(state.gguf) == 1 else "s")
+                + " available for launch."
+            )
         self._sync_models(state.gguf if state else [])
 
     def _sync_models(self, gguf):
@@ -612,6 +660,10 @@ class StudioView(QWidget):
         self.models_count_label.setText(
             f"{len(gguf)} model" if len(gguf) == 1 else f"{len(gguf)} models"
         )
+        if not gguf:
+            self.runtime_scope_label.setText(
+                "No GGUF models are installed on this instance yet. Use the Model Store to download one, then come back here to launch it."
+            )
         self.params_form.set_model_paths([model.path for model in gguf])
         if gguf:
             self.model_picker.setCurrentIndex(0)
@@ -631,6 +683,10 @@ class StudioView(QWidget):
         params = self.params_form.current_params()
         params.model_path = path
         self.params_form.set_params(params)
+        name = path.rsplit("/", 1)[-1] if path else "No model selected"
+        self.runtime_scope_label.setText(
+            f"Runtime target: {name}. Review Settings below, then launch the local llama.cpp session."
+        )
         model_index = self.model_picker.findData(path)
         if model_index >= 0 and self.model_picker.currentIndex() != model_index:
             self.model_picker.blockSignals(True)

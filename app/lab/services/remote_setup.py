@@ -256,14 +256,20 @@ JOB_PID=$$
 exec > >(tee -a "$LOG_PATH") 2>&1
 
 write_state() {{
-  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" <<'PYEOF'
+  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" "${{4:-0}}" "${{5:-}}" <<'PYEOF'
 import json, sys, time
-path, pid, stage, pct, bytes_d = sys.argv[1:6]
+path, pid, stage, pct, bytes_d, bytes_total, speed = sys.argv[1:8]
 with open(path, "w") as fh:
-    json.dump({{"pid": int(pid), "stage": stage,
-               "percent": int(pct or 0),
-               "bytes_downloaded": int(bytes_d or 0),
-               "updated_at": int(time.time())}}, fh)
+    payload = {{
+        "pid": int(pid),
+        "stage": stage,
+        "percent": int(pct or 0),
+        "bytes_downloaded": int(bytes_d or 0),
+        "bytes_total": int(bytes_total or 0),
+        "speed": speed or "",
+        "updated_at": int(time.time()),
+    }}
+    json.dump(payload, fh)
 PYEOF
 }}
 
@@ -411,14 +417,39 @@ JOB_PID=$$
 exec > >(tee -a "$LOG_PATH") 2>&1
 
 write_state() {{
-  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" <<'PYEOF'
+  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" "${{4:-0}}" "${{5:-}}" <<'PYEOF'
 import json, sys, time
-path, pid, stage, pct, bytes_d = sys.argv[1:6]
+path, pid, stage, pct, bytes_d, bytes_total, speed = sys.argv[1:8]
 with open(path, "w") as fh:
-    json.dump({{"pid": int(pid), "stage": stage,
-               "percent": int(pct or 0),
-               "bytes_downloaded": int(bytes_d or 0),
-               "updated_at": int(time.time())}}, fh)
+    payload = {{
+        "pid": int(pid),
+        "stage": stage,
+        "percent": int(pct or 0),
+        "bytes_downloaded": int(bytes_d or 0),
+        "bytes_total": int(bytes_total or 0),
+        "speed": speed or "",
+        "updated_at": int(time.time()),
+    }}
+    json.dump(payload, fh)
+PYEOF
+}}
+
+format_speed() {{
+  BPS="${{1:-0}}"
+  python3 - "$BPS" <<'PYEOF'
+import sys
+
+try:
+    bps = int(float(sys.argv[1] or 0))
+except Exception:
+    bps = 0
+
+if bps >= 1048576:
+    print(f"{{bps / 1048576:.1f}} MB/s")
+elif bps >= 1024:
+    print(f"{{bps / 1024:.1f}} KB/s")
+else:
+    print(f"{{bps}} B/s")
 PYEOF
 }}
 
@@ -426,15 +457,88 @@ echo "Downloading {filename} from HuggingFace..."
 write_state download 0
 mkdir -p "{dest_dir}"
 cd "{dest_dir}"
-if command -v wget &>/dev/null; then
-    wget -c --progress=dot:giga -O "{dest}" "{url}" 2>&1
-elif command -v curl &>/dev/null; then
-    curl -L -C - -o "{dest}" "{url}" 2>&1
+
+TOTAL_BYTES=$(python3 - "{url}" <<'PYEOF' 2>/dev/null
+import sys
+from urllib.request import Request, urlopen
+
+url = sys.argv[1]
+try:
+    req = Request(url, method="HEAD")
+    with urlopen(req, timeout=20) as resp:
+        print(resp.headers.get("Content-Length") or 0)
+except Exception:
+    print(0)
+PYEOF
+)
+if ! echo "$TOTAL_BYTES" | grep -Eq '^[0-9]+$'; then
+    TOTAL_BYTES=0
 fi
 
-if [ -f "{dest}" ]; then
+DL_PID=""
+MONITOR_PID=""
+cleanup() {{
+  if [ -n "$MONITOR_PID" ]; then
+    kill -TERM "$MONITOR_PID" 2>/dev/null || true
+  fi
+  if [ -n "$DL_PID" ]; then
+    kill -TERM "$DL_PID" 2>/dev/null || true
+  fi
+}}
+trap cleanup TERM INT
+
+monitor_progress() {{
+  LAST_BYTES=0
+  LAST_TS=$(date +%s)
+  while kill -0 "$DL_PID" 2>/dev/null; do
+    CUR_BYTES=$(stat -c%s "{dest}" 2>/dev/null || stat -f%z "{dest}" 2>/dev/null || echo 0)
+    NOW=$(date +%s)
+    DELTA_TS=$((NOW - LAST_TS))
+    if [ "$DELTA_TS" -le 0 ]; then
+      DELTA_TS=1
+    fi
+    DELTA_BYTES=$((CUR_BYTES - LAST_BYTES))
+    if [ "$DELTA_BYTES" -lt 0 ]; then
+      DELTA_BYTES=0
+    fi
+    SPEED_TEXT=$(format_speed $((DELTA_BYTES / DELTA_TS)))
+    if [ "$TOTAL_BYTES" -gt 0 ]; then
+      PCT=$((CUR_BYTES * 100 / TOTAL_BYTES))
+      if [ "$PCT" -gt 99 ]; then
+        PCT=99
+      fi
+    else
+      PCT=0
+    fi
+    write_state download "$PCT" "$CUR_BYTES" "$TOTAL_BYTES" "$SPEED_TEXT"
+    echo "DOWNLOAD_PROGRESS|$PCT|$CUR_BYTES|$TOTAL_BYTES|$SPEED_TEXT"
+    LAST_BYTES=$CUR_BYTES
+    LAST_TS=$NOW
+    sleep 1
+  done
+}}
+
+if command -v wget &>/dev/null; then
+    wget -c --progress=dot:giga -O "{dest}" "{url}" 2>&1 &
+elif command -v curl &>/dev/null; then
+    curl -L -C - -o "{dest}" "{url}" 2>&1 &
+else
+    echo "DOWNLOAD_FAILED|missing_downloader"
+    write_state failed 0
+    exit 1
+fi
+
+DL_PID=$!
+monitor_progress &
+MONITOR_PID=$!
+wait "$DL_PID"
+DL_STATUS=$?
+kill -TERM "$MONITOR_PID" 2>/dev/null || true
+wait "$MONITOR_PID" 2>/dev/null || true
+
+if [ "$DL_STATUS" -eq 0 ] && [ -f "{dest}" ]; then
     SIZE=$(stat -c%s "{dest}" 2>/dev/null || echo 0)
-    write_state done 100 "$SIZE"
+    write_state done 100 "$SIZE" "$SIZE"
     echo "DOWNLOAD_DONE|{dest}|$SIZE"
 else
     write_state failed 0
@@ -586,6 +690,61 @@ def parse_check_job_output(output: str) -> tuple[str, dict]:
     except Exception:
         return status, {}
     return status, state if isinstance(state, dict) else {}
+
+
+def script_stream_job_log(job_key: str) -> str:
+    """Stream a remote job log and exit cleanly when the job stops."""
+    state = f"/workspace/.vastai-app/jobs/{job_key}.json"
+    log = f"/tmp/install-{job_key}.log"
+    return f"""
+STATE="{state}"
+LOG="{log}"
+LAST_LINE=0
+touch "$LOG" 2>/dev/null || true
+
+dump_new_lines() {{
+  if [ ! -f "$LOG" ]; then
+    return
+  fi
+  CUR_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+  if [ "$CUR_LINES" -gt "$LAST_LINE" ]; then
+    START=$((LAST_LINE + 1))
+    sed -n "${{START}},${{CUR_LINES}}p" "$LOG" 2>/dev/null || true
+    LAST_LINE=$CUR_LINES
+  fi
+}}
+
+while true; do
+  dump_new_lines
+  if [ ! -f "$STATE" ]; then
+    break
+  fi
+  META=$(python3 - "$STATE" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path))
+except Exception:
+    print("missing")
+    print("")
+    raise SystemExit
+print(str(data.get("stage", "")))
+print(str(data.get("pid", "")))
+PYEOF
+)
+  STAGE=$(echo "$META" | sed -n '1p')
+  PID=$(echo "$META" | sed -n '2p')
+  if [ "$STAGE" = "done" ] || [ "$STAGE" = "failed" ] || [ "$STAGE" = "cancelled" ]; then
+    break
+  fi
+  if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+dump_new_lines
+"""
 
 
 def script_wipe_llamacpp() -> str:

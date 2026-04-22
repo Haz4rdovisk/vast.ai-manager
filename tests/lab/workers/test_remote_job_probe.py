@@ -33,11 +33,11 @@ def test_probe_emits_running_with_state(qt_app):
     assert spy.at(0)[1]["percent"] == 42
 
 
-def test_probe_emits_missing_on_ssh_failure(qt_app):
+def test_probe_emits_offline_on_ssh_failure(qt_app):
     ssh = MagicMock()
     ssh.run_script.return_value = (False, "ssh blew up")
     probe = RemoteJobProbe(ssh, "host", 22, _desc())
     spy = QSignalSpy(probe.result)
     probe.run()
     assert spy.count() == 1
-    assert spy.at(0)[0] == "MISSING"
+    assert spy.at(0)[0] == "OFFLINE"

@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -32,21 +31,14 @@ class ModelCard(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(132)
-        self.setMaximumHeight(148)
+        self.setMinimumHeight(164)
+        self.setMaximumHeight(196)
 
         root = QVBoxLayout(self)
         self._body_lay = root
-        root.setContentsMargins(t.SPACE_4, t.SPACE_3, t.SPACE_4, t.SPACE_3)
+        root.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         root.setSpacing(t.SPACE_3)
         self._apply_card_style()
-
-        self._install_stripe = QProgressBar()
-        self._install_stripe.setRange(0, 100)
-        self._install_stripe.setFixedHeight(3)
-        self._install_stripe.setTextVisible(False)
-        self._install_stripe.hide()
-        root.addWidget(self._install_stripe)
 
         main = QHBoxLayout()
         main.setContentsMargins(0, 0, 0, 0)
@@ -54,17 +46,29 @@ class ModelCard(QFrame):
 
         info = QVBoxLayout()
         info.setContentsMargins(0, 0, 0, 0)
-        info.setSpacing(5)
+        info.setSpacing(7)
+
+        self._eyebrow = QLabel("HUGGING FACE GGUF")
+        self._eyebrow.setStyleSheet(
+            f"color: {t.TEXT_LOW}; font-size: 10px; font-weight: 800; letter-spacing: 1.4px;"
+        )
+        info.addWidget(self._eyebrow)
 
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
         name_row.setSpacing(t.SPACE_3)
         self._name = QLabel(model.name)
         self._name.setStyleSheet(
-            f"color: {t.TEXT_HI}; font-size: 16px; font-weight: 800;"
+            f"color: {t.TEXT_HI}; font-size: 18px; font-weight: 900;"
         )
+        self._name.setWordWrap(True)
         name_row.addWidget(self._name)
+        name_row.addStretch()
+        info.addLayout(name_row)
 
+        tag_row = QHBoxLayout()
+        tag_row.setContentsMargins(0, 0, 0, 0)
+        tag_row.setSpacing(t.SPACE_2)
         shown = 0
         for tag in model.tags:
             if (
@@ -74,28 +78,33 @@ class ModelCard(QFrame):
                 or tag.startswith("library:")
             ):
                 continue
-            name_row.addWidget(Badge(tag))
+            tag_row.addWidget(Badge(tag))
             shown += 1
             if shown >= 3:
                 break
-        name_row.addStretch()
-        info.addLayout(name_row)
+        tag_row.addStretch()
+        info.addLayout(tag_row)
 
         meta = QHBoxLayout()
         meta.setSpacing(t.SPACE_2)
         author = QLabel(f"by {model.author}")
-        author.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px;")
+        author.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px; font-weight: 600;")
         stats = QLabel(f"{model.likes:,} likes | {model.downloads:,} downloads")
         stats.setStyleSheet(f"color: {t.TEXT_LOW}; font-size: 12px;")
         meta.addWidget(author)
         meta.addWidget(stats)
         meta.addStretch()
         info.addLayout(meta)
+
+        self._summary = QLabel("Open Settings.")
+        self._summary.setWordWrap(True)
+        self._summary.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px; line-height: 1.2;")
+        info.addWidget(self._summary)
         main.addLayout(info, 1)
 
         side = QVBoxLayout()
         side.setContentsMargins(0, 0, 0, 0)
-        side.setSpacing(t.SPACE_2)
+        side.setSpacing(t.SPACE_3)
         side.setAlignment(Qt.AlignRight | Qt.AlignTop)
         if model.params_b > 0:
             side.addWidget(Badge(f"{model.params_b:.1f}B", accent=True), 0, Qt.AlignRight)
@@ -111,16 +120,16 @@ class ModelCard(QFrame):
         hf.setStyleSheet(
             f"color: {t.ACCENT_HI}; background: transparent;"
             f" border: 1px solid {t.BORDER_LOW};"
-            " padding: 4px 10px; border-radius: 6px; font-size: 11px;"
+            " padding: 5px 11px; border-radius: 8px; font-size: 11px; font-weight: 700;"
         )
         hf.clicked.connect(lambda _=False, mid=model.id: self.open_hf_clicked.emit(mid))
         actions.addWidget(hf)
 
-        self._details_btn = QPushButton("Details")
+        self._details_btn = QPushButton("Inspect")
         self._details_btn.setProperty("size", "sm")
         self._details_btn.setStyleSheet(
             f"background: {t.ACCENT}; color: white; font-weight: 700;"
-            " padding: 4px 12px; border-radius: 6px; font-size: 11px;"
+            " padding: 5px 14px; border-radius: 8px; font-size: 11px;"
         )
         self._details_btn.clicked.connect(lambda _=False: self.details_clicked.emit(self.model))
         actions.addWidget(self._details_btn)
@@ -220,21 +229,26 @@ class ModelCard(QFrame):
 
     def _apply_card_style(self) -> None:
         border = t.ACCENT if self._selected else "#202838"
-        bg = "#111722" if self._selected else "#101620"
+        bg = "#111722" if self._selected else "#0f1520"
         hover_border = t.ACCENT if self._selected else "#33405a"
+        shadow = "rgba(124,92,255,0.16)" if self._selected else "rgba(0,0,0,0)"
         self.setStyleSheet(
             f"""
             QFrame#ModelCard {{
                 background: {bg};
                 border: 1px solid {border};
-                border-radius: 8px;
+                border-radius: 14px;
             }}
             QFrame#ModelCard:hover {{
                 background: #141b28;
                 border-color: {hover_border};
             }}
+            QFrame#ModelCard QLabel {{
+                background: transparent;
+            }}
             """
         )
+        self.setGraphicsEffect(None)
 
     def set_installed_on(self, iids: list[int]) -> None:
         if iids:
@@ -246,14 +260,11 @@ class ModelCard(QFrame):
 
     def set_installing(self, iid: int, percent: int) -> None:
         pct = max(0, min(100, int(percent)))
-        self._install_stripe.setValue(pct)
-        self._install_stripe.show()
         self._install_chip.setText(f"{pct}% on #{iid}")
         self._install_chip.show()
         self._fit_panel.show()
 
     def clear_installing(self) -> None:
-        self._install_stripe.hide()
         self._install_chip.hide()
 
     def set_instance_scores(self, scores: list[dict]) -> None:
@@ -296,4 +307,11 @@ class ModelCard(QFrame):
         )
         self._fit_hint.setText("Also " + " / ".join(also[:2]) if also else "")
         self._fit_accent.setStyleSheet(f"background-color: {accent}; border-radius: 2px;")
+        quant = best.get("best_quant")
+        if score is None:
+            self._summary.setText("Scoring...")
+        elif quant:
+            self._summary.setText(f"Best: #{iid} · {quant}")
+        else:
+            self._summary.setText(f"Best: #{iid}")
         self._fit_panel.show()

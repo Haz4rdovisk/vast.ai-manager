@@ -1,7 +1,9 @@
 from app.lab.services.progress_parsers import (
     BuildEvent,
+    DownloadProgressEvent,
     WgetEvent,
     parse_cmake_build_stage,
+    parse_download_progress,
     parse_wget_progress,
 )
 
@@ -18,6 +20,16 @@ def test_wget_progress_extracts_percent_and_speed():
 def test_wget_progress_ignores_noise():
     assert parse_wget_progress("Downloading foo.gguf from HuggingFace...") is None
     assert parse_wget_progress("") is None
+
+
+def test_explicit_download_progress_extracts_all_fields():
+    ev = parse_download_progress("DOWNLOAD_PROGRESS|27|2700|10000|2.5 MB/s")
+    assert ev == DownloadProgressEvent(
+        percent=27,
+        bytes_downloaded=2700,
+        bytes_total=10000,
+        speed="2.5 MB/s",
+    )
 
 
 def test_cmake_build_stage_apt():

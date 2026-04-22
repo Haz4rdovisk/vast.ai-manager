@@ -32,8 +32,8 @@ def test_card_installed_and_installing_state(qt_app):
     assert card._installed_chip.isVisible() is True
     assert "42" in card._installed_chip.text()
     card.set_installing(iid=42, percent=37)
-    assert card._install_stripe.isVisible() is True
     assert card._install_chip.text().startswith("37%")
+    assert card._install_chip.isVisible() is True
 
 
 def test_card_click_emits_details_signal(qt_app):
