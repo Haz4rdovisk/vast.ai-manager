@@ -795,13 +795,26 @@ class AppShell(QWidget):
 
         self.job_registry.finish(key, ok=True)
         
-        # Proactive sync: if we just installed llamacpp, update store immediately
-        if desc and desc.needs_llamacpp:
-            import time
-            self._setup_cooldowns[iid] = time.time()
-            st = self.store.get_state(iid)
-            st.setup.llamacpp_installed = True
-            self.store.set_setup_status(iid, st.setup)
+        # Proactive sync: update store immediately so UI doesn't flicker
+        if desc:
+            if desc.repo_id == "Environment" or desc.needs_llamacpp:
+                import time
+                self._setup_cooldowns[iid] = time.time()
+                st = self.store.get_state(iid)
+                st.setup.llamacpp_installed = True
+                self.store.set_setup_status(iid, st.setup)
+            
+            if desc.repo_id != "Environment":
+                # Model download: add to remote gguf list optimistically
+                from app.lab.state.models import RemoteGGUF
+                current_gguf = list(self.store.get_state(iid).gguf)
+                if not any(g.filename == desc.filename for g in current_gguf):
+                    current_gguf.append(RemoteGGUF(
+                        path=f"/workspace/{desc.filename}", 
+                        filename=desc.filename,
+                        size_bytes=desc.size_bytes
+                    ))
+                    self.store.set_remote_gguf(iid, current_gguf)
             
         self._probe_instance(iid)
 
