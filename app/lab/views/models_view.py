@@ -2,7 +2,7 @@
 from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QMessageBox, QFrame,
+    QScrollArea, QMessageBox, QFrame, QStackedWidget,
 )
 from PySide6.QtCore import Signal, Qt
 from app import theme as t
@@ -10,6 +10,7 @@ from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard, StatusPill
 from app.ui.components.model_config_form import ModelConfigForm
 from app.ui.brand_manager import BrandManager
+from app.ui.components.lock_screen import LockScreen
 
 
 class ModelsView(QWidget):
@@ -18,6 +19,7 @@ class ModelsView(QWidget):
     rescan_requested = Signal()
     navigate_requested = Signal(str)
     back_requested = Signal()
+    instances_requested = Signal()
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -47,7 +49,18 @@ class ModelsView(QWidget):
         header.add_action(dl_btn)
         root.addWidget(header)
 
-        # Scroll list
+        self.layout_stack = QStackedWidget()
+        root.addWidget(self.layout_stack, 1)
+
+        # 1. Lock Screen
+        self.lock_screen = LockScreen(
+            title="Remote Files Locked",
+            message="Selecting and connecting an instance via SSH is required to manage remote GGUF files and model configurations."
+        )
+        self.lock_screen.instances_requested.connect(self.instances_requested.emit)
+        self.layout_stack.addWidget(self.lock_screen)
+
+        # 2. Scroll list
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.list_host = QWidget()
@@ -55,10 +68,20 @@ class ModelsView(QWidget):
         self.list_lay.setContentsMargins(0, 0, 0, 100)
         self.list_lay.setSpacing(t.SPACE_5)
         self.scroll.setWidget(self.list_host)
-        root.addWidget(self.scroll, 1)
+        self.layout_stack.addWidget(self.scroll)
 
         self.store.instance_changed.connect(self._on_instance_changed)
         self.store.remote_gguf_changed.connect(self._render)
+        self._update_lock_state()
+
+    def _update_lock_state(self):
+        iid = self.store.selected_instance_id
+        state = self.store.get_state(iid) if iid else None
+        has_connection = state and state.setup.probed
+        
+        target_idx = 1 if has_connection else 0
+        if self.layout_stack.currentIndex() != target_idx:
+            self.layout_stack.setCurrentIndex(target_idx)
 
     def _on_instance_changed(self, iid: int):
         self.ctx_lbl.setText(

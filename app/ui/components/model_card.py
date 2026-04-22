@@ -275,7 +275,23 @@ class ModelCard(QFrame):
     def clear_installing(self) -> None:
         self._install_chip.hide()
 
-    def set_instance_scores(self, scores: list[dict]) -> None:
+    def set_scoring_pending(self) -> None:
+        self._fit_panel.hide()
+        self._summary.setText("Scoring hardware match...")
+
+    def set_score_unavailable(self, message: str = "No hardware fit available.") -> None:
+        self._fit_panel.hide()
+        self._summary.setText(message)
+
+    def set_detail_error(self, message: str) -> None:
+        self._fit_panel.hide()
+        self._summary.setText(message)
+
+    def set_instance_scores(self, scores: list[dict] | None) -> None:
+        if scores is None:
+            self.set_scoring_pending()
+            return
+
         parsed: list[dict] = []
         for item in scores:
             if isinstance(item, dict):
@@ -284,10 +300,10 @@ class ModelCard(QFrame):
                 parsed.append({"iid": str(item), "score": None, "fit": str(item), "level": "info"})
 
         if not parsed:
-            self._fit_panel.hide()
+            self.set_score_unavailable()
             return
 
-        best = max(parsed, key=lambda item: item.get("score") or 0)
+        best = max(parsed, key=lambda item: item.get("rank") or item.get("score") or 0)
         level = best.get("level", "info")
         accent = {
             "ok": t.OK,

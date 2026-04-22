@@ -19,6 +19,12 @@ class GlassCard(QFrame):
     """Primary surface with premium solid dark theme (replaces legacy glassmorphism)."""
 
     def __init__(self, raised: bool = False, parent=None):
+        # Backward-compatible guard: older call sites may pass the parent as the
+        # first positional arg (`GlassCard(self)`), which would otherwise create
+        # a stray top-level window because `parent` stays None.
+        if parent is None and isinstance(raised, QWidget):
+            parent = raised
+            raised = False
         super().__init__(parent)
         self._raised = raised
         self.setObjectName("SolidCard")

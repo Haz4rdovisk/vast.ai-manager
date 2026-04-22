@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote
 
 import requests
 from dataclasses import dataclass, field
@@ -16,17 +17,34 @@ class HFModelFile:
 def _extract_quantization(filename: str) -> str:
     """Extract quantization from GGUF filename (e.g., model-Q4_K_M.gguf)."""
     # Robust regex for GGUF quantizations
-    # Handles:
-    # - Delimiters: - or .
-    # - Standard quants: Q4_K_M, Q8_0, etc.
-    # - I-quants: IQ2_XXS, IQ4_NL, etc.
-    # - Floating point: FP16, BF16, F16, etc.
-    # [qi]?q\d matches q4, iq4, etc.
     pattern = r'[-.]([qi]?q\d[a-z0-9_]*|f\d+|fp\d+|bf\d+)(?:\.gguf|[-.]|$)'
     match = re.search(pattern, filename.lower())
     if match:
         return match.group(1).upper()
     return ""
+
+
+def estimate_gguf_size_gb(params_b: float, quant: str) -> float:
+    """Estimate GGUF file size in GB based on parameters and quantization."""
+    if params_b <= 0:
+        return 5.0
+    q = quant.upper()
+    # Average bits per weight for different quants (closer to llama.cpp reality)
+    bits = 4.5  # default
+    if "BF16" in q or "FP16" in q or "F16" in q: bits = 16.0
+    elif "Q8" in q: bits = 8.5
+    elif "Q6" in q: bits = 6.6
+    elif "Q5" in q: bits = 5.5
+    elif "Q4" in q: bits = 4.5
+    elif "Q3" in q: bits = 3.5
+    elif "Q2" in q: bits = 2.6
+    elif "IQ4" in q: bits = 4.5
+    elif "IQ3" in q: bits = 3.5
+    elif "IQ2" in q: bits = 2.5
+    
+    # (params * bits) / 8 bits per byte = size in GB (roughly)
+    # Plus standard GGUF overhead (tensors/metadata) - usually around 0.2-0.4GB
+    return (params_b * bits / 8.0) + 0.3
 
 
 @dataclass
@@ -38,6 +56,9 @@ class HFModel:
     likes: int
     tags: list[str] = field(default_factory=list)
     files: list[HFModelFile] = field(default_factory=list)
+    details_loaded: bool = False
+    details_loading: bool = False
+    details_error: str = ""
     
     @property
     def params_b(self) -> float:
@@ -68,6 +89,8 @@ class HuggingFaceClient:
         limit: int = 100,
         pipeline_tag: str | None = None,
         cursor: str | None = None,
+        full: bool = True,
+        raise_on_error: bool = False,
     ) -> tuple[list[HFModel], str | None]:
         """Search for GGUF models.
 
@@ -82,18 +105,17 @@ class HuggingFaceClient:
             "sort": "downloads",
             "direction": "-1",
             "limit": limit,
-            "full": "True", # Get full model info including siblings (files)
+            "full": "true" if full else "false", # Get full model info including siblings (files)
         }
         if pipeline_tag:
             params["pipeline_tag"] = pipeline_tag
         if cursor:
-            params["cursor"] = cursor
-        
+            params["cursor"] = _normalize_cursor(cursor)
+
         try:
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            
             models = []
             for item in data:
                 model_id = item.get("id", "")
@@ -108,9 +130,13 @@ class HuggingFaceClient:
                         # Extract quantization from filename
                         quant = _extract_quantization(filename)
                         
+                        size = sibling.get("size")
+                        if size is None:
+                            size = sibling.get("lfs", {}).get("size", 0)
+                        
                         files.append(HFModelFile(
                             filename=filename,
-                            size_bytes=sibling.get("size") or sibling.get("lfs", {}).get("size", 0),
+                            size_bytes=size,
                             quantization=quant
                         ))
                 
@@ -121,33 +147,55 @@ class HuggingFaceClient:
                     downloads=item.get("downloads", 0),
                     likes=item.get("likes", 0),
                     tags=item.get("tags", []),
-                    files=files
+                    files=files,
+                    details_loaded=has_complete_file_metadata(files),
                 ))
             next_cursor = _parse_next_cursor(response.headers.get("Link"))
             return models, next_cursor
         except Exception as e:
+            if raise_on_error:
+                raise
             print(f"Error fetching from Hugging Face: {e}")
             return [], None
 
     def get_model_files(self, model_id: str) -> list[HFModelFile]:
-        """Get specific files and sizes by querying the repo tree."""
-        # /tree/main gives us accurate sizes that /api/models/{id} lacks for siblings
-        url = f"{self.BASE_URL}/models/{model_id}/tree/main"
+        """Get GGUF files and sizes by walking the repo tree recursively."""
         try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            files = []
-            for item in data:
-                path = item.get("path", "")
-                if path.endswith(".gguf"):
-                    # Extract quantization from filename
+            pending_dirs = [""]
+            seen_dirs: set[str] = set()
+            files: list[HFModelFile] = []
+            while pending_dirs:
+                subpath = pending_dirs.pop(0)
+                if subpath in seen_dirs:
+                    continue
+                seen_dirs.add(subpath)
+
+                url = (
+                    f"{self.BASE_URL}/models/{model_id}/tree/main/{subpath}"
+                    if subpath
+                    else f"{self.BASE_URL}/models/{model_id}/tree/main"
+                )
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                for item in data:
+                    path = item.get("path", "")
+                    item_type = item.get("type", "")
+                    if item_type == "directory" and path:
+                        pending_dirs.append(path)
+                        continue
+                    if not path.endswith(".gguf"):
+                        continue
+
                     quant = _extract_quantization(path)
-                    
+                    size = item.get("size")
+                    if size is None:
+                        size = item.get("lfs", {}).get("size", 0)
+
                     files.append(HFModelFile(
                         filename=path,
-                        size_bytes=item.get("size") or item.get("lfs", {}).get("size", 0),
+                        size_bytes=size,
                         quantization=quant
                     ))
             return files
@@ -165,5 +213,35 @@ def _parse_next_cursor(link_header: str | None) -> str | None:
             continue
         match = re.search(r"cursor=([^&>\s]+)", part)
         if match:
-            return match.group(1)
+            return _normalize_cursor(match.group(1))
     return None
+
+
+def _normalize_cursor(cursor: str | None) -> str | None:
+    """Decode cursor tokens until stable so requests does not double-encode them."""
+    if not cursor:
+        return cursor
+    normalized = cursor
+    for _ in range(4):
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    return normalized
+
+
+def has_complete_file_metadata(files: list[HFModelFile]) -> bool:
+    """Return True only when all GGUF file entries have a usable size."""
+    return bool(files) and all((item.size_bytes or 0) > 0 for item in files)
+
+
+def model_requires_detail_fetch(model: HFModel) -> bool:
+    """Search results can include GGUF siblings with missing sizes.
+
+    Those partial rows are good enough to list the repo, but not good enough to
+    lock in quant counts or fit scores. Treat them as pending until the detailed
+    tree query fills the sizes in.
+    """
+    if getattr(model, "details_error", ""):
+        return False
+    return not has_complete_file_metadata(model.files)

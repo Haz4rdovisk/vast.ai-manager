@@ -34,7 +34,7 @@ class BrandManager:
         """Returns the appropriate brand icon based on the model name."""
         name_lower = name_or_repo.lower()
         
-        brand_key = "generic"
+        brand_key = "huggingface"
         for keyword, key in cls.BRAND_MAP.items():
             if keyword in name_lower:
                 brand_key = key
@@ -46,7 +46,7 @@ class BrandManager:
         # Load icon from assets
         icon_path = Path(__file__).parent.parent / "assets" / "brands" / f"{brand_key}.png"
         if not icon_path.exists():
-            icon_path = Path(__file__).parent.parent / "assets" / "brands" / "generic.png"
+            icon_path = Path(__file__).parent.parent / "assets" / "brands" / "huggingface.png"
             
         icon = QIcon(str(icon_path))
         cls._icons_cache[brand_key] = icon

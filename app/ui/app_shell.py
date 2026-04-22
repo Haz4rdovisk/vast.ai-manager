@@ -118,6 +118,7 @@ class AppShell(QWidget):
         self.studio.launch_requested.connect(self._launch_server)
         self.studio.stop_requested.connect(self._stop_server)
         self.studio.fix_requested.connect(self._apply_diagnostic_fix)
+        self.studio.instances_requested.connect(lambda: self._go("instances"))
 
         # --- Discover ---
         self.discover = DiscoverView(self.store, self.job_registry, self)
@@ -234,6 +235,8 @@ class AppShell(QWidget):
         controller.instances_refreshed.connect(self._try_reattach_jobs_once)
         # Bridge real-time metrics back to the Lab store
         controller.live_metrics.connect(self._on_live_metrics_bridge)
+        controller.instances_refreshed.connect(lambda *_: self.studio._update_lock_state())
+        self.store.instance_state_updated.connect(lambda *_: self.studio._update_lock_state())
         # Sync analytics
         controller.instances_refreshed.connect(self._sync_analytics)
         controller.refresh_failed.connect(lambda *_: setattr(self, "_analytics_api_sync_pending", False))
@@ -245,8 +248,18 @@ class AppShell(QWidget):
         # Wire persistent analytics store from controller
         self.analytics.set_store(controller.analytics_store)
         
+        # Hardware connections
+        self.hardware.instances_requested.connect(lambda: self._go("instances"))
+        
+        controller.instances_refreshed.connect(lambda *_: self.hardware._update_lock_state())
+        self.store.instance_state_updated.connect(lambda *_: self.hardware._update_lock_state())
+        
         # Models connections
         self.models.back_requested.connect(lambda: self._go("studio"))
+        self.models.instances_requested.connect(lambda: self._go("instances"))
+        
+        controller.instances_refreshed.connect(lambda *_: self.models._update_lock_state())
+        self.store.instance_state_updated.connect(lambda *_: self.models._update_lock_state())
         
         # Landing view
         self._switch("instances")

@@ -56,7 +56,7 @@ class InstanceCard(QFrame):
         self._select_mode = select_mode
         self._selected = selected
 
-        self._card = GlassCard(self)
+        self._card = GlassCard(parent=self)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self._card)

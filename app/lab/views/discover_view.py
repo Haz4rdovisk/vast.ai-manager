@@ -1,6 +1,7 @@
 """Discover view: Hugging Face GGUF search, fit scoring, and side-panel install."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import pathlib
@@ -24,12 +25,20 @@ from PySide6.QtWidgets import (
 
 from app import theme as t
 from app.lab.services.fit_scorer import InstanceFitScorer
-from app.lab.services.huggingface import HFModel
+from app.lab.services.huggingface import (
+    HFModel,
+    HFModelFile,
+    estimate_gguf_size_gb,
+    has_complete_file_metadata,
+    model_requires_detail_fetch,
+)
 from app.lab.services.job_registry import JobRegistry
 from app.lab.services.model_catalog import CatalogEntry
 from app.lab.views.install_panel_side import InstallPanelSide
-from app.lab.workers.huggingface_worker import HFSearchWorker
+from app.lab.workers.huggingface_worker import HFSearchWorker, HFModelDetailWorker
+from app.ui.brand_manager import BrandManager
 from app.ui.components.model_card import ModelCard
+from app.ui.components.lock_screen import LockScreen
 
 
 _FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err", "pending": "muted"}
@@ -59,6 +68,17 @@ _REASONING_RX = re.compile(r"\b(r1|qwq|reasoner?|o1|phi[-_]?reason|deepseek[-_]?
 _CHAT_RX = re.compile(r"\b(chat|instruct|sft|assistant|rp|roleplay)\b", re.I)
 _HEURISTIC_RX = {"coding": _CODING_RX, "reasoning": _REASONING_RX, "chat": _CHAT_RX}
 
+_SEARCH_PAGE_SIZE = 40
+_DEFAULT_DISCOVER_QUERY = ""
+
+
+@dataclass(frozen=True)
+class _SearchRequest:
+    term: str
+    category: str
+    cursor: str | None = None
+    append: bool = False
+
 
 def apply_category_heuristic(category: str, models: list) -> list:
     """Apply client-side category filtering for tags HF cannot express cleanly."""
@@ -67,6 +87,11 @@ def apply_category_heuristic(category: str, models: list) -> list:
         return models
     rx = _HEURISTIC_RX[cfg["heuristic"]]
     return [model for model in models if rx.search(model.name) or any(rx.search(tag) for tag in model.tags)]
+
+
+def category_uses_client_heuristic(category: str) -> bool:
+    cfg = CATEGORY_MAP.get(category, CATEGORY_MAP["All"])
+    return bool(cfg.get("heuristic"))
 
 
 class DiscoverView(QWidget):
@@ -177,8 +202,17 @@ class DiscoverView(QWidget):
         self.scorer = InstanceFitScorer()
         self.worker = None
         self.current_models: list[HFModel] = []
+        self._active_request: _SearchRequest | None = None
+        self._queued_request: _SearchRequest | None = None
+        self._search_generation = 0
+        self._page_buffer: list[HFModel] = []
+        self._page_seen_ids: set[str] = set()
         self._connected_instance_ids: list[int] | None = None
         self._instance_render_signatures: dict[int, tuple] = {}
+        self._score_cache: dict[str, tuple[tuple, tuple, float, list[dict]]] = {}
+        self._displayed_model_ids: tuple[str, ...] = ()
+        self._visible_model_count = 0
+        self._detail_session_id = 0
         self._connection_snapshot: tuple[int, ...] = ()
         self._next_cursor: str | None = None
         self._append_mode = False
@@ -188,6 +222,11 @@ class DiscoverView(QWidget):
         self._render_timer.setSingleShot(True)
         self._render_timer.setInterval(200)
         self._render_timer.timeout.connect(self._render)
+        
+        self._detail_queue: list[str] = [] # Model IDs to fetch
+        self._is_fetching_details = False
+        self._detail_worker = None
+        self._cards: dict[str, ModelCard] = {}
 
         self._splitter_save_timer = QTimer(self)
         self._splitter_save_timer.setSingleShot(True)
@@ -242,7 +281,7 @@ class DiscoverView(QWidget):
         center_sect_lay.addWidget(self.filter)
 
         self.size_filter = QComboBox()
-        self.size_filter.addItems(["All Sizes", "< 7B", "7B - 14B", "14B - 35B", "35B - 80B", "> 80B"])
+        self.size_filter.addItems(["All Sizes", "< 7B", "7B - 14B", "14B - 35B", "35B - 80B", "> 80B", "Unknown Size"])
         self.size_filter.setFixedWidth(100)
         self.size_filter.currentIndexChanged.connect(self._render)
         center_sect_lay.addWidget(self.size_filter)
@@ -268,6 +307,14 @@ class DiscoverView(QWidget):
         right_sect_lay.setSpacing(t.SPACE_2)
         right_sect_lay.addStretch()
 
+        self.summary_scope = QLabel("0 connected targets")
+        self.summary_scope.setObjectName("discover-summary-chip")
+        right_sect_lay.addWidget(self.summary_scope, 0, Qt.AlignVCenter)
+
+        self.summary_ops = QLabel("0 active operations")
+        self.summary_ops.setObjectName("discover-summary-chip")
+        right_sect_lay.addWidget(self.summary_ops, 0, Qt.AlignVCenter)
+
         self.close_panel_btn = QPushButton("Close")
         self.close_panel_btn.setObjectName("discover-close-btn")
         self.close_panel_btn.setProperty("variant", "secondary")
@@ -283,7 +330,11 @@ class DiscoverView(QWidget):
         self.layout_stack = QStackedWidget()
         root.addWidget(self.layout_stack, 1)
 
-        self.lock_widget = self._build_lock_widget()
+        self.lock_widget = LockScreen(
+            title="SSH Tunnel Required",
+            message="The Model Store requires an active SSH connection to calculate hardware fit scores and enable remote installations.\n\nPlease connect an instance via SSH to continue."
+        )
+        self.lock_widget.instances_requested.connect(self.instances_requested.emit)
         self.layout_stack.addWidget(self.lock_widget)
 
         self.content_widget = QWidget()
@@ -298,36 +349,6 @@ class DiscoverView(QWidget):
         left_lay = QVBoxLayout(self.left_pane)
         left_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, 0)
         left_lay.setSpacing(t.SPACE_4)
-
-        self.summary_card = QWidget()
-        self.summary_card.setObjectName("discover-summary")
-        summary_lay = QHBoxLayout(self.summary_card)
-        summary_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
-        summary_lay.setSpacing(t.SPACE_4)
-
-        summary_text = QVBoxLayout()
-        summary_text.setContentsMargins(0, 0, 0, 0)
-        summary_text.setSpacing(2)
-        self.summary_title = QLabel("GGUF catalog ready")
-        self.summary_title.setObjectName("discover-summary-title")
-        self.summary_meta = QLabel("Search. Fit. Deploy.")
-        self.summary_meta.setObjectName("discover-summary-meta")
-        self.summary_meta.setWordWrap(True)
-        summary_text.addWidget(self.summary_title)
-        summary_text.addWidget(self.summary_meta)
-        summary_lay.addLayout(summary_text, 1)
-
-        summary_chips = QVBoxLayout()
-        summary_chips.setContentsMargins(0, 0, 0, 0)
-        summary_chips.setSpacing(t.SPACE_2)
-        self.summary_scope = QLabel("0 connected targets")
-        self.summary_scope.setObjectName("discover-summary-chip")
-        self.summary_ops = QLabel("0 active operations")
-        self.summary_ops.setObjectName("discover-summary-chip")
-        summary_chips.addWidget(self.summary_scope, 0, Qt.AlignRight)
-        summary_chips.addWidget(self.summary_ops, 0, Qt.AlignRight)
-        summary_lay.addLayout(summary_chips)
-        left_lay.addWidget(self.summary_card)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -382,6 +403,7 @@ class DiscoverView(QWidget):
         self.side_panel.resume_requested.connect(self.resume_requested.emit)
         self.side_panel.discard_requested.connect(self.discard_requested.emit)
         self.side_panel.show()
+        self.side_panel.details_fetched.connect(lambda _: self._schedule_render())
         self._sync_side_panel_button()
 
         self.layout_stack.addWidget(self.content_widget)
@@ -400,47 +422,24 @@ class DiscoverView(QWidget):
         self._refresh_summary()
         self._schedule_render()
 
-
-    def _build_lock_widget(self) -> QWidget:
-        widget = QWidget()
-        lay = QVBoxLayout(widget)
-        lay.setContentsMargins(t.SPACE_8, t.SPACE_8, t.SPACE_8, t.SPACE_8)
-        lay.setSpacing(t.SPACE_4)
-
-        center = QVBoxLayout()
-        center.setAlignment(Qt.AlignCenter)
-        center.setSpacing(t.SPACE_4)
-        lock_icon = QLabel()
-        lock_icon.setAlignment(Qt.AlignCenter)
-        try:
-            import qtawesome as qta
-
-            lock_icon.setPixmap(qta.icon("mdi.lock-outline", color=t.ACCENT_SOFT).pixmap(42, 42))
-        except Exception:
-            lock_icon.hide()
-        title = QLabel("SSH Tunnel Required")
-        title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 24px; font-weight: 700;")
-        title.setAlignment(Qt.AlignCenter)
-        msg = QLabel(
-            "The Model Store requires an active SSH connection to calculate hardware fit scores "
-            "and enable remote installations.\n\nPlease connect an instance via SSH to continue."
+    def _update_lock_state(self):
+        connected = (
+            self._connected_instance_ids
+            if self._connected_instance_ids is not None
+            else self.store.all_instance_ids()
         )
-        msg.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 14px;")
-        msg.setAlignment(Qt.AlignCenter)
-        msg.setFixedWidth(400)
-        msg.setWordWrap(True)
-        goto_btn = QPushButton("Go to Instances")
-        goto_btn.setFixedWidth(200)
-        goto_btn.clicked.connect(self.instances_requested.emit)
-        center.addStretch()
-        center.addWidget(lock_icon)
-        center.addWidget(title)
-        center.addWidget(msg)
-        center.addSpacing(t.SPACE_4)
-        center.addWidget(goto_btn, 0, Qt.AlignCenter)
-        center.addStretch()
-        lay.addLayout(center, 1)
-        return widget
+        has_connected = len(connected) > 0
+        has_active_jobs = len(list(self.registry.active_items())) > 0
+        
+        # Only show lock if NO connections AND NO active jobs running
+        target_idx = 1 if (has_connected or has_active_jobs) else 0
+        
+        if self.layout_stack.currentIndex() != target_idx:
+            self.layout_stack.setCurrentIndex(target_idx)
+            if target_idx == 1 and not self.current_models:
+                self._search(_DEFAULT_DISCOVER_QUERY)
+        if target_idx == 1:
+            self._refresh_summary()
 
     def _ui_state_path(self) -> pathlib.Path:
         return pathlib.Path.home() / ".vastai-app" / "ui_state.json"
@@ -481,93 +480,253 @@ class DiscoverView(QWidget):
         self._pending_splitter_sizes = None
         self._save_splitter_sizes(sizes)
 
-    def _update_lock_state(self):
-        connected = (
-            self._connected_instance_ids
-            if self._connected_instance_ids is not None
-            else self.store.all_instance_ids()
-        )
-        has_connected = len(connected) > 0
-        has_active_jobs = len(list(self.registry.active_items())) > 0
-        
-        # Only show lock if NO connections AND NO active jobs running
-        target_idx = 1 if (has_connected or has_active_jobs) else 0
-        
-        if self.layout_stack.currentIndex() != target_idx:
-            self.layout_stack.setCurrentIndex(target_idx)
-            if target_idx == 1 and not self.current_models:
-                self._search("llama")
-        if target_idx == 1:
-            self._refresh_summary()
-
     def _search(self, query: str = "", append: bool = False):
-        if self.worker and self.worker.isRunning():
+        request = self._build_search_request(query=query, append=append)
+        if self._active_request == request and self.worker and self.worker.isRunning():
             return
 
-        term = query if isinstance(query, str) and query else self.search_input.text().strip()
-        category = self.filter.currentText()
-        cfg = CATEGORY_MAP.get(category, CATEGORY_MAP["All"])
-        cursor = self._next_cursor if append else None
-        self._append_mode = append
+        if self.worker and self.worker.isRunning():
+            self._queued_request = request
+            self.progress.setVisible(True)
+            self.load_more_btn.setEnabled(False)
+            self.status_lbl.setText("Updating search...")
+            self._refresh_summary(search_text=request.term or "Top GGUF", searching=True)
+            return
+
+        self._launch_search(request, reset_buffer=True)
+
+    def _build_search_request(self, query: str = "", append: bool = False) -> _SearchRequest:
+        if append and self._active_request is not None:
+            term = self._active_request.term
+            category = self._active_request.category
+        else:
+            term = query if isinstance(query, str) and query else self.search_input.text().strip()
+            category = self.filter.currentText()
+        return _SearchRequest(term=term, category=category, cursor=self._next_cursor if append else None, append=append)
+
+    def _launch_search(self, request: _SearchRequest, *, reset_buffer: bool) -> None:
+        cfg = CATEGORY_MAP.get(request.category, CATEGORY_MAP["All"])
+        self._active_request = request
+        self._queued_request = None
+        self._append_mode = request.append
+        if reset_buffer:
+            self._page_buffer = []
+            self._page_seen_ids = {model.id for model in self.current_models} if request.append else set()
+            if not request.append:
+                self._detail_session_id += 1
+                self._detail_queue = []
+        self._search_generation += 1
+        generation = self._search_generation
 
         self.progress.setVisible(True)
-        self.search_btn.setEnabled(False)
-        self.search_input.setEnabled(False)
         self.load_more_btn.setEnabled(False)
         self.status_lbl.setText(
-            "Loading more..." if append else f"Searching Hugging Face for '{term or 'GGUF'}'..."
+            "Loading more..." if request.append else self._search_status_text(request.term)
         )
-        self._refresh_summary(search_text=term or "GGUF", searching=True)
+        self._refresh_summary(search_text=request.term or "Top GGUF", searching=True)
 
         self.worker = HFSearchWorker(
-            query=term,
-            limit=40,
+            query=request.term,
+            limit=_SEARCH_PAGE_SIZE,
             pipeline_tag=cfg["pipeline"],
-            cursor=cursor,
+            cursor=request.cursor,
             parent=self,
         )
-        self.worker.finished.connect(lambda models, next_cursor: self._on_search_finished(models, next_cursor, category))
-        self.worker.error.connect(self._on_search_error)
+        self.worker.finished.connect(
+            lambda models, next_cursor, generation=generation, request=request: self._on_search_finished(
+                generation, request, models, next_cursor
+            )
+        )
+        self.worker.error.connect(
+            lambda error, generation=generation, request=request: self._on_search_error(generation, request, error)
+        )
         self.worker.start()
 
-    def _on_search_finished(self, models: list[HFModel], next_cursor: str | None, category: str):
-        self.progress.setVisible(False)
-        self.search_btn.setEnabled(True)
-        self.search_input.setEnabled(True)
-        self.load_more_btn.setEnabled(True)
-
-        filtered = apply_category_heuristic(category, models)
-        if self._append_mode:
+    def _publish_search_results(
+        self,
+        request: _SearchRequest,
+        filtered_batch: list[HFModel],
+        next_cursor: str | None,
+        *,
+        partial: bool = False,
+    ) -> None:
+        if request.append:
             seen = {model.id for model in self.current_models}
-            self.current_models.extend([model for model in filtered if model.id not in seen])
+            self.current_models.extend([model for model in filtered_batch if model.id not in seen])
         else:
-            self.current_models = filtered
-        self._next_cursor = next_cursor
-        self.load_more_btn.setVisible(bool(next_cursor))
-        self.status_lbl.setText(
-            "No GGUF models found for that search." if not self.current_models else f"Found {len(self.current_models)} models."
-        )
-        self._adopt_default_selection()
-        self._refresh_summary()
-        self._render()
+            self.current_models = list(filtered_batch)
 
-    def _on_search_error(self, error: str):
+        self._next_cursor = next_cursor
+        self.load_more_btn.setVisible(bool(next_cursor) and not partial)
+        visible_count = self._current_visible_model_count()
+        if partial:
+            self.status_lbl.setText(
+                self._format_result_status(
+                    total_count=len(self.current_models),
+                    visible_count=visible_count,
+                    partial=True,
+                )
+            )
+        else:
+            self.status_lbl.setText(
+                self._format_result_status(
+                    total_count=len(self.current_models),
+                    visible_count=visible_count,
+                    partial=False,
+                )
+            )
+        self._refresh_summary()
+
+        new_ids = [m.id for m in filtered_batch if model_requires_detail_fetch(m)]
+        if request.append:
+            seen_queue = set(self._detail_queue)
+            self._detail_queue.extend([mid for mid in new_ids if mid not in seen_queue])
+        else:
+            self._detail_queue = new_ids
+
+        self._render()
+        self._start_detail_fetch()
+
+    def _on_search_finished(
+        self,
+        generation,
+        request=None,
+        models: list[HFModel] | str | None = None,
+        next_cursor: str | None = None,
+    ):
+        if isinstance(generation, list):
+            legacy_models = generation
+            legacy_next_cursor = request if isinstance(request, str | type(None)) else None
+            legacy_category = models if isinstance(models, str) else self.filter.currentText()
+            self._search_generation += 1
+            generation = self._search_generation
+            request = _SearchRequest(
+                term=self.search_input.text().strip(),
+                category=legacy_category,
+                cursor=None,
+                append=self._append_mode,
+            )
+            self._active_request = request
+            self._page_buffer = []
+            self._page_seen_ids = {model.id for model in self.current_models} if self._append_mode else set()
+            models = legacy_models
+            next_cursor = legacy_next_cursor
+
+        self._handle_search_finished(generation, request, models or [], next_cursor)
+
+    def _handle_search_finished(
+        self,
+        generation: int,
+        request: _SearchRequest,
+        models: list[HFModel],
+        next_cursor: str | None,
+    ) -> None:
+        if generation != self._search_generation or self._active_request != request:
+            return
+
+        self.worker = None
+        for model in models:
+            if model.id in self._page_seen_ids:
+                continue
+            self._page_buffer.append(model)
+            self._page_seen_ids.add(model.id)
+
+        filtered_batch = apply_category_heuristic(request.category, self._page_buffer)
+        if (
+            not request.append
+            and category_uses_client_heuristic(request.category)
+            and filtered_batch
+        ):
+            self._publish_search_results(request, filtered_batch, next_cursor, partial=bool(next_cursor))
+
+        if self._queued_request is not None and self._queued_request != request:
+            self.progress.setVisible(False)
+            self.load_more_btn.setEnabled(True)
+            self._run_queued_search_if_any()
+            return
+
+        if self._should_prefetch_more(request, filtered_batch, next_cursor):
+            next_request = _SearchRequest(
+                term=request.term,
+                category=request.category,
+                cursor=next_cursor,
+                append=request.append,
+            )
+            self.status_lbl.setText(
+                f"Refining {request.category.lower()} results..." if request.category != "All" else "Loading more..."
+            )
+            self._launch_search(next_request, reset_buffer=False)
+            return
+
         self.progress.setVisible(False)
-        self.search_btn.setEnabled(True)
-        self.search_input.setEnabled(True)
+        self.load_more_btn.setEnabled(True)
+        self._publish_search_results(request, filtered_batch, next_cursor, partial=False)
+        self._run_queued_search_if_any()
+
+    def _on_search_error(self, generation: int, request: _SearchRequest, error: str):
+        if generation != self._search_generation or self._active_request != request:
+            return
+
+        self.worker = None
+        self.progress.setVisible(False)
         self.load_more_btn.setEnabled(bool(self._next_cursor))
         self.status_lbl.setText(f"Search failed: {error}")
         self._refresh_summary()
+        self._run_queued_search_if_any()
+
+    def _should_prefetch_more(
+        self,
+        request: _SearchRequest,
+        filtered_batch: list[HFModel],
+        next_cursor: str | None,
+    ) -> bool:
+        if not next_cursor:
+            return False
+        if not category_uses_client_heuristic(request.category):
+            return False
+        return len(filtered_batch) < _SEARCH_PAGE_SIZE
+
+    def _run_queued_search_if_any(self) -> None:
+        queued = self._queued_request
+        if queued is None:
+            self._active_request = None
+            return
+        self._queued_request = None
+        self._launch_search(queued, reset_buffer=True)
+
+    def _search_status_text(self, term: str) -> str:
+        if term:
+            return f"Searching Hugging Face for '{term}'..."
+        return "Searching Hugging Face for top GGUF models..."
+
+    def _current_visible_model_count(self) -> int:
+        size_idx = self.size_filter.currentIndex()
+        if size_idx <= 0:
+            return len(self.current_models)
+        return sum(1 for model in self.current_models if self._matches_size(model, size_idx))
+
+    def _format_result_status(self, *, total_count: int, visible_count: int, partial: bool) -> str:
+        if total_count <= 0:
+            return "No GGUF models found for that search."
+        if partial:
+            base = f"Showing {visible_count} visible result" + ("" if visible_count == 1 else "s")
+            if visible_count != total_count:
+                base += f" from {total_count} fetched"
+            return base + ". Refining matches..."
+        if visible_count != total_count:
+            return f"Found {total_count} models ({visible_count} visible with current filters)."
+        return f"Found {visible_count} models."
 
     def _render(self):
-        while self.list_lay.count():
-            item = self.list_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
         if not self.current_models:
-            self.list_lay.addStretch()
+            self._rebuild_card_layout([])
+            self._visible_model_count = 0
             self._refresh_summary()
+            for card in self._cards.values():
+                card.deleteLater()
+            self._cards.clear()
+            self._score_cache.clear()
+            self._displayed_model_ids = ()
             return
 
         instance_ids = (
@@ -575,16 +734,45 @@ class DiscoverView(QWidget):
             if self._connected_instance_ids is not None
             else self.store.all_instance_ids()
         )
+        scoring_context = tuple(
+            (iid, *self._instance_signature(self.store.get_state(iid)))
+            for iid in instance_ids
+        )
         model_scores: dict[str, float] = {}
-        score_labels: dict[str, list[str]] = {}
-        # Quality weights for tie-breaking same scores (higher is better quality)
+        score_labels: dict[str, list[dict] | None] = {}
+        detail_messages: dict[str, str] = {}
+        # Quality weights for ranking (higher is better intelligence/quality)
         QUANT_QUALITY = {
             "BF16": 100, "FP16": 100, "F16": 100,
-            "Q8_0": 90, "Q6_K": 80, "Q5_K_M": 75, "Q5_K_S": 70,
-            "Q4_K_M": 60, "Q4_K_S": 55, "Q3_K_M": 40, "Q2_K": 20,
+            "Q8_0": 90, "Q6_K": 82, "Q5_K_M": 78, "Q5_K_S": 74, "Q5_0": 72,
+            "Q4_K_M": 65, "Q4_K_S": 60, "Q4_0": 55,
+            "IQ4_XS": 62, "IQ4_NL": 61,
+            "Q3_K_L": 48, "Q3_K_M": 44, "Q3_K_S": 40,
+            "IQ3_M": 46, "IQ3_S": 42, "IQ3_XXS": 38,
+            "Q2_K": 25, "IQ2_M": 22, "IQ2_S": 20, "IQ2_XS": 18, "IQ2_XXS": 15,
         }
 
         for model in self.current_models:
+            if getattr(model, "details_error", ""):
+                model_scores[model.id] = 0.0
+                score_labels[model.id] = []
+                detail_messages[model.id] = model.details_error
+                continue
+            if model_requires_detail_fetch(model) or getattr(model, "details_loading", False):
+                model_scores[model.id] = 0.0
+                score_labels[model.id] = None
+                continue
+
+            model_signature = (
+                round(model.params_b, 3),
+                tuple((item.filename, item.size_bytes, item.quantization) for item in model.files),
+            )
+            cached = self._score_cache.get(model.id)
+            if cached and cached[0] == model_signature and cached[1] == scoring_context:
+                model_scores[model.id] = cached[2]
+                score_labels[model.id] = list(cached[3])
+                continue
+
             max_score = 0.0
             labels: list[dict] = []
             
@@ -594,60 +782,64 @@ class DiscoverView(QWidget):
                     continue
 
                 best_file_match = None
-                best_file_score = -1.0
-                best_file_quality = -1
+                best_file_rank = -1.0
                 
-                # If no files found (search might not have returned siblings for some reason), 
-                # use fallback Q4_K_M heuristic
                 files_to_test = model.files if model.files else [None]
                 
                 for f in files_to_test:
                     if f:
+                        if not f.quantization:
+                            continue
+
                         size_gb = f.size_bytes / (1024 ** 3)
-                        quant = f.quantization or "Unknown"
+                        if size_gb < 0.1 and model.params_b > 0:
+                            size_gb = estimate_gguf_size_gb(model.params_b, f.quantization)
+                        
+                        if model.params_b > 0 and size_gb > 0.1:
+                            expected = estimate_gguf_size_gb(model.params_b, f.quantization)
+                            if size_gb < (expected * 0.7):
+                                continue
+
+                        quant = f.quantization
                         entry = CatalogEntry(
                             name=model.name,
                             provider=model.author,
                             params_b=model.params_b,
                             best_quant=quant,
-                            memory_required_gb=size_gb + 0.5, # Small overhead
+                            memory_required_gb=size_gb + 0.3,
                             estimated_tps_7b=50.0,
                             gguf_sources=[model.id],
                         )
                     else:
-                        # Fallback heuristic
-                        entry = CatalogEntry(
-                            name=model.name,
-                            provider=model.author,
-                            params_b=model.params_b,
-                            best_quant="Q4_K_M",
-                            memory_required_gb=(model.params_b * 0.7) if model.params_b > 0 else 5.0,
-                            estimated_tps_7b=50.0,
-                            gguf_sources=[model.id],
-                        )
+                        continue
                     
                     scored = self.scorer.score(entry, state.system)
                     quality = QUANT_QUALITY.get(entry.best_quant, 0)
+                    if not quality and "Q" in entry.best_quant: quality = 30
                     
-                    # Tie break: keep the highest quality quantization that still yields the highest score
-                    # (e.g. if both Q4 and Q8 have score 100 on a 80GB GPU, pick Q8)
-                    if scored.score > best_file_score or (scored.score == best_file_score and quality > best_file_quality):
-                        best_file_score = scored.score
+                    if scored.score >= 40:
+                        rank = scored.score + (quality * 2.0)
+                    else:
+                        rank = scored.score
+                    
+                    if rank > best_file_rank:
+                        best_file_rank = rank
                         best_file_match = {
                             "iid": iid,
                             "score": scored.score,
+                            "rank": rank,
                             "fit": _FIT_LABEL.get(scored.fit_level, "Fit Available"),
                             "level": _FIT_LEVEL.get(scored.fit_level, "info"),
                             "best_quant": entry.best_quant if f else None
                         }
-                        best_file_quality = quality
                 
                 if best_file_match:
                     labels.append(best_file_match)
-                    max_score = max(max_score, best_file_score)
+                    max_score = max(max_score, best_file_match["score"])
 
             model_scores[model.id] = max_score
             score_labels[model.id] = labels
+            self._score_cache[model.id] = (model_signature, scoring_context, max_score, list(labels))
 
         display_models = list(self.current_models)
         size_idx = self.size_filter.currentIndex()
@@ -655,34 +847,162 @@ class DiscoverView(QWidget):
             display_models = [model for model in display_models if self._matches_size(model, size_idx)]
         if self.sort_combo.currentIndex() == 1:
             display_models.sort(key=lambda model: model_scores.get(model.id, 0), reverse=True)
+        else:
+            display_models.sort(key=lambda model: model.downloads, reverse=True)
+
+        self._visible_model_count = len(display_models)
+        self._adopt_default_selection(display_models)
 
         installing_by_model = {
             desc.repo_id: (desc.iid, desc.percent)
             for _key, desc in self.registry.active_items()
         }
 
+        new_cards = {}
         for model in display_models:
-            card = ModelCard(model)
+            if model.id in self._cards:
+                card = self._cards[model.id]
+            else:
+                card = ModelCard(model)
+                card.details_clicked.connect(self._show_details)
+                card.open_hf_clicked.connect(self._open_hf)
+            
             card.set_selected(
                 self.side_panel.current_model is not None
                 and self.side_panel.current_model.id == model.id
             )
-            card.set_instance_scores(score_labels.get(model.id, []))
+            score_state = score_labels.get(model.id)
+            if score_state is None:
+                card.set_scoring_pending()
+            else:
+                if detail_messages.get(model.id):
+                    card.set_detail_error(detail_messages[model.id])
+                elif score_state:
+                    card.set_instance_scores(score_state)
+                else:
+                    card.set_score_unavailable("No compatible GGUF fit available.")
             if model.id in installing_by_model:
                 iid, percent = installing_by_model[model.id]
                 card.set_installing(iid, percent)
-            card.details_clicked.connect(self._show_details)
-            card.open_hf_clicked.connect(self._open_hf)
-            self.list_lay.addWidget(card)
-        self.list_lay.addStretch()
+            else:
+                card.clear_installing()
+
+            new_cards[model.id] = card
+
+        self._cards = {**self._cards, **new_cards}
+        self._rebuild_card_layout(display_models)
+
+        current_ids = {m.id for m in self.current_models}
+        for mid, card in self._cards.items():
+            if mid not in current_ids:
+                card.deleteLater()
+                self._score_cache.pop(mid, None)
+        
+        self._cards = new_cards
         self._refresh_summary(model_count=len(display_models))
+
+    def _rebuild_card_layout(self, display_models: list[HFModel]) -> None:
+        display_ids = tuple(model.id for model in display_models)
+        if display_ids == self._displayed_model_ids:
+            return
+
+        while self.list_lay.count():
+            item = self.list_lay.takeAt(0)
+            if not item:
+                continue
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+
+        for model in display_models:
+            card = self._cards.get(model.id)
+            if card is not None:
+                self.list_lay.addWidget(card)
+        self.list_lay.addStretch()
+        self._displayed_model_ids = display_ids
+
+    def _start_detail_fetch(self) -> None:
+        if self._is_fetching_details or not self._detail_queue:
+            return
+        
+        self._is_fetching_details = True
+        self._fetch_next_detail()
+
+    def _fetch_next_detail(self) -> None:
+        if not self._detail_queue:
+            self._is_fetching_details = False
+            return
+            
+        mid = self._detail_queue.pop(0)
+        # Check if model still exists in current search
+        model = next((m for m in self.current_models if m.id == mid), None)
+        if not model or not model_requires_detail_fetch(model) or getattr(model, "details_loading", False):
+            self._fetch_next_detail()
+            return
+            
+        worker = HFModelDetailWorker(mid, self)
+        self._detail_worker = worker
+        session_id = self._detail_session_id
+        model.details_loading = True
+        model.details_error = ""
+        worker.finished.connect(lambda files, m=model, sid=session_id, mid=mid: self._on_bg_detail_finished(sid, mid, m, files))
+        worker.error.connect(lambda message, m=model, sid=session_id, mid=mid: self._on_bg_detail_error(sid, mid, m, message))
+        worker.start()
+
+    def _on_bg_detail_finished(self, session_id: int, model_id: str, model: HFModel, files: list[HFModelFile]) -> None:
+        self._detail_worker = None
+        if session_id != self._detail_session_id:
+            self._is_fetching_details = False
+            self._start_detail_fetch()
+            return
+        model.files = files
+        model.details_loading = False
+        model.details_loaded = has_complete_file_metadata(files)
+        model.details_error = "" if files else "Could not load GGUF file metadata."
+        self._score_cache.pop(model.id, None)
+        # Schedule a render to update the specific card
+        self._schedule_render()
+        # Continue queue
+        self._fetch_next_detail()
+
+    def _on_bg_detail_error(self, session_id: int, model_id: str, model: HFModel, message: str) -> None:
+        self._detail_worker = None
+        if session_id != self._detail_session_id:
+            self._is_fetching_details = False
+            self._start_detail_fetch()
+            return
+        model.details_loading = False
+        model.details_error = message or "Could not load GGUF file metadata."
+        self._score_cache.pop(model.id, None)
+        self._schedule_render()
+        self._fetch_next_detail()
 
     def _schedule_render(self) -> None:
         if not self._render_timer.isActive():
             self._render_timer.start()
 
+    def _get_best_fallback_quant(self, system, params_b: float) -> str:
+        """Pick the best likely quantization that fits the given hardware as a fallback."""
+        if params_b <= 0:
+            return "Q4_K_M"
+        
+        # Available memory (VRAM or RAM)
+        avail = (system.gpu_vram_gb or 0) if system.has_gpu else (system.ram_total_gb or 0)
+        if avail <= 0:
+            return "Q4_K_M"
+
+        # Check from best to worst
+        for q in ["BF16", "Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M", "Q2_K"]:
+            if avail >= estimate_gguf_size_gb(params_b, q):
+                return q
+        return "Q2_K"
+
     def _matches_size(self, model: HFModel, size_idx: int) -> bool:
         params = model.params_b
+        if size_idx == 6:
+            return params <= 0
+        if params <= 0:
+            return False
         if size_idx == 1:
             return params < 7
         if size_idx == 2:
@@ -760,15 +1080,17 @@ class DiscoverView(QWidget):
     def _sync_side_panel_button(self) -> None:
         self.close_panel_btn.setText("Hide Settings" if self.side_panel.isVisible() else "Show Settings")
 
-    def _adopt_default_selection(self) -> None:
-        if not self.current_models:
+    def _adopt_default_selection(self, candidate_models: list[HFModel] | None = None) -> None:
+        candidates = candidate_models if candidate_models is not None else self.current_models
+        if not candidates:
             self.side_panel.clear()
             return
         current_id = self.side_panel.current_model.id if self.side_panel.current_model else None
-        chosen = next((model for model in self.current_models if model.id == current_id), None)
+        chosen = next((model for model in candidates if model.id == current_id), None)
         if chosen is None:
-            chosen = self.current_models[0]
-        self.side_panel.set_model(chosen)
+            chosen = candidates[0]
+        if self.side_panel.current_model is None or self.side_panel.current_model.id != chosen.id:
+            self.side_panel.set_model(chosen)
         self._set_side_panel_visible(True)
 
     def _refresh_summary(
@@ -784,18 +1106,16 @@ class DiscoverView(QWidget):
             else self.store.all_instance_ids()
         )
         active_ops = len(list(self.registry.active_items()))
-        visible_models = model_count if model_count is not None else len(self.current_models)
+        visible_models = model_count if model_count is not None else self._current_visible_model_count()
         selected = self.side_panel.current_model.name if self.side_panel.current_model else "No model selected"
 
         if searching:
-            self.summary_title.setText(f"Searching {search_text}...")
-            self.summary_meta.setText("Refreshing catalog.")
+            self.status_lbl.setText(f"Searching {search_text}...")
         elif visible_models:
-            self.summary_title.setText(f"{visible_models} models ready to inspect")
-            self.summary_meta.setText(f"Focus: {selected}")
+            noun = "model" if visible_models == 1 else "models"
+            self.status_lbl.setText(f"{visible_models} {noun} loaded · Focus: {selected}")
         else:
-            self.summary_title.setText("GGUF catalog ready")
-            self.summary_meta.setText("Search. Fit. Deploy.")
+            self.status_lbl.setText("Search. Fit. Deploy.")
 
         self.summary_scope.setText(
             f"{len(connected_ids)} connected target" + ("" if len(connected_ids) == 1 else "s")

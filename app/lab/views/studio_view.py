@@ -27,6 +27,7 @@ from app.lab.state.models import ServerParams
 from app.ui.components.diagnostic_banner import DiagnosticBanner
 from app.ui.components.server_params_form import ServerParamsForm
 from app.ui.brand_manager import BrandManager
+from app.ui.components.lock_screen import LockScreen
 from PySide6.QtCore import QSize
 
 
@@ -276,6 +277,7 @@ class StudioView(QWidget):
     launch_requested = Signal(object)
     stop_requested = Signal()
     fix_requested = Signal(str)
+    instances_requested = Signal()
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -442,7 +444,23 @@ class StudioView(QWidget):
         right_lay.addWidget(self.stop_btn)
         top.addWidget(right_panel, 1)
         root.addWidget(topbar)
+        
+        self.layout_stack = QStackedWidget()
+        root.addWidget(self.layout_stack, 1)
 
+        # 1. Lock Screen
+        self.lock_screen = LockScreen(
+            title="Studio Workspace Locked",
+            message="Selecting and connecting an instance via SSH is required to access the AI Lab Studio and interactive runtime."
+        )
+        self.lock_screen.instances_requested.connect(self.instances_requested.emit)
+        self.layout_stack.addWidget(self.lock_screen)
+
+        # 2. Main Workspace
+        self.workspace_host = QWidget()
+        self.workspace_lay = QVBoxLayout(self.workspace_host)
+        self.workspace_lay.setContentsMargins(0, 0, 0, 0)
+        
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(1)
         splitter.setStyleSheet(
@@ -611,10 +629,28 @@ class StudioView(QWidget):
 
         splitter.addWidget(side)
         splitter.setSizes([1120, 360])
-        root.addWidget(splitter, 1)
+        self.workspace_lay.addWidget(splitter)
+        self.layout_stack.addWidget(self.workspace_host)
+
+        self.store.instance_changed.connect(self._on_instance_changed)
+        self.store.instance_state_updated.connect(lambda *_: self._update_lock_state())
+        self._update_lock_state()
 
         store.instance_changed.connect(self._sync_sidebar_on_instance_change)
         store.remote_gguf_changed.connect(self._sync_models)
+
+    def _update_lock_state(self):
+        iid = self.store.selected_instance_id
+        state = self.store.get_state(iid) if iid else None
+        has_connection = state and state.setup.probed
+        
+        target_idx = 1 if has_connection else 0
+        if self.layout_stack.currentIndex() != target_idx:
+            self.layout_stack.setCurrentIndex(target_idx)
+
+    def _on_instance_changed(self, iid: int):
+        self._sync_sidebar_on_instance_change(iid)
+        self._update_lock_state()
 
     def refresh_instances(self, ids: list[int]):
         # 1. Save current selection

@@ -1,4 +1,5 @@
-from app.lab.state.models import RemoteSystem, ScoredCatalogModel
+from app.lab.services.huggingface import HFModel, HFModelFile
+from app.lab.state.models import RemoteSystem
 from app.lab.state.store import LabStore
 from app.lab.views.discover_view import DiscoverView
 
@@ -32,7 +33,8 @@ def test_discover_renders_card_per_model(qt_app):
             name="Qwen2.5-7B-Instruct-GGUF",
             downloads=1000,
             likes=100,
-            tags=["7b"]
+            tags=["7b"],
+            files=[HFModelFile("Qwen2.5-7B-Instruct-Q4_K_M.gguf", 4_700_000_000, "Q4_K_M")],
         )
     ]
     view._render()
@@ -64,7 +66,8 @@ def test_discover_shows_per_instance_score_column(qt_app):
             name="Qwen2.5-7B-Instruct-GGUF",
             downloads=1000,
             likes=100,
-            tags=["7b"]
+            tags=["7b"],
+            files=[HFModelFile("Qwen2.5-7B-Instruct-Q4_K_M.gguf", 4_700_000_000, "Q4_K_M")],
         )
     ]
     view._render()
@@ -75,8 +78,6 @@ def test_discover_shows_per_instance_score_column(qt_app):
 
 
 def test_discover_keeps_settings_open_and_auto_selects_first_result(qt_app):
-    from app.lab.services.huggingface import HFModel
-
     store = LabStore()
     store.selected_instance_id = 1
     store.set_remote_system(
@@ -84,6 +85,7 @@ def test_discover_keeps_settings_open_and_auto_selects_first_result(qt_app):
         RemoteSystem(cpu_cores=16, ram_total_gb=64, has_gpu=True, gpu_vram_gb=24),
     )
     view = DiscoverView(store)
+    view._start_detail_fetch = lambda: None
     view.show()
     qt_app.processEvents()
 
@@ -102,3 +104,60 @@ def test_discover_keeps_settings_open_and_auto_selects_first_result(qt_app):
     assert view.close_panel_btn.text() == "Hide Settings"
     assert view.side_panel.current_model is not None
     assert view.side_panel.current_model.id == model.id
+
+
+def test_discover_queues_detail_fetch_for_zero_size_files_and_holds_score(qt_app):
+    store = LabStore()
+    store.selected_instance_id = 1
+    store.set_remote_system(
+        1,
+        RemoteSystem(cpu_cores=16, ram_total_gb=64, has_gpu=True, gpu_vram_gb=24),
+    )
+    view = DiscoverView(store)
+    view._start_detail_fetch = lambda: None
+
+    model = HFModel(
+        id="Qwen/Qwen2.5-7B-Instruct-GGUF",
+        author="Qwen",
+        name="Qwen2.5-7B-Instruct-GGUF",
+        downloads=1000,
+        likes=100,
+        tags=["7b"],
+        files=[HFModelFile("Qwen2.5-7B-Instruct-Q4_K_M.gguf", 0, "Q4_K_M")],
+    )
+
+    view._on_search_finished([model], None, "All")
+    qt_app.processEvents()
+
+    assert view._detail_queue == [model.id]
+    card = view._cards[model.id]
+    assert card._summary.text() == "Scoring hardware match..."
+    assert card._fit_panel.isVisible() is False
+
+
+def test_discover_detail_error_stops_infinite_pending_state(qt_app):
+    store = LabStore()
+    store.selected_instance_id = 1
+    store.set_remote_system(
+        1,
+        RemoteSystem(cpu_cores=16, ram_total_gb=64, has_gpu=True, gpu_vram_gb=24),
+    )
+    view = DiscoverView(store)
+
+    model = HFModel(
+        id="org/broken-model",
+        author="org",
+        name="broken-model-GGUF",
+        downloads=100,
+        likes=10,
+        tags=["embedding"],
+        files=[HFModelFile("broken-model-f16.gguf", 0, "F16")],
+        details_error="Could not load GGUF file metadata.",
+    )
+    view.current_models = [model]
+
+    view._render()
+
+    card = view._cards[model.id]
+    assert card._summary.text() == "Could not load GGUF file metadata."
+    assert card._fit_panel.isVisible() is False

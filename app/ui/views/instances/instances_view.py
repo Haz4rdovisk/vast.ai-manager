@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from app.models import Instance, InstanceState, TunnelStatus, UserInfo
@@ -48,6 +48,9 @@ class InstancesView(QWidget):
         self._cards: dict[int, InstanceCard] = {}
         self._selected: set[int] = set()
         self._loading_cards: list[GlassCard] = []
+        self._loading_timer = QTimer(self)
+        self._loading_timer.setSingleShot(True)
+        self._loading_timer.timeout.connect(self._show_loading_cards)
         self._start_requested_ids: set[int] = {
             int(iid)
             for iid in getattr(controller.config, "start_requested_ids", []) or []
@@ -166,6 +169,12 @@ class InstancesView(QWidget):
         if self._all or self._cards or self._loading_cards:
             return
         self.title.setText("My Instances")
+        if not self._loading_timer.isActive():
+            self._loading_timer.start(220)
+
+    def _show_loading_cards(self) -> None:
+        if self._all or self._cards or self._loading_cards:
+            return
         for _ in range(3):
             card = GlassCard()
             body = card.body()
@@ -180,6 +189,7 @@ class InstancesView(QWidget):
             self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
 
     def _clear_loading(self) -> None:
+        self._loading_timer.stop()
         while self._loading_cards:
             widget = self._loading_cards.pop()
             widget.setParent(None)

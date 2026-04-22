@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app import theme as t
+from app.ui.brand_manager import BrandManager
 
 
 class PageHeader(QWidget):

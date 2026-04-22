@@ -9,6 +9,7 @@ from PySide6.QtGui import (
     QPainter, QLinearGradient, QColor, QPen, QPainterPath, QFont, QBrush,
 )
 from app import theme as t
+from app.ui.brand_manager import BrandManager
 
 
 # (key, label, icon_kind, section)
@@ -19,10 +20,10 @@ NAV_ITEMS = [
     ("analytics",  "Analytics",   "analytics", "CLOUD"),
     # ── AI LAB ──
     ("studio",     "Studio",      "dashboard", "AI LAB"),
-    ("hardware",   "Hardware",    "hardware",  "AI LAB"),
     ("discover",   "Discover",    "discover",  "AI LAB"),
     ("models",     "Models",      "models",    "AI LAB"),
     # ── SYSTEM ──
+    ("hardware",   "Hardware",    "hardware",  "SYSTEM"),
     ("settings",   "Settings",    "settings",  "SYSTEM"),
 ]
 
@@ -141,6 +142,14 @@ class NavIcon(QWidget):
         p.drawRoundedRect(QRectF(2.5, 3.5, 15, 10), 1.2, 1.2)
         p.drawLine(QPointF(7, 16.5), QPointF(13, 16.5))
         p.drawLine(QPointF(10, 13.5), QPointF(10, 16.5))
+
+    def _draw_huggingface(self, p: QPainter):
+        # Render the official PNG logo from BrandManager
+        try:
+            pix = BrandManager.get_icon("huggingface").pixmap(ICON_PX, ICON_PX)
+            p.drawPixmap(0, 0, pix)
+        except Exception:
+            self._draw_default(p)
 
     def _draw_settings(self, p: QPainter):
         # Gear: 8 rounded teeth around a circle

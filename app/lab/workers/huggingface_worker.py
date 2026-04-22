@@ -5,6 +5,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.lab.services.huggingface import HuggingFaceClient
 
+
 class HFSearchWorker(QThread):
     finished = Signal(list, object) # list[HFModel], str | None
     error = Signal(str)

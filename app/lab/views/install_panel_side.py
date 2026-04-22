@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from app import theme as t
 from app.lab.services.fit_scorer import InstanceFitScorer
-from app.lab.services.huggingface import HFModel, HFModelFile
+from app.lab.services.huggingface import HFModel, HFModelFile, has_complete_file_metadata, model_requires_detail_fetch
 from app.lab.services.job_registry import JobRegistry
 from app.lab.services.model_catalog import CatalogEntry
 from app.lab.workers.huggingface_worker import HFModelDetailWorker
@@ -359,31 +359,35 @@ class _InstanceCard(QFrame):
         self._gpu_lbl.setText(state.system.gpu_name or "Unknown GPU")
 
         if selected_file is not None:
-            size_gb = selected_file.size_bytes / (1024 ** 3) if selected_file.size_bytes else 0
-            # Simple scoring without complex CatalogEntry dependencies if possible, or just use what we have
-            from app.lab.services.model_catalog import CatalogEntry
-            entry = CatalogEntry(
-                name="Temp",
-                provider="Temp",
-                params_b=0.0,
-                best_quant=selected_file.quantization or "Unknown",
-                memory_required_gb=size_gb + 0.5 if size_gb else 5.0,
-                estimated_tps_7b=0.0,
-                gguf_sources=[],
-            )
-            scored = scorer.score(entry, state.system)
-            self._score_value.setText(f"{scored.score:.0f}")
-            self._fit_pill.set_status(
-                f"{_FIT_LABEL.get(scored.fit_level, 'Unknown Fit')}",
-                _FIT_LEVEL.get(scored.fit_level, "info"),
-            )
-            if model_installed:
-                self._action_hint.setText("Already on instance.")
-            elif state.setup.llamacpp_installed:
-                self._action_hint.setText("Ready to install.")
+            if not selected_file.quantization:
+                self._score_value.setText("--")
+                self._fit_pill.set_status("Generic File", "muted")
+                self._fit_pill.show()
+                self._action_hint.setText("Standard download.")
             else:
-                self._action_hint.setText("Runtime required.")
-            self._fit_pill.show()
+                size_gb = selected_file.size_bytes / (1024 ** 3) if selected_file.size_bytes else 0
+                entry = CatalogEntry(
+                    name="Temp",
+                    provider="Temp",
+                    params_b=0.0,
+                    best_quant=selected_file.quantization,
+                    memory_required_gb=size_gb + 0.3 if size_gb else 5.0,
+                    estimated_tps_7b=0.0,
+                    gguf_sources=[],
+                )
+                scored = scorer.score(entry, state.system)
+                self._score_value.setText(f"{scored.score:.0f}")
+                self._fit_pill.set_status(
+                    f"{_FIT_LABEL.get(scored.fit_level, 'Unknown Fit')}",
+                    _FIT_LEVEL.get(scored.fit_level, "info"),
+                )
+                if model_installed:
+                    self._action_hint.setText("Already on instance.")
+                elif state.setup.llamacpp_installed:
+                    self._action_hint.setText("Ready to install.")
+                else:
+                    self._action_hint.setText("Runtime required.")
+                self._fit_pill.show()
         else:
             self._score_value.setText("--")
             self._action_hint.setText("Pick quant.")
@@ -465,6 +469,7 @@ class InstallPanelSide(QWidget):
     resume_requested = Signal(str)
     discard_requested = Signal(str)
     close_requested = Signal()
+    details_fetched = Signal(str) # model_id
 
     MODE_IDLE = "idle"
     MODE_READY = "ready"
@@ -591,21 +596,37 @@ class InstallPanelSide(QWidget):
 
     def set_model(self, model: HFModel) -> None:
         self.current_model = model
-        has_zeros = any(f.size_bytes == 0 for f in model.files) if model.files else True
-        if has_zeros:
+        if model_requires_detail_fetch(model) and not getattr(model, "details_loading", False):
             self._fetch_model_details(model.id)
         self._refresh()
 
     def _fetch_model_details(self, model_id: str) -> None:
+        if self.current_model is not None and self.current_model.id == model_id:
+            self.current_model.details_loading = True
+            self.current_model.details_error = ""
         self._detail_worker = HFModelDetailWorker(model_id, self)
         self._detail_worker.finished.connect(self._on_detail_finished)
+        self._detail_worker.error.connect(self._on_detail_error)
         self._detail_worker.start()
 
     def _on_detail_finished(self, files: list[HFModelFile]) -> None:
+        if self.current_model:
+            self.current_model.details_loading = False
+        if self.current_model:
+            self.current_model.details_error = "" if files else "Could not load GGUF file metadata."
         if self.current_model and files:
             self.current_model.files = files
+            self.current_model.details_loaded = has_complete_file_metadata(files)
             self._populate_quants()
             self._render_instance_cards()
+            self.details_fetched.emit(self.current_model.id)
+        self._refresh()
+
+    def _on_detail_error(self, message: str) -> None:
+        if self.current_model:
+            self.current_model.details_loading = False
+            self.current_model.details_error = message or "Could not load GGUF file metadata."
+        self._refresh()
 
     def clear(self) -> None:
         self.current_model = None
@@ -811,7 +832,12 @@ class InstallPanelSide(QWidget):
         chosen = self._quant_combo.currentData()
         if chosen is not None:
             size_gb = chosen.size_bytes / (1024 ** 3) if chosen.size_bytes else 0
-            self._hero_hint.setText(f"{chosen.quantization or 'Unknown'} · {size_gb:.1f} GB")
+            q = chosen.quantization
+            self._hero_hint.setText(f"{q if q else chosen.filename} · {size_gb:.1f} GB")
+        elif m.details_loading:
+            self._hero_hint.setText("Loading GGUF file metadata...")
+        elif m.details_error:
+            self._hero_hint.setText(m.details_error)
         else:
             self._hero_hint.setText("No quant selected.")
 
@@ -824,13 +850,22 @@ class InstallPanelSide(QWidget):
         default_idx = 0
         for idx, item in enumerate(files):
             size_gb = item.size_bytes / (1024 ** 3) if item.size_bytes else 0
-            label = f"{item.quantization or 'Unknown'} ({size_gb:.1f} GB)"
+            q = item.quantization
+            label = f"{q if q else item.filename} ({size_gb:.1f} GB)"
             self._quant_combo.addItem(label, item)
             if curr and curr.filename == item.filename: default_idx = idx
             elif not curr and "Q4_K_M" in (item.quantization or "").upper(): default_idx = idx
         if files: self._quant_combo.setCurrentIndex(default_idx)
         self._quant_combo.blockSignals(False)
         self._panel_meta.setText(f"{len(files)} quant" + ("" if len(files) == 1 else "s"))
+        if self.current_model.details_loading:
+            self._quant_hint.setText("Loading GGUF file metadata...")
+        elif self.current_model.details_error:
+            self._quant_hint.setText(self.current_model.details_error)
+        elif files:
+            self._quant_hint.setText("Pick quant.")
+        else:
+            self._quant_hint.setText("No GGUF files available.")
 
     def _render_instance_cards(self) -> None:
         ids = (

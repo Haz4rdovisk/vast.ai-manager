@@ -16,7 +16,7 @@ from app.ui.components.primitives import GlassCard
 
 class HardwareCard(GlassCard):
     def __init__(self, iid: int, gpu_name: str = "GPU", parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.iid = iid
         self._metric_cols: int | None = None
         self.setMinimumWidth(360)
@@ -67,13 +67,12 @@ class HardwareCard(GlassCard):
             self._wrap(self.gauge_vram),
             self._wrap(self.net_widget),
         ]
-        self._arrange_metrics()
-
         content.addLayout(self.metrics_grid, 1)
 
         self.thermo = ThermometerWidget()
         content.addWidget(self.thermo, 0, Qt.AlignRight)
         lay.addLayout(content, 1)
+        self._arrange_metrics()
 
         # Footer
         footer = QHBoxLayout()
@@ -114,7 +113,6 @@ class HardwareCard(GlassCard):
             row = index // cols
             col = index % cols
             self.metrics_grid.addWidget(widget, row, col)
-            widget.show()
 
         for col in range(3):
             self.metrics_grid.setColumnStretch(col, 0)
@@ -122,7 +120,7 @@ class HardwareCard(GlassCard):
             self.metrics_grid.setColumnStretch(col, 1)
 
     def _wrap(self, widget):
-        container = QFrame()
+        container = QFrame(self)
         container.setAttribute(Qt.WA_TranslucentBackground)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)

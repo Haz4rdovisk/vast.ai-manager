@@ -1,15 +1,18 @@
 """Hardware monitoring view — glassmorphism redesign."""
 from __future__ import annotations
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QGridLayout, QLabel
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QGridLayout, QLabel, QStackedWidget
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from app import theme as t
 from app.lab.state.store import LabStore
 from app.lab.views.hardware_card import HardwareCard
 from app.lab.views.hardware_placeholder import HardwarePlaceholderCard
 from app.ui.components.page_header import PageHeader
+from app.ui.components.lock_screen import LockScreen
 
 
 class HardwareView(QWidget):
+    instances_requested = Signal()
+
     def __init__(self, store: LabStore, parent=None):
         super().__init__(parent)
         self.store = store
@@ -28,6 +31,18 @@ class HardwareView(QWidget):
         )
         lay.addWidget(self.header)
 
+        self.layout_stack = QStackedWidget()
+        lay.addWidget(self.layout_stack, 1)
+
+        # 1. Lock Screen
+        self.lock_screen = LockScreen(
+            title="Telemetry Locked",
+            message="Real-time hardware monitoring requires at least one active SSH connection to fetch live metrics (CPU, RAM, GPU) from the remote instance."
+        )
+        self.lock_screen.instances_requested.connect(self.instances_requested.emit)
+        self.layout_stack.addWidget(self.lock_screen)
+
+        # 2. Grid Content
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.NoFrame)
@@ -39,10 +54,28 @@ class HardwareView(QWidget):
 
         self.scroll.setWidget(self.container)
         self.scroll.viewport().installEventFilter(self)
-        lay.addWidget(self.scroll)
+        self.layout_stack.addWidget(self.scroll)
 
         self.store.instance_state_updated.connect(self._on_state_updated)
         self.sync_instances()
+        self._update_lock_state()
+
+    def _update_lock_state(self):
+        # Hardware view shows telemetry for all instances.
+        # We show lock if NO instances are available in the store (or connected)
+        ids = self.store.all_instance_ids()
+        
+        # Check if any of these have been probed (connected)
+        has_connection = False
+        for iid in ids:
+            state = self.store.get_state(iid)
+            if state and state.setup.probed:
+                has_connection = True
+                break
+        
+        target_idx = 1 if has_connection else 0
+        if self.layout_stack.currentIndex() != target_idx:
+            self.layout_stack.setCurrentIndex(target_idx)
 
     def sync_instances(self, *args):
         """Synchronize cards with the store's instances."""
@@ -66,7 +99,7 @@ class HardwareView(QWidget):
                     if inst:
                         gpu_name = inst.gpu_name
 
-                card = HardwareCard(iid, gpu_name=gpu_name)
+                card = HardwareCard(iid, gpu_name=gpu_name, parent=self.container)
                 self.cards[iid] = card
                 self._layout_signature = None
 
@@ -160,7 +193,6 @@ class HardwareView(QWidget):
                 row = idx // cols
                 col = idx % cols
                 self.grid.addWidget(widget, row, col)
-                widget.show()
 
             for r in range(self.grid.rowCount()):
                 self.grid.setRowStretch(r, 0)

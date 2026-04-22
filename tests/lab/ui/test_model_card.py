@@ -53,3 +53,18 @@ def test_whole_card_click_emits_details_signal(qt_app):
     QTest.mouseClick(card, Qt.LeftButton)
     assert spy.count() == 1
     assert spy.at(0)[0] == model
+
+
+def test_card_distinguishes_pending_from_unavailable_fit(qt_app):
+    card = ModelCard(_m())
+    card.set_scoring_pending()
+    assert card._summary.text() == "Scoring hardware match..."
+    assert card._fit_panel.isVisible() is False
+
+    card.set_score_unavailable("No compatible GGUF fit available.")
+    assert card._summary.text() == "No compatible GGUF fit available."
+    assert card._fit_panel.isVisible() is False
+
+    card.set_detail_error("Could not load GGUF file metadata.")
+    assert card._summary.text() == "Could not load GGUF file metadata."
+    assert card._fit_panel.isVisible() is False
