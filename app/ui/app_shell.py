@@ -284,9 +284,9 @@ class AppShell(QWidget):
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
         self._sync_discover_connection_state()
         if status == TunnelStatus.CONNECTED.value:
-            # Automatic generic instance probe
+            # Proactive Re-probing on successful connection
             self._probe_instance(iid)
-            # Reattach active jobs for this instance specifically
+            
             if self._controller and self._controller.vast:
                 instances = self._controller.last_instances
                 self._probe_active_jobs_for(iid, instances)
@@ -359,6 +359,12 @@ class AppShell(QWidget):
         if callback:
             self._probe_callbacks[iid] = callback
             
+        # Check tunnel status before probing
+        if self._controller:
+            status = self._controller.tunnel_states.get(iid)
+            if status != TunnelStatus.CONNECTED.value:
+                return
+
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst or not inst.ssh_host or not inst.ssh_port:
             return
@@ -835,15 +841,24 @@ class AppShell(QWidget):
         self.job_registry.drop(key)
 
     def _try_reattach_jobs_once(self, instances, _user=None):
-        if self._ssh is None:
+        if self._ssh is None or self._controller is None:
             return
 
         for key, desc in self.job_registry.active_items():
-            self._probe_single_job(desc, instances)
+            # Check if tunnel is active for this iid
+            status = self._controller.tunnel_states.get(desc.iid)
+            if status == TunnelStatus.CONNECTED.value:
+                self._probe_single_job(desc, instances)
 
     def _probe_active_jobs_for(self, iid: int, instances: list):
-        if self._ssh is None:
+        if self._ssh is None or self._controller is None:
             return
+            
+        # Check if tunnel is active for this iid
+        status = self._controller.tunnel_states.get(iid)
+        if status != TunnelStatus.CONNECTED.value:
+            return
+
         for key, desc in self.job_registry.active_items():
             if desc.iid == iid:
                 self._probe_single_job(desc, instances)
