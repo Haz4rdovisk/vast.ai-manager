@@ -575,7 +575,7 @@ class StudioView(QWidget):
         self._set_launch_log_visible(False)
         
         self._retry_timer = QTimer(self)
-        self._retry_timer.setInterval(250) # Faster polling (4 times per second)
+        self._retry_timer.setInterval(1000) # Relaxed polling (1 second)
         self._retry_timer.timeout.connect(self._check_tunnel_and_load)
         self._target_local_port = 0
         self._retry_count = 0
@@ -614,15 +614,27 @@ class StudioView(QWidget):
         store.remote_gguf_changed.connect(self._sync_models)
 
     def refresh_instances(self, ids: list[int]):
+        # 1. Save current selection
+        old_iid = self.instance_combo.currentData()
+
         self.instance_combo.blockSignals(True)
         self.instance_combo.clear()
         for iid in ids:
             state = self.store.get_state(iid)
             tag = "" if state.gguf else " - no models"
             self.instance_combo.addItem(f"Instance #{iid}{tag}", iid)
-        self.instance_combo.blockSignals(False)
-        if ids:
+        
+        # 2. Restore selection
+        if old_iid:
+            idx = self.instance_combo.findData(old_iid)
+            if idx >= 0:
+                self.instance_combo.setCurrentIndex(idx)
+            elif ids:
+                self._on_instance_selected(0)
+        elif ids:
             self._on_instance_selected(0)
+
+        self.instance_combo.blockSignals(False)
 
     def _on_instance_selected(self, index: int):
         iid = self.instance_combo.itemData(index)
@@ -643,9 +655,13 @@ class StudioView(QWidget):
         self._sync_models(state.gguf if state else [])
 
     def _sync_models(self, gguf):
+        # 1. Save current selection
+        old_path = self.model_picker.currentData()
+
         self.model_list.clear()
         self.model_picker.blockSignals(True)
         self.model_picker.clear()
+        
         if not gguf:
             self.model_picker.addItem("Install a GGUF model first", None)
         else:
@@ -654,7 +670,7 @@ class StudioView(QWidget):
                 item.setData(Qt.UserRole, model.path)
                 self.model_list.addItem(item)
                 self.model_picker.addItem(model.filename, model.path)
-        self.model_picker.blockSignals(False)
+        
         self.model_picker.setEnabled(bool(gguf))
         self.launch_btn.setEnabled(bool(gguf))
         self.models_count_label.setText(
@@ -665,9 +681,16 @@ class StudioView(QWidget):
                 "No GGUF models are installed on this instance yet. Use the Model Store to download one, then come back here to launch it."
             )
         self.params_form.set_model_paths([model.path for model in gguf])
-        if gguf:
+        
+        # 2. Restore selection if possible, otherwise fallback to 0
+        idx = self.model_picker.findData(old_path) if old_path else -1
+        if idx >= 0:
+            self.model_picker.setCurrentIndex(idx)
+        elif gguf:
             self.model_picker.setCurrentIndex(0)
             self._set_selected_model(gguf[0].path)
+        
+        self.model_picker.blockSignals(False)
 
     def _on_model_picked(self, item, _previous):
         if item is None:
@@ -784,7 +807,8 @@ class StudioView(QWidget):
         self._set_launch_log_visible(True)
 
     def append_launch_log(self, line: str):
-        self._set_launch_log_visible(True)
+        if not self.launch_log.isVisible():
+            self._set_launch_log_visible(True)
         self.launch_log.append_log(line)
         lowered = line.lower()
         if "loading model" in lowered:
@@ -804,6 +828,9 @@ class StudioView(QWidget):
         self.log_toggle_btn.setText("Hide Launch Log" if visible else "Show Launch Log")
 
     def _set_launch_status(self, text: str, level: str):
+        if hasattr(self, "_last_status_level") and self._last_status_level == level and self.launch_status.text() == f"\u25CF  {text}":
+            return
+        self._last_status_level = level
         colors = {
             "idle": (t.TEXT_MID, "rgba(255,255,255,0.03)", "rgba(255,255,255,0.10)"),
             "busy": (t.WARN, "rgba(244,183,64,0.10)", "rgba(244,183,64,0.26)"),
