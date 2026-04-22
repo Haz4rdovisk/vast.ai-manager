@@ -191,6 +191,14 @@ class JobDescriptor:
     speed: str = ""
     error: str | None = None
 
+    def __post_init__(self):
+        # Resilience: ensure numeric types are correct after JSON hydration
+        self.iid = int(self.iid)
+        self.percent = int(self.percent or 0)
+        self.started_at = float(self.started_at or 0)
+        self.size_bytes = int(self.size_bytes or 0)
+        self.bytes_downloaded = int(self.bytes_downloaded or 0)
+
 
 def build_job_key(iid: int, repo_id: str, quant: str) -> str:
     """Build a stable, filesystem-safe key for a remote job."""

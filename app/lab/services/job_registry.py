@@ -65,6 +65,21 @@ class JobRegistry(QObject):
         desc = self._by_key.get(key)
         if desc is None:
             return
+            
+        # Resilience: if it failed with a network-sounding error, don't move to history
+        # just let it stay active for retry/reattach.
+        if not ok and error:
+            lowered = error.lower()
+            transient = any(term in lowered for term in [
+                "timeout", "connection refused", "broken pipe", 
+                "connection timed out", "network is unreachable",
+                "handshake failed"
+            ])
+            if transient:
+                # Do NOT finish. Let it stay active.
+                self.job_updated.emit(key)
+                return
+
         if ok:
             final_stage = "done"
         elif desc.stage == "cancelled":

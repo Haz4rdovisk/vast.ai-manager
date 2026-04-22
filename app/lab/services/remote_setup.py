@@ -249,8 +249,13 @@ def script_install_llamacpp(job_key: str | None = None) -> str:
         state = f"/workspace/.vastai-app/jobs/{job_key}.json"
         log = f"/tmp/install-{job_key}.log"
         return f"""
-mkdir -p /workspace/.vastai-app/jobs
+mkdir -p /workspace/.vastai-app/jobs 2>/dev/null || mkdir -p /tmp/.vastai-app/jobs
 STATE_PATH="{state}"
+# Auto-detect if we fell back to /tmp
+if [ ! -d "/workspace/.vastai-app/jobs" ]; then
+  STATE_PATH="/tmp/.vastai-app/jobs/{job_key}.json"
+fi
+
 LOG_PATH="{log}"
 JOB_PID=$$
 exec > >(tee -a "$LOG_PATH") 2>&1

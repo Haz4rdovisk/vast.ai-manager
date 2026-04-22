@@ -979,19 +979,24 @@ class InstallPanelSide(QWidget):
         if a: self.cancel_requested.emit(a.key)
 
     def _current_active_job(self):
+        # 1. Direct match for focused instance
         if self._context_iid is not None:
             contextual = self.registry.active_for(self._context_iid)
             if contextual is not None:
                 return contextual
-            pending = self._pending_jobs.get(self._context_iid)
-            if pending is not None:
-                return pending
-        for iid, pending in self._pending_jobs.items():
-            if self.registry.active_for(iid) is None:
-                return pending
-        if not self.current_model:
-            return None
-        return next((d for _, d in self.registry.active_items() if d.repo_id == self.current_model.id), None)
+        
+        # 2. Or any instance busy with a job for THIS model OR environment setup
+        if self.current_model:
+            for _key, desc in self.registry.active_items():
+                if desc.repo_id == self.current_model.id or desc.repo_id == "Environment":
+                    return desc
+                    
+        # 3. Fallback: Any active job at all (Global visibility)
+        active = self.registry.active_values()
+        if active:
+            return active[0]
+            
+        return None
 
     def _on_stale_resume(self) -> None:
         if self._stale_desc:

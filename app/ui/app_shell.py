@@ -878,7 +878,8 @@ class AppShell(QWidget):
             self._probe_instance(desc.iid)
             return
         if status == "MISSING":
-            self.job_registry.drop(desc.key)
+            # Don't drop it immediately. The script might be slow to create the file
+            # or the filesystem might be momentarily laggy.
             return
         if status == "STALE":
             self.job_registry.update(desc.key, stage="cancelled")

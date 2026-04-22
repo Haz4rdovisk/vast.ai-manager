@@ -488,7 +488,11 @@ class DiscoverView(QWidget):
             else self.store.all_instance_ids()
         )
         has_connected = len(connected) > 0
-        target_idx = 1 if has_connected else 0
+        has_active_jobs = len(list(self.registry.active_items())) > 0
+        
+        # Only show lock if NO connections AND NO active jobs running
+        target_idx = 1 if (has_connected or has_active_jobs) else 0
+        
         if self.layout_stack.currentIndex() != target_idx:
             self.layout_stack.setCurrentIndex(target_idx)
             if target_idx == 1 and not self.current_models:
