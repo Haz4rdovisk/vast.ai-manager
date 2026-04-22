@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from app import theme as t
 from app.lab.services.huggingface import HFModel
 from app.ui.components.primitives import Badge
+from app.ui.brand_manager import BrandManager
 
 
 _SKIP_TAGS = {"gguf", "region:us", "transformers", "safetensors", "text-generation"}
@@ -56,7 +57,14 @@ class ModelCard(QFrame):
 
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.setSpacing(t.SPACE_3)
+        name_row.setSpacing(t.SPACE_2)
+        
+        # Brand Icon
+        self._brand_icon = QLabel()
+        self._brand_icon.setFixedSize(24, 24)
+        self._brand_icon.setPixmap(BrandManager.get_icon(model.name).pixmap(24, 24))
+        name_row.addWidget(self._brand_icon)
+        
         self._name = QLabel(model.name)
         self._name.setStyleSheet(
             f"color: {t.TEXT_HI}; font-size: 18px; font-weight: 900;"

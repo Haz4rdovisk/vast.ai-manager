@@ -9,6 +9,7 @@ from app import theme as t
 from app.ui.components.page_header import PageHeader
 from app.ui.components.primitives import GlassCard, StatusPill
 from app.ui.components.model_config_form import ModelConfigForm
+from app.ui.brand_manager import BrandManager
 
 
 class ModelsView(QWidget):
@@ -118,8 +119,17 @@ class ModelsView(QWidget):
             )
             header_lay.setSpacing(t.SPACE_3)
 
-            # Row 1: Title + Size pill
+            # Row 1: Brand Icon + Title + Size pill
             r1 = QHBoxLayout()
+            r1.setSpacing(t.SPACE_3)
+            
+            # Brand Icon
+            icon_lbl = QLabel()
+            icon_pix = BrandManager.get_icon(f.filename).pixmap(32, 32)
+            icon_lbl.setPixmap(icon_pix)
+            icon_lbl.setFixedSize(32, 32)
+            r1.addWidget(icon_lbl)
+            
             name_lbl = QLabel(f.filename)
             name_lbl.setStyleSheet(
                 f"font-size: 14pt; font-weight: 700; color: {t.TEXT_HI};"

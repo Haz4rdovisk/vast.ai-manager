@@ -26,6 +26,8 @@ from app import theme as t
 from app.lab.state.models import ServerParams
 from app.ui.components.diagnostic_banner import DiagnosticBanner
 from app.ui.components.server_params_form import ServerParamsForm
+from app.ui.brand_manager import BrandManager
+from PySide6.QtCore import QSize
 
 
 _EMPTY_WEBUI_HTML = f"""
@@ -319,10 +321,10 @@ class StudioView(QWidget):
                 background: #281f68;
                 border: 1px solid rgba(179,160,255,0.44);
                 color: white;
-                min-height: 34px;
+                min-height: 38px;
                 padding: 7px 16px;
                 font-weight: 700;
-                border-radius: 10px;
+                border-radius: 12px;
             }}
             QComboBox#studio-model-picker:disabled {{
                 background: #101722;
@@ -416,6 +418,7 @@ class StudioView(QWidget):
         self.model_picker.setObjectName("studio-model-picker")
         self.model_picker.setMinimumWidth(420)
         self.model_picker.setMaximumWidth(620)
+        self.model_picker.setIconSize(QSize(24, 24))
         self.model_picker.currentIndexChanged.connect(self._on_model_combo_changed)
         top.addWidget(self.model_picker, 0, Qt.AlignCenter)
 
@@ -668,8 +671,13 @@ class StudioView(QWidget):
             for model in gguf:
                 item = QListWidgetItem(model.filename)
                 item.setData(Qt.UserRole, model.path)
+                
+                # Get brand icon
+                icon = BrandManager.get_icon(model.filename)
+                item.setIcon(icon)
+                
                 self.model_list.addItem(item)
-                self.model_picker.addItem(model.filename, model.path)
+                self.model_picker.addItem(icon, model.filename, model.path)
         
         self.model_picker.setEnabled(bool(gguf))
         self.launch_btn.setEnabled(bool(gguf))
