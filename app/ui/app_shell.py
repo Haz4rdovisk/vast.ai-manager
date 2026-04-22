@@ -779,10 +779,18 @@ class AppShell(QWidget):
         desc = self.job_registry.get(key)
         if not desc:
             return  # Already handled by proactive trigger
-        self.job_registry.finish(key, ok=ok, error=(output[-200:] if not ok else None))
+            
+        if not ok:
+            # Let the background prober handle disconnections/failures.
+            # This prevents the UI from resetting while the remote process might still be running.
+            if self._controller:
+                self._controller.log_line.emit(f"#{iid} Conexão instável durante instalação. Aguardando re-conexão automática...")
+            return
+
+        self.job_registry.finish(key, ok=True)
         
         # Proactive sync: if we just installed llamacpp, update store immediately
-        if ok and desc and desc.needs_llamacpp:
+        if desc and desc.needs_llamacpp:
             import time
             self._setup_cooldowns[iid] = time.time()
             st = self.store.get_state(iid)
