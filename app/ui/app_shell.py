@@ -77,6 +77,11 @@ class AppShell(QWidget):
         self._controller = None
         self._current_view = ""
         self._analytics_api_sync_pending = False
+        self._pending_analytics_instances = None
+        self._pending_analytics_user = None
+        self._analytics_sync_timer = QTimer(self)
+        self._analytics_sync_timer.setSingleShot(True)
+        self._analytics_sync_timer.timeout.connect(self._flush_analytics_sync)
         
         self._host: str = ""
         self._port: int = 0
@@ -238,12 +243,13 @@ class AppShell(QWidget):
         controller.instances_refreshed.connect(lambda *_: self.studio._update_lock_state())
         self.store.instance_state_updated.connect(lambda *_: self.studio._update_lock_state())
         # Sync analytics
-        controller.instances_refreshed.connect(self._sync_analytics)
+        controller.instances_refreshed.connect(self._schedule_analytics_sync)
         controller.refresh_failed.connect(lambda *_: setattr(self, "_analytics_api_sync_pending", False))
 
         # Settings wiring
         self.settings_view.load_config(controller.config)
         self.settings_view.saved.connect(self._on_settings_saved)
+        self.settings_view.analytics_reset_requested.connect(self._on_reset_analytics_requested)
 
         # Wire persistent analytics store from controller
         self.analytics.set_store(controller.analytics_store)
@@ -266,15 +272,26 @@ class AppShell(QWidget):
         self.nav.set_active("instances")
         self._sync_discover_connection_state()
 
-    def _sync_analytics(self, instances, user_info):
+    def _schedule_analytics_sync(self, instances, user_info):
+        self._pending_analytics_instances = instances
+        if user_info is not None:
+            self._pending_analytics_user = user_info
+        self._analytics_sync_timer.start(180)
+
+    def _flush_analytics_sync(self):
         self._analytics_api_sync_pending = False
         ctrl = self._controller
+        instances = self._pending_analytics_instances or []
+        effective_user = self._pending_analytics_user or (ctrl.last_user if ctrl else None)
+        if instances and ctrl and ctrl.last_instances:
+            instances = ctrl.last_instances
         self.analytics.sync(
-            instances, user_info,
+            instances, effective_user,
             ctrl.today_spend() if ctrl else 0.0,
             week_spend=ctrl.week_spend() if ctrl else None,
             month_spend=ctrl.month_spend() if ctrl else None,
         )
+        self._pending_analytics_instances = None
 
     def _request_analytics_api_sync(self):
         if self._controller is None or self._controller.vast is None:
@@ -293,6 +310,19 @@ class AppShell(QWidget):
             if hasattr(self.instances, "billing"):
                 self.instances.billing.apply_config(cfg)
             self.analytics.apply_config(cfg)
+
+    def _on_reset_analytics_requested(self):
+        if not self._controller:
+            return
+        self._analytics_api_sync_pending = True
+        self._pending_analytics_instances = None
+        self._pending_analytics_user = None
+        self._controller.reset_analytics()
+        self._controller.toast_requested.emit(
+            "Analytics local resetado. Reimportando dados da conta atual...",
+            "info",
+            3500,
+        )
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
         self._sync_discover_connection_state()

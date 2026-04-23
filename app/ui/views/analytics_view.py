@@ -984,7 +984,8 @@ class AnalyticsView(QWidget):
             return
 
         self._last_instances = instances
-        self._last_user = user
+        effective_user = user or self._last_user
+        self._last_user = effective_user
         self._last_today = today_spend
         cfg = self._config
         bd = burn_rate_breakdown(
@@ -992,7 +993,7 @@ class AnalyticsView(QWidget):
             include_storage=cfg.include_storage_in_burn_rate,
             estimated_network_cost_per_hour=cfg.estimated_network_cost_per_hour,
         )
-        balance = user.balance if user else 0.0
+        balance = effective_user.balance if effective_user else 0.0
         smoothed = self._tracker.update(bd["total"])
         trend = self._tracker.get_trend()
         display_burn = smoothed if smoothed > 0 else bd["total"]
@@ -1057,10 +1058,7 @@ class AnalyticsView(QWidget):
                 self.timeline_title_lbl.setText(self.timeline._title)
 
             # Metrics for live extrapolation
-            live_dph = sum(
-                float(getattr(i, "dph", 0.0) or 0.0)
-                for i in running_instances
-            )
+            live_dph = float(bd.get("total") or 0.0)
             live_since = self._store.last_charge_end() if self._store else None
 
             if self._mode == "FINANCE":

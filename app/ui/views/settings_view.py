@@ -17,6 +17,7 @@ from app.ui.components.primitives import GlassCard
 class SettingsView(QWidget):
     saved = Signal(object)  # AppConfig
     back_requested = Signal()
+    analytics_reset_requested = Signal()
 
     def __init__(self, config: AppConfig | None = None, parent=None):
         super().__init__(parent)
@@ -150,6 +151,25 @@ class SettingsView(QWidget):
         )
         al.addWidget(self.script_input)
         self.sections.addWidget(auto)
+
+        # ── ANALYTICS ──────────────────────────────────────────────────
+        analytics = GlassCard()
+        anl = analytics.body()
+        anl.addWidget(_sectionTitle("ANALYTICS"))
+        desc = QLabel(
+            "Clear local analytics history and rebuild it from the current Vast.ai account."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {t.TEXT_MID};")
+        anl.addWidget(desc)
+        reset_row = QHBoxLayout()
+        reset_row.addStretch()
+        self.reset_analytics_btn = QPushButton("Reset Analytics & Re-sync")
+        self.reset_analytics_btn.setProperty("variant", "ghost")
+        self.reset_analytics_btn.clicked.connect(self.analytics_reset_requested.emit)
+        reset_row.addWidget(self.reset_analytics_btn)
+        anl.addLayout(reset_row)
+        self.sections.addWidget(analytics)
 
         # ── ABOUT ──────────────────────────────────────────────────────
         about = GlassCard()

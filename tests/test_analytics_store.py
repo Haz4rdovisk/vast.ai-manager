@@ -63,6 +63,52 @@ def test_import_history_accepts_iso_timestamps(tmp_path):
     assert summary["credits"] == 10.0
 
 
+def test_import_history_keeps_simultaneous_multi_instance_batches(tmp_path):
+    store = AnalyticsStore(path=tmp_path / "analytics.json")
+    now = datetime.now()
+    ts = (now - timedelta(hours=1)).timestamp()
+
+    summary = store.import_history(
+        invoices=[],
+        charges=[
+            {
+                "start": ts - 3600,
+                "end": ts,
+                "type": "instance",
+                "source": "instance-1",
+                "amount": 1.0,
+            },
+            {
+                "start": ts - 7200,
+                "end": ts,
+                "type": "instance",
+                "source": "instance-2",
+                "amount": 2.0,
+            },
+        ],
+        current_balance=5.0,
+    )
+
+    assert store.entry_count == 2
+    assert store._entries[0]["balance"] == 8.0
+    assert store._entries[-1]["balance"] == 5.0
+    assert summary["charges"] == 3.0
+    assert [item["source"] for item in summary["top_sources"][:2]] == ["instance-2", "instance-1"]
+
+
+def test_bind_owner_resets_legacy_unowned_history(tmp_path):
+    store = AnalyticsStore(path=tmp_path / "analytics.json")
+    store._entries = [{"ts": datetime.now().isoformat(), "balance": 9.0}]
+    store._billing_events = [{"kind": "charge", "ts": datetime.now().isoformat(), "amount": 1.0}]
+
+    changed = store.bind_owner("email:test@example.com", reset_unowned=True)
+
+    assert changed is True
+    assert store.owner_key == "email:test@example.com"
+    assert store.entry_count == 0
+    assert store.has_billing_events is False
+
+
 def test_period_spend_uses_anchor_before_cutoff(tmp_path):
     store = AnalyticsStore(path=tmp_path / "analytics.json")
     now = datetime.now()

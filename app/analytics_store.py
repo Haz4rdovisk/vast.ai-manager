@@ -38,6 +38,7 @@ class AnalyticsStore:
     def __init__(self, path: Path = _LOG_PATH):
         self._path = path
         self._entries: list[dict] = []
+        self._owner_key: str | None = None
         self._last_recharge_val = 0.0
         self._last_recharge_ts: float = 0.0
         self._billing_summary: dict = {}
@@ -60,6 +61,7 @@ class AnalyticsStore:
             # Suporte para migração: se for o formato novo (dict)
             if isinstance(data, dict):
                 self._entries = data.get("entries", [])
+                self._owner_key = _normalize_owner_key(data.get("owner_key"))
                 self._last_recharge_val = data.get("last_recharge_val", 0.0)
                 self._last_recharge_ts = data.get("last_recharge_ts", 0.0)
                 self._billing_summary = data.get("billing_summary", {})
@@ -95,6 +97,7 @@ class AnalyticsStore:
         with self._save_lock:
             payload = {
                 "entries": list(self._entries),
+                "owner_key": self._owner_key,
                 "last_recharge_val": self._last_recharge_val,
                 "last_recharge_ts": self._last_recharge_ts,
                 "billing_summary": dict(self._billing_summary),
@@ -141,6 +144,29 @@ class AnalyticsStore:
         self._entries.append(asdict(snapshot))
         self._last_write = now
         self._save()
+
+    def bind_owner(self, owner_key: str | None, *, reset_unowned: bool = False) -> bool:
+        normalized = _normalize_owner_key(owner_key)
+        if not normalized:
+            return False
+        if self._owner_key == normalized:
+            return False
+        if self._owner_key is None and not reset_unowned:
+            self._owner_key = normalized
+            self._save()
+            return False
+        self.clear_history()
+        self._owner_key = normalized
+        self._save()
+        return True
+
+    def clear_history(self):
+        self._entries = []
+        self._last_recharge_val = 0.0
+        self._last_recharge_ts = 0.0
+        self._billing_summary = {}
+        self._billing_events = []
+        self._last_write = None
 
     def import_history(
         self,
@@ -249,34 +275,50 @@ class AnalyticsStore:
             self._save()
             return self._billing_summary
 
-        events.sort(key=lambda x: x["ts"], reverse=True)
+        grouped_events: dict[float, list[dict]] = {}
+        for item in events:
+            grouped_events.setdefault(float(item["ts"]), []).append(item)
 
         running_balance = float(current_balance)
         historic_entries: list[dict] = []
-        for item in events:
-            ts = float(item["ts"])
+        for ts in sorted(grouped_events.keys(), reverse=True):
+            group = grouped_events[ts]
             dt = datetime.fromtimestamp(ts)
-            amount = float(item["amount"])
-            rate = max(0.0, float(item.get("rate") or 0.0))
-            cats = item.get("categories") or {}
+            epsilon = timedelta(microseconds=1)
+            cats = {"gpu": 0.0, "storage": 0.0, "network": 0.0, "other": 0.0}
+            batch_rate = 0.0
+            credits_total = 0.0
+            charges_total = 0.0
+
+            for item in group:
+                amount = float(item["amount"])
+                if item["kind"] == "credit":
+                    credits_total += amount
+                    continue
+
+                charges_total += amount
+                rate = max(0.0, float(item.get("rate") or 0.0))
+                batch_rate += rate
+                item_cats = item.get("categories") or {}
+                if not any(float(item_cats.get(key) or 0.0) for key in cats):
+                    item_cats = {"gpu": rate, "storage": 0.0, "network": 0.0, "other": 0.0}
+                for key in cats:
+                    cats[key] += float(item_cats.get(key) or 0.0)
 
             historic_entries.append(asdict(CostSnapshot(
-                ts=dt.isoformat(timespec="seconds"),
+                ts=(dt + epsilon).isoformat(timespec="microseconds"),
                 balance=round(running_balance, 4),
-                burn_total=round(rate, 4),
-                burn_gpu=round(cats.get("gpu", rate if item["kind"] == "charge" else 0.0), 4),
+                burn_total=round(batch_rate, 4),
+                burn_gpu=round(cats.get("gpu", 0.0), 4),
                 burn_storage=round(cats.get("storage", 0.0), 4),
                 burn_network=round(cats.get("network", 0.0), 4),
                 instances=[],
             )))
 
-            if item["kind"] == "credit":
-                running_balance -= amount
-            else:
-                running_balance += amount
+            running_balance += charges_total - credits_total
 
             historic_entries.append(asdict(CostSnapshot(
-                ts=(dt - timedelta(seconds=1)).isoformat(timespec="seconds"),
+                ts=(dt - epsilon).isoformat(timespec="microseconds"),
                 balance=round(running_balance, 4),
                 burn_total=0.0,
                 burn_gpu=0.0,
@@ -285,8 +327,9 @@ class AnalyticsStore:
                 instances=[],
             )))
 
-        unique = {p["ts"]: p for p in (historic_entries + self._entries)}
-        self._entries = [unique[k] for k in sorted(unique.keys())]
+        merged = historic_entries + list(self._entries)
+        merged.sort(key=lambda item: _parse_ts(item.get("ts")) or datetime.min)
+        self._entries = merged
         self._billing_summary = _finalize_summary(summary)
         self._save()
         return self._billing_summary
@@ -642,6 +685,10 @@ class AnalyticsStore:
     def has_billing_events(self) -> bool:
         return bool(self._billing_events)
 
+    @property
+    def owner_key(self) -> str | None:
+        return self._owner_key
+
 
 def _empty_summary(sync_meta: dict | None = None) -> dict:
     return {
@@ -739,6 +786,11 @@ def _parse_ts(raw: Any) -> datetime | None:
         return dt
     except ValueError:
         return None
+
+
+def _normalize_owner_key(raw: Any) -> str | None:
+    text = str(raw or "").strip().lower()
+    return text or None
 
 
 def _invoice_credit_amount(row: dict) -> float:

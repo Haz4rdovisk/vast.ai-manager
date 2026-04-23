@@ -13,6 +13,7 @@ from app.workers.live_metrics import LiveMetricsWorker
 from app.workers.model_watcher import ModelWatcher
 from app.workers.llama_probe import LlamaReadyProbe
 from datetime import datetime, timedelta
+import hashlib
 import warnings
 from app.billing import DailySpendTracker, burn_rate_breakdown
 from app.analytics_store import AnalyticsStore, CostSnapshot
@@ -143,14 +144,20 @@ class AppController(QObject):
 
     def _live_overlay_since(self, window_start: datetime) -> float:
         instances = getattr(self, "last_instances", None) or []
-        dph = sum(float(i.dph or 0.0) for i in instances if i.state == InstanceState.RUNNING)
-        if dph <= 0: return 0.0
+        live_rate = burn_rate_breakdown(
+            instances,
+            include_storage=self.config.include_storage_in_burn_rate,
+            estimated_network_cost_per_hour=self.config.estimated_network_cost_per_hour,
+        )["total"]
+        if live_rate <= 0:
+            return 0.0
         last_end = self.analytics_store.last_charge_end()
         start = max(last_end, window_start) if last_end else window_start
         now = datetime.now()
-        if now <= start: return 0.0
+        if now <= start:
+            return 0.0
         hours = (now - start).total_seconds() / 3600.0
-        return dph * hours
+        return live_rate * hours
 
     # ---- Lifecycle ----
     def bootstrap(self):
@@ -312,7 +319,19 @@ class AppController(QObject):
     def _on_refreshed(self, instances, user):
         from app.ui.views.instances.action_bar import is_scheduling_instance
         self.last_instances = instances
-        self.last_user = user
+        if user is not None:
+            self.last_user = user
+            owner_key = self._analytics_owner_key(user)
+            reset_unowned = (
+                self.analytics_store.owner_key is None
+                and (
+                    self.analytics_store.entry_count > 0
+                    or self.analytics_store.has_billing_events
+                )
+            )
+            if self.analytics_store.bind_owner(owner_key, reset_unowned=reset_unowned):
+                self._force_next_backfill = True
+                self.log_line.emit("Analytics antigo limpo para sincronizar a conta atual.")
         self.port_allocator.compact({i.id for i in instances})
         
         for i in instances:
@@ -350,6 +369,15 @@ class AppController(QObject):
         self.log_line.emit(f"✓ Sincronizado ({len(instances)} inst.)")
         self.instances_refreshed.emit(instances, user)
 
+    def _analytics_owner_key(self, user: UserInfo | None) -> str | None:
+        if user and user.email:
+            return f"email:{user.email.strip().lower()}"
+        api_key = str(self.config.api_key or "").strip()
+        if not api_key:
+            return None
+        digest = hashlib.sha1(api_key.encode("utf-8")).hexdigest()[:12]
+        return f"api:{digest}"
+
     def _log_analytics_snapshot(self, instances, user, force_backfill):
         if not user: return
         if self.analytics_store.entry_count < 2 or force_backfill:
@@ -372,6 +400,14 @@ class AppController(QObject):
     def request_deep_sync(self):
         self._force_next_backfill = True
         self._trigger_refresh.emit()
+
+    def reset_analytics(self):
+        self.analytics_store.clear_history()
+        owner_key = self._analytics_owner_key(self.last_user)
+        if owner_key:
+            self.analytics_store.bind_owner(owner_key)
+        self.log_line.emit("Analytics local resetado. Sincronizando novamente...")
+        self.request_deep_sync()
 
     # ---- Store API ----
     def search_offers(self, q):

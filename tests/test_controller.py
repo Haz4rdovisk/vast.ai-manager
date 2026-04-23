@@ -67,6 +67,66 @@ def test_today_spend_uses_live_tracker_when_billing_has_no_today(store):
     assert c.today_spend() == 0.42
 
 
+def test_live_overlay_uses_full_fleet_burn_rate(store):
+    c = AppController(store)
+    c.config.include_storage_in_burn_rate = True
+    c.config.estimated_network_cost_per_hour = 0.05
+    c.last_instances = [
+        Instance(
+            id=1,
+            state=InstanceState.RUNNING,
+            gpu_name="RTX 3090",
+            dph=0.50,
+            disk_space_gb=200.0,
+            storage_total_cost=7.20,
+        ),
+        Instance(
+            id=2,
+            state=InstanceState.STOPPED,
+            gpu_name="RTX 3090",
+            dph=0.0,
+            disk_space_gb=200.0,
+            storage_total_cost=14.40,
+        ),
+    ]
+    c.analytics_store.last_charge_end = MagicMock(
+        return_value=datetime.now() - timedelta(hours=2)
+    )
+
+    overlay = c._live_overlay_since(datetime.now() - timedelta(hours=5))
+
+    expected_hourly = 0.50 + (7.20 / 720.0) + (14.40 / 720.0) + 0.05
+    assert abs(overlay - (expected_hourly * 2.0)) < 0.02
+
+
+def test_on_refreshed_keeps_last_user_during_fast_instance_emit(store):
+    c = AppController(store)
+    c._check_tunnels_health = MagicMock()
+    c._connect_started_instances_when_ready = MagicMock()
+    c._sync_live_workers = MagicMock()
+    c._log_analytics_snapshot = MagicMock()
+    user = UserInfo(balance=2.0, email="user@example.com")
+
+    c._on_refreshed([Instance(id=1, state=InstanceState.RUNNING, gpu_name="RTX 3090")], user)
+    c._on_refreshed([Instance(id=1, state=InstanceState.RUNNING, gpu_name="RTX 3090")], None)
+
+    assert c.last_user == user
+
+
+def test_reset_analytics_clears_store_and_requests_sync(store):
+    c = AppController(store)
+    c.last_user = UserInfo(balance=2.0, email="user@example.com")
+    c.analytics_store.clear_history = MagicMock()
+    c.analytics_store.bind_owner = MagicMock()
+    c.request_deep_sync = MagicMock()
+
+    c.reset_analytics()
+
+    c.analytics_store.clear_history.assert_called_once()
+    c.analytics_store.bind_owner.assert_called_once_with("email:user@example.com")
+    c.request_deep_sync.assert_called_once()
+
+
 def test_controller_shutdown_stops_everything(store):
     c = AppController(store)
     c.ssh = MagicMock()
