@@ -35,88 +35,58 @@ Then enter your [Vast.ai API Key](https://cloud.vast.ai/account/) in the **Setti
 *   **Native Terminal Integration**: Automatic SSH tunneling with one-click terminal launch.
 
 ### Instances Tab
-
 The Instances tab provides a dense, multi-instance interface for power users:
-
-- **Per-instance port allocator** — each tunnel gets its own local port, auto-incremented from `default_tunnel_port`; mappings are persisted to `~/.vastai-app/config.json` so restarts preserve URLs.
+- **Per-instance port allocator** — each tunnel gets its own local port, auto-incremented from `default_tunnel_port`.
 - **Filters** — GPU type, status, label dropdowns plus sort selector; state persists across restarts.
-- **Label tabs** — All / No Label / custom labels, synced with the Vast API `label` field.
-- **Bulk operations** — `Start All` acts on all visible filtered instances; Select Mode supports partial selection. Bulk actions show a confirmation modal with aggregate cost. Destroy requires explicit acknowledgement.
-- **Action bar** — primary CTA plus icon buttons for reboot, snapshot, destroy, log, label, flag, SSH key, and Open Lab. Powered by qtawesome MaterialDesignIcons.
-- **Per-card log** — the log icon opens a modal filtered to that instance's `#<id>` log lines.
+- **Bulk operations** — Start/Stop actions on visible filtered instances with aggregate cost confirmation.
+- **Action bar** — primary CTA plus icon buttons for reboot, snapshot, destroy, log, label, and Open Lab.
 
 ### 🛒 Marketplace & Rental
-*   **Advanced Search**: Deep filtering by GPU model (4090, A100, H100), VRAM, CPU architecture, and region.
-*   **Workflow Presets**: Quick-filters for ML training, inference, and rendering.
-*   **One-Click Deployment**: Automated rental using custom templates, Docker images, and SSH key injection.
+*   **Intelligent Search**: Unified discovery interface for GPU instances and Hugging Face model integration.
+*   **Deep Filtering**: Filter by specific GPU models (H100, A100, 4090), VRAM capacity, and region-specific pricing.
+*   **Smart Templates**: One-click deployment using community-optimized Docker templates with pre-configured environments.
+*   **Workflow Presets**: Pre-defined filters for ML training, inference, and high-performance rendering.
 
 ### 📊 Analytics & Finance
-*   **Spend Tracking**: Aggregated burn rates for 24h, 7 days, and 30 days.
-*   **Cycle Monitor**: Track remaining balance against recharge frequency.
-*   **Historical Timeline**: Visualized timeline of credit consumption and deposits.
+*   **Balance Reconstruction**: Local synchronization of API usage data to build a high-fidelity historical balance timeline.
+*   **Cycle Monitor**: Track remaining credits against projected consumption rates to prevent service interruptions.
+*   **Spend Intelligence**: Detailed burn rate analysis across 24h, 7d, and 30d windows.
+*   **Financial Transparency**: Integrated view of all invoices, deposits, and consumption spikes.
 
-### 🧪 Remote AI Lab
-*   **Hardware Gauges**: Visual resource availability meters for GPU and System RAM.
-*   **Automated Setup**: One-click scripts to install and configure `LLMfit` and `llama.cpp`.
-*   **Model Advisor**: Integrated recommendation engine for GGUF model selection based on local hardware capacity.
-
-## AI Lab Studio
-
-The AI Lab now works like LM Studio:
-
-- **Discover** — local scorer ranks catalog models for every rented instance, shown as chips on each card.
-- **Install** — one click downloads llama.cpp (if missing) and the GGUF, with live step-by-step progress.
-- **Studio** — pick an instance, pick a model, tweak parameters, hit Load. The llama.cpp webui is embedded for chat. Launch errors surface a diagnostic banner with a one-click Fix action.
-
-Requires `PySide6-Addons` (QtWebEngine) and `requests`. See `requirements.txt`.
+### 🧪 Remote AI Lab (Studio)
+The AI Lab module transforms remote cloud instances into a private **LM Studio** environment:
+*   **Discover**: An automated scoring engine ranks GGUF models against your remote instance's VRAM and CUDA capabilities.
+*   **Automated Setup**: One-click provisioning of `llama.cpp` and optimized driver/environment configurations.
+*   **Interactive Studio**: Embedded WebEngine chat interface for direct interaction with deployed LLMs.
+*   **Diagnostic Resilience**: Real-time error monitoring with "One-Click Fix" banners for common remote setup hurdles.
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation & Requirements
 
-### Requirements
+### Prerequisites
 *   **OS**: Windows 10/11
-*   **Python**: 3.10 or higher
-*   **OpenSSH Client**: Must be enabled in Windows Features (`Optional Features` → `OpenSSH Client`).
-*   **Terminal**: [Windows Terminal](https://aka.ms/terminal) is recommended for the best SSH experience.
+*   **Python**: 3.10+
+*   **OpenSSH**: Must be available in your system path.
+*   **Terminal**: [Windows Terminal](https://aka.ms/terminal) is recommended.
 
 ### Setup
-1.  **Clone the repository**:
+1.  **Clone & Setup**:
     ```bash
     git clone https://github.com/Haz4rdovisk/vast.ai-manager.git
-    cd vast.ai-manager
-    ```
-
-2.  **Create a Virtual Environment**:
-    ```bash
-    python -m venv .venv
-    .venv\Scripts\activate
-    ```
-
-3.  **Install Dependencies**:
-    ```bash
+    cd vast.ai-manager && python -m venv .venv && .venv\Scripts\activate
     pip install -r requirements.txt
     ```
-
-### Configuration
-1.  Run the application: `python main.py`
-2.  In the **Settings** view, enter your **Vast.ai API Key** from your [account page](https://cloud.vast.ai/account/).
-3.  Click **Test Connection** to verify availability.
-4.  Save and start managing your fleet.
+2.  **Configuration**:
+    *   Run `python main.py`.
+    *   Enter your [Vast.ai API Key](https://cloud.vast.ai/account/) in the **Settings** view.
+    *   Click **Test Connection** and save.
 
 ---
 
 ## 🏗 Architecture & Tech Stack
 
-### Core Technologies
-*   **PySide6**: Qt6 framework for high-fidelity native UI with hardware-accelerated rendering.
-*   **Vast.ai SDK**: Official Python client (`vastai>=0.3`) for cloud API integration.
-*   **psutil**: Cross-platform system monitoring for local resource tracking.
-*   **qtawesome**: Icon library for intuitive visual navigation.
-
 ### System Architecture
-The application follows a **MVC (Model-View-Controller)** pattern with asynchronous worker threads:
-
 ```mermaid
 graph TB
     subgraph UI Layer [PySide6 Views]
@@ -136,12 +106,15 @@ graph TB
         H[RentWorker]
         I[LiveMetrics]
         J[SSH Tunnel]
+        N[HFSearchWorker]
     end
     
     subgraph Services [Business Logic]
         K[VastService]
         L[RentalService]
         M[AnalyticsStore]
+        O[HuggingFaceClient]
+        P[JobsManager]
     end
     
     A --> F
@@ -153,9 +126,12 @@ graph TB
     F --> H
     F --> I
     F --> J
+    F --> N
     G --> K
     H --> L
     I --> M
+    N --> O
+    F --> P
 ```
 
 ### Project Structure
@@ -163,112 +139,46 @@ graph TB
 vastai-app/
 ├── app/
 │   ├── ui/              # PySide6 views (MVC pattern)
-│   │   ├── components/  # Reusable widgets (gauges, cards, forms)
-│   │   └── views/       # Main application screens
 │   ├── workers/         # Async background tasks (QThread-based)
 │   ├── services/        # Business logic & API integration
-│   ├── lab/             # Remote AI Lab module (LLMfit, llama.cpp automation)
-│   │   ├── state/       # Application state management
-│   │   ├── views/       # Lab-specific UI components
-│   │   └── workers/     # Remote setup and probing tasks
-│   ├── config.py        # Configuration store (API keys, preferences)
-│   └── theme.py         # Dark/light theme definitions & stylesheets
-├── tests/               # pytest suite with fixtures
-├── docs/                # Technical documentation & design specs
+│   ├── lab/             # Remote AI Lab module (Automation & Model Deployment)
+│   │   ├── services/    # Hugging Face integration and Studio logic
+│   │   ├── state/       # Lab-specific state management
+│   │   ├── views/       # Discover, Studio, and Hardware views
+│   │   └── workers/     # Setup, search, and remote probing tasks
+│   ├── config.py        # Configuration store
+│   └── theme.py         # Dark/light theme definitions & HSL tokens
+├── tests/               # pytest suite
 └── main.py              # Application entry point
 ```
 
 ---
 
-## 📖 Usage Examples
+## 📖 Usage Workflows
 
-### Workflow 1: Rent a GPU in < 2 Minutes
-1. Navigate to **Store** → Select preset "ML Training" or custom filter (e.g., RTX 4090, $0.15/hr)
-2. Click **Rent** on desired offer → Configure template (eg. Vast.ai NVIDIA CUDA)
-3. Wait for provisioning → Instance appears in **Instances** with live metrics
+### 1. Rent and Deploy
+1. Find a GPU in the **Store** and click **Rent**.
+2. Once the instance is active, click the **Open Lab** icon.
+3. Use **Discover** to pick a compatible GGUF model and click **Install**.
+4. In the **Studio** tab, load the model and start chatting in the embedded UI.
 
-### Workflow 2: Monitor Costs & Set Alerts
-1. Open **Analytics** view to see 24h/7d/30d burn rates
-2. View "Cycle Monitor" to track remaining balance vs. recharge frequency
-3. Historical timeline shows credit consumption spikes and deposits
-
-### Workflow 3: Deploy LLM with One Click
-1. Open **Studio** from an active instance
-2. Use **Discover** to score catalog models against the selected hardware
-3. Click **Install** to build `llama.cpp` if needed and download the GGUF with live progress
-4. Return to **Studio**, pick the model, tune parameters, and load the embedded llama.cpp webui
-
----
-
-## 🖼 Screenshots
-
-Screenshots are maintained with the release notes as the interface changes.
-
----
-
-## ❓ Troubleshooting
-
-### SSH Terminal Fails to Open
-**Cause**: OpenSSH Client not enabled in Windows.
-**Fix**: 
-1. Go to `Settings` → `Apps` → `Optional Features`
-2. Click "Add a feature" → Search for **OpenSSH Client** → Install
-3. Restart the application
-
-### API Key Validation Fails
-**Cause**: Invalid key or network timeout.
-**Fix**:
-1. Verify key at [Vast.ai Account](https://cloud.vast.ai/account/)
-2. Check firewall/proxy settings blocking `api.vast.ai`
-3. Ensure Python SSL certificates are up to date: `pip install --upgrade certifi`
-
-### PySide6 Display Issues (Multi-Monitor)
-**Cause**: DPI scaling mismatch.
-**Fix**: Add before `QApplication` instantiation:
-```python
-import os
-os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-```
+### 2. Finance Monitoring
+1. Check the **Analytics** view to see your real-time burn rate.
+2. Use the **Cycle Tracker** to plan your next credit deposit based on historical consumption spikes.
 
 ---
 
 ## 🤝 Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-### Development Setup
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run tests
-pytest tests/ -v
-
-# Check code style (if configured)
-ruff check .
-```
-
-### Guidelines
-*   **Branch Naming**: `feature/description` or `fix/description`
-*   **Commit Messages**: Conventional Commits format (`feat:`, `fix:`, `docs:`)
-*   **Code Style**: Follow existing PEP 8 conventions in the codebase
-*   **Testing**: Add tests for new features in `tests/` directory
-
-### Areas Needing Help
-*   Linux/macOS compatibility (currently Windows-only)
-*   Additional GPU model presets in Marketplace
-*   Enhanced analytics with export to CSV/PDF
+Contributions are welcome! Please follow the existing MVC pattern and HSL-based styling in `theme.py`.
 
 ---
 
 ## 📄 License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License**.
 
 ---
 
 ## 🙏 Acknowledgments
-
-*   **Vast.ai Team**: For providing the cloud infrastructure API and documentation.
-*   **PySide6 Community**: Qt for Python bindings enabling native UI development.
-*   **LLMfit Project**: Open-source LLM training framework integrated in Remote AI Lab.
+*   **Vast.ai Team** for the cloud API.
+*   **Hugging Face** for the model ecosystem.
+*   **llama.cpp community** for the inference orchestration.
