@@ -43,7 +43,6 @@ class InstancesView(QWidget):
     open_lab_requested = Signal(int)
     open_store_requested = Signal()
     open_settings_requested = Signal()
-    open_logs_requested = Signal()
     open_analytics_requested = Signal()
     jobs_requested = Signal()
     bulk_requested = Signal(str, list, dict)
@@ -105,10 +104,6 @@ class InstancesView(QWidget):
         self.btn_select.clicked.connect(self._toggle_select_mode)
         header.add_action(self.btn_select)
 
-        self.btn_logs = IconButton(icons.LOG, "Open global logs")
-        self.btn_logs.clicked.connect(self.open_logs_requested)
-        header.add_action(self.btn_logs)
-
         self.btn_jobs = IconButton(icons.CLOUD_SYNC, "Global Setup Jobs")
         self.btn_jobs.clicked.connect(self.jobs_requested.emit)
         header.add_action(self.btn_jobs)
@@ -139,7 +134,10 @@ class InstancesView(QWidget):
         self._cards_layout.setSpacing(8)
         self.empty_state = self._build_empty_state()
         self._cards_layout.addWidget(self.empty_state, 1)
-        self._cards_layout.addStretch(1)
+        
+        self._stretch_widget = QWidget()
+        self._stretch_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._cards_layout.addWidget(self._stretch_widget)
         self.scroll.setWidget(host)
         outer.addWidget(self.scroll, stretch=1)
 
@@ -147,7 +145,12 @@ class InstancesView(QWidget):
         self.bulk_bar.action_clicked.connect(self._on_bulk_action)
         self.bulk_bar.clear_clicked.connect(self._clear_selection)
         self.bulk_bar.setVisible(False)
-        outer.addWidget(self.bulk_bar)
+
+        bulk_lay = QHBoxLayout()
+        bulk_lay.addStretch(1)
+        bulk_lay.addWidget(self.bulk_bar)
+        bulk_lay.addStretch(1)
+        outer.addLayout(bulk_lay)
 
         self.console_drawer = ConsoleDrawer(self)
         self.console_drawer.expanded_changed.connect(self._position_console_drawer)
@@ -333,7 +336,7 @@ class InstancesView(QWidget):
         row.addWidget(panel)
         row.addStretch(1)
         wrap.addLayout(row)
-        wrap.addStretch(1)
+        wrap.addStretch(2)  # Optical centering
         host.setVisible(False)
         self._empty_mode = "store"
         return host
@@ -347,6 +350,7 @@ class InstancesView(QWidget):
     def _sync_empty_state(self, has_visible_cards: bool) -> None:
         if self._loading_cards:
             self.empty_state.setVisible(False)
+            self._stretch_widget.setVisible(True)
             return
         if not self._all:
             self._empty_mode = "store"
@@ -362,6 +366,7 @@ class InstancesView(QWidget):
                 "Rent a GPU from Store and it will appear here with live status, SSH actions, and Lab shortcuts."
             )
             self.empty_state.setVisible(True)
+            self._stretch_widget.setVisible(False)
             self.btn_start_all.setEnabled(False)
             return
         if not has_visible_cards:
@@ -378,9 +383,11 @@ class InstancesView(QWidget):
                 "Adjust the GPU, status, label, or sort filters to bring cards back into view."
             )
             self.empty_state.setVisible(True)
+            self._stretch_widget.setVisible(False)
             self.btn_start_all.setEnabled(False)
             return
         self.empty_state.setVisible(False)
+        self._stretch_widget.setVisible(True)
         self.btn_start_all.setEnabled(True)
 
     def _build_card(self, inst: Instance) -> InstanceCard:

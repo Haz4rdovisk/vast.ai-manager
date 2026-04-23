@@ -212,11 +212,6 @@ class AppShell(QWidget):
         self.instances.open_settings_requested.connect(
             lambda: self._go("settings")
         )
-        self.instances.open_logs_requested.connect(
-            lambda: controller.toast_requested.emit(
-                "Use o ícone de log em cada card para logs filtrados.", "info", 2500
-            )
-        )
         self.instances.open_analytics_requested.connect(
             lambda: self._go("analytics")
         )
@@ -497,8 +492,8 @@ class AppShell(QWidget):
 
     def _open_jobs_modal(self) -> None:
         from app.ui.views.instances.jobs_modal import JobsModal
-        modal = JobsModal(self.job_registry, parent=self)
-        modal.exec()
+        self._jobs_modal = JobsModal(self.job_registry, anchor=self.instances.btn_jobs, parent=None)
+        self._jobs_modal.show()
 
     def _show_update_dialog(self, iid: int):
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)

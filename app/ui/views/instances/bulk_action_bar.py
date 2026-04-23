@@ -53,7 +53,6 @@ class BulkActionBar(QFrame):
             self.btn_destroy,
         ):
             lay.addWidget(btn)
-        lay.addStretch(1)
 
     def _action_btn(self, mdi: str, label: str, action: str, *, danger: bool = False) -> QPushButton:
         btn = QPushButton(label)

@@ -1,13 +1,13 @@
 from __future__ import annotations
 import time
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QWidget, QPushButton
-)
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPainter, QColor
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QPushButton
+)
 
 from app import theme as t
-from app.ui.components.primitives import GlassCard, IconButton
+from app.ui.components.primitives import GlassCard, IconButton, SkeletonBlock
 from app.ui.components import icons
 from app.lab.services.job_registry import JobRegistry
 
@@ -40,20 +40,31 @@ class JobProgressBar(QWidget):
                 p.drawRoundedRect(0, 0, width, self.height(), 4, 4)
 
 
-class JobsModal(QDialog):
+class JobsModal(QWidget):
     """A minimal floating modal showing all background jobs."""
-    def __init__(self, registry: JobRegistry, parent=None):
+    def __init__(self, registry: JobRegistry, anchor=None, parent=None):
         super().__init__(parent)
         self.registry = registry
+        self.anchor = anchor
         self.setWindowTitle("Global Active Jobs")
         self.resize(500, 450)
-        self.setStyleSheet(t.STYLESHEET)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("JobsModal")
+        self.setStyleSheet("JobsModal { background: transparent; }")
+
+        # Native Popup behavior (exactly like Chrome)
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
         self.cards_layout = None
+        self._is_loading = True
         self._build_ui()
-        self._refresh()
+        
+        # Render initial skeleton state
+        for _ in range(3):
+            self._add_skeleton_card()
+
+        # Simulate brief loading delay to let the UI feel premium
+        QTimer.singleShot(500, self._finish_loading)
 
         # Check for dynamic updates
         self._timer = QTimer(self)
@@ -63,14 +74,47 @@ class JobsModal(QDialog):
         # Wire close shortcut
         self.close_btn.clicked.connect(self.close)
 
+    def _finish_loading(self):
+        self._is_loading = False
+        self._refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.anchor:
+            pos = self.anchor.mapToGlobal(self.anchor.rect().bottomRight())
+            # Align top-right of modal to bottom-right of button
+            self.move(pos.x() - self.width(), pos.y() + 8)
+
+    def paintEvent(self, event):
+        # Ensure the 4 tiny corners outside the 8px border-radius are perfectly transparent
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.transparent)
+
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
+        # ZERO margins! We do not reserve space for a custom shadow. This completely
+        # eliminates the possibility of a dark bounding box leaking from the OS.
+        root.setContentsMargins(0, 0, 0, 0)
 
-        main_card = GlassCard()
-        lay = main_card.body()
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(15)
+        main_bg = QWidget()
+        main_bg.setObjectName("JobsModalBg")
+        main_bg.setStyleSheet(t.STYLESHEET + f"""
+            QWidget#JobsModalBg {{
+                background: {t.SURFACE_1};
+                border: 1px solid {t.BORDER_LOW};
+                border-radius: 8px;
+            }}
+            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{
+                background: transparent;
+                border: none;
+            }}
+        """)
+
+        # No QGraphicsDropShadowEffect. We rely on the 1px border and native OS composite.
+        
+        lay = QVBoxLayout(main_bg)
+        lay.setContentsMargins(15, 15, 15, 15)
+        lay.setSpacing(10)
 
         # Header
         header = QHBoxLayout()
@@ -92,17 +136,20 @@ class JobsModal(QDialog):
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         self.cards_layout = QVBoxLayout(container)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setContentsMargins(0, 0, 14, 0)
         self.cards_layout.setSpacing(10)
         self.cards_layout.addStretch()
         
         scroll.setWidget(container)
         lay.addWidget(scroll)
 
-        root.addWidget(main_card)
+        root.addWidget(main_bg)
 
     def _refresh(self):
         if not self.isVisible() or not self.cards_layout:
+            return
+            
+        if getattr(self, "_is_loading", False):
             return
 
         # Clear existing
@@ -169,5 +216,24 @@ class JobsModal(QDialog):
             prog = JobProgressBar()
             prog.set_percent(desc.percent or 0)
             body.addWidget(prog)
+
+        self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
+
+    def _add_skeleton_card(self):
+        card = GlassCard()
+        body = card.body()
+        body.setContentsMargins(15, 15, 15, 15)
+
+        top = QHBoxLayout()
+        top.addWidget(SkeletonBlock(w=200, h=16))
+        top.addStretch()
+        top.addWidget(SkeletonBlock(w=80, h=14))
+        body.addLayout(top)
+
+        bottom = QHBoxLayout()
+        bottom.addWidget(SkeletonBlock(w=50, h=12))
+        bottom.addStretch()
+        bottom.addWidget(SkeletonBlock(w=60, h=12))
+        body.addLayout(bottom)
 
         self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
