@@ -47,7 +47,7 @@ class OfferList(QWidget):
 
         self.toolbar = QHBoxLayout()
         self.toolbar.setContentsMargins(0, 0, 0, 0)
-        self.toolbar.setSpacing(t.SPACE_5)
+        self.toolbar.setSpacing(t.SPACE_2)
         self._build_gpu_count_picker()
         root.addLayout(self.toolbar)
 
