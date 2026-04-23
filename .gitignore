@@ -13,3 +13,4 @@ dist/
 .claude/
 docs/
 plans/
+test_github.py
