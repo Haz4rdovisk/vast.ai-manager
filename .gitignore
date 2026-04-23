@@ -10,5 +10,6 @@ dist/
 .idea/
 .vscode/
 .superpowers/
+.claude/
 docs/
 plans/
