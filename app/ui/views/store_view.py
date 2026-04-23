@@ -53,6 +53,7 @@ class StoreView(QWidget):
 
         self.filters.search_clicked.connect(self.search)
         self.filters.query_changed.connect(self._on_query_changed)
+        self.offers.market_filters_reset_requested.connect(self.filters.reset)
         self.offers.rent_clicked.connect(self._open_rent_dialog)
         self.offers.details_clicked.connect(self._open_details_dialog)
 

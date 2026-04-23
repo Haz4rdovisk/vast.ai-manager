@@ -17,18 +17,8 @@ from PySide6.QtWidgets import (
 
 from app import theme as t
 from app.models_rental import Offer
+from app.services.offer_pricing import offer_price_breakdown, raw_float
 from app.ui.components.primitives import GlassCard
-
-
-def _raw_float(offer: Offer, *names: str) -> float | None:
-    for name in names:
-        value = offer.raw.get(name)
-        try:
-            if value is not None:
-                return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
 
 
 def _text(value: Any, fallback: str = "-") -> str:
@@ -64,26 +54,16 @@ def _percent(value: float | None) -> str:
 
 
 def _price_rows(offer: Offer) -> list[tuple[str, str]]:
-    total_hour = max(float(offer.dph_total or 0), 0.0)
-    storage_gb = (
-        _raw_float(offer, "allocated_storage", "allocated_storage_gb", "disk_gb")
-        or offer.disk_space_gb
-        or 0.0
-    )
-    storage_month = max(float(offer.storage_cost or 0.0) * storage_gb, 0.0)
-    storage_hour = storage_month / (30.0 * 24.0) if storage_month else 0.0
-    gpu_hour = max(total_hour - storage_hour, 0.0)
-    up = _raw_float(offer, "inet_up_cost")
-    down = _raw_float(offer, "inet_down_cost")
+    price = offer_price_breakdown(offer)
 
     def tb(value: float | None) -> str:
         return "-" if value is None else f"${value * 1000:.3f}/TB"
 
     return [
-        ("GPU", f"{_money(gpu_hour)}  {_money(gpu_hour * 24, 'day')}  {_money(gpu_hour * 24 * 30, 'mo')}"),
-        ("Storage", f"{_money(storage_hour)}  {_money(storage_hour * 24, 'day')}  {_money(storage_hour * 24 * 30, 'mo')}"),
-        ("Total", f"{_money(total_hour)}  {_money(total_hour * 24, 'day')}  {_money(total_hour * 24 * 30, 'mo')}"),
-        ("Internet", f"Up {tb(up)}  Down {tb(down)}"),
+        ("GPU", f"{_money(price.compute_hour)}  {_money(price.compute_day, 'day')}  {_money(price.compute_month, 'mo')}"),
+        ("Storage", f"{price.storage_gib:g} GiB  {_money(price.storage_hour)}  {_money(price.storage_day, 'day')}  {_money(price.storage_month, 'mo')}"),
+        ("Total", f"{_money(price.total_hour)}  {_money(price.total_day, 'day')}  {_money(price.total_month, 'mo')}"),
+        ("Internet", f"Up {tb(price.inet_up_per_gb)}  Down {tb(price.inet_down_per_gb)}"),
     ]
 
 
@@ -142,10 +122,10 @@ class OfferDetailsDialog(QDialog):
         content_lay.setContentsMargins(0, 0, 0, 0)
         content_lay.setSpacing(t.SPACE_3)
 
-        gpu_mem_bw = _raw_float(offer, "gpu_mem_bw", "gpu_mem_bandwidth")
-        pcie_bw = _raw_float(offer, "pcie_bw", "pcie_bandwidth")
-        pci_gen = _raw_float(offer, "pci_gen")
-        total_flops = _raw_float(offer, "total_flops", "flops", "total_flops_tflops")
+        gpu_mem_bw = raw_float(offer.raw, "gpu_mem_bw", "gpu_mem_bandwidth")
+        pcie_bw = raw_float(offer.raw, "pcie_bw", "pcie_bandwidth")
+        pci_gen = raw_float(offer.raw, "pci_gen")
+        total_flops = raw_float(offer.raw, "total_flops", "flops", "total_flops_tflops")
         compute = offer.compute_cap / 100 if offer.compute_cap else None
 
         content_lay.addWidget(

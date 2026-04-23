@@ -351,7 +351,7 @@ class FilterSidebar(QFrame):
             country=self.country_cb.currentData() or None,
             hosting_type=self.hosting_cb.currentData() or None,
             datacenter_only=self.datacenter_only.isChecked(),
-            verified=self.verified.isChecked(),
+            verified=True if self.verified.isChecked() else None,
             external=None if self.external_ok.isChecked() else False,
         )
 

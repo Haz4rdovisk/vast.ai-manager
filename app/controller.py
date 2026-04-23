@@ -232,7 +232,7 @@ class AppController(QObject):
         self.bulk_thread.start()
 
         self._apply_interval()
-        self.log_line.emit("Conectando \u00e0 Vast.ai...")
+        self.log_line.emit("Connecting to Vast.ai...")
         self._trigger_refresh.emit()
 
     def shutdown(self):
@@ -259,7 +259,7 @@ class AppController(QObject):
         )
         self.config_store.save(cfg)
         self.ssh.ssh_key_path = cfg.ssh_key_path
-        self.log_line.emit("Configura\u00e7\u00f5es salvas.")
+        self.log_line.emit("Settings saved.")
         if self.rental: self.sync_local_ssh_key()
         if changed_key: self.bootstrap()
         else: self._apply_interval()
@@ -291,7 +291,7 @@ class AppController(QObject):
     def detect_existing_tunnels(self):
         """Scans the OS for SSH tunnels already running from previous app sessions."""
         if not self.ssh: return
-        self.log_line.emit("⌛ Escaneando túneis ativos no sistema...")
+        self.log_line.emit("⌛ Scanning for active system tunnels...")
         found = self.ssh.detect_win_tunnels()
         if not found:
             return
@@ -306,14 +306,14 @@ class AppController(QObject):
             # host:port should match r_target. If host changed (rare), we skip.
             if self.tunnel_states.get(iid) != TunnelStatus.CONNECTED:
                 self.tunnel_states[iid] = TunnelStatus.CONNECTED
-                self.tunnel_status_changed.emit(iid, TunnelStatus.CONNECTED.value, "Túnel re-identificado e assumido.")
+                self.tunnel_status_changed.emit(iid, TunnelStatus.CONNECTED.value, "Tunnel re-identified and adopted.")
                 self._start_live_metrics(iid)
                 adoptions += 1
         
         if adoptions > 0:
-            self.log_line.emit(f"✓ {adoptions} túnel(eis) re-identificado(s) com sucesso.")
+            self.log_line.emit(f"✓ {adoptions} tunnel(s) successfully re-identified.")
         else:
-            self.log_line.emit("ℹ Nenhum túnel pré-existente encontrado.")
+            self.log_line.emit("ℹ No pre-existing tunnels found.")
 
     # ---- Refresh callback ----
     def _on_refreshed(self, instances, user):
@@ -331,7 +331,7 @@ class AppController(QObject):
             )
             if self.analytics_store.bind_owner(owner_key, reset_unowned=reset_unowned):
                 self._force_next_backfill = True
-                self.log_line.emit("Analytics antigo limpo para sincronizar a conta atual.")
+                self.log_line.emit("Old analytics cleared to sync the current account.")
         self.port_allocator.compact({i.id for i in instances})
         
         for i in instances:
@@ -344,7 +344,7 @@ class AppController(QObject):
                 if self.tunnel_states.get(i.id) != TunnelStatus.DISCONNECTED:
                     # Clear zombie tunnel state if instance is stopped/deleted
                     self.tunnel_states[i.id] = TunnelStatus.DISCONNECTED
-                    self.tunnel_status_changed.emit(i.id, TunnelStatus.DISCONNECTED.value, "Instância desligada.")
+                    self.tunnel_status_changed.emit(i.id, TunnelStatus.DISCONNECTED.value, "Instance is stopped.")
             
             # --- Sticky Transition Logic ---
             lock = self._transition_locks.get(i.id)
@@ -366,7 +366,7 @@ class AppController(QObject):
         self._check_tunnels_health()
         self._connect_started_instances_when_ready(instances)
         self._sync_live_workers(instances)
-        self.log_line.emit(f"✓ Sincronizado ({len(instances)} inst.)")
+        self.log_line.emit(f"✓ Synced ({len(instances)} instances)")
         self.instances_refreshed.emit(instances, user)
 
     def _analytics_owner_key(self, user: UserInfo | None) -> str | None:
@@ -384,7 +384,7 @@ class AppController(QObject):
             try:
                 data = self.vast.fetch_financial_data()
                 self.analytics_store.import_history(data["invoices"], data["charges"], user.balance, data["sync"])
-                self.log_line.emit(f"\u2713 Hist\u00f3rico de gastos reconstru\u00eddo.")
+                self.log_line.emit("\u2713 Spending history rebuilt.")
             except Exception as e: self.log_line.emit(f"\u26a0 Analytics: {e}")
         
         bd = burn_rate_breakdown(instances, self.config.include_storage_in_burn_rate, self.config.estimated_network_cost_per_hour)
@@ -406,7 +406,7 @@ class AppController(QObject):
         owner_key = self._analytics_owner_key(self.last_user)
         if owner_key:
             self.analytics_store.bind_owner(owner_key)
-        self.log_line.emit("Analytics local resetado. Sincronizando novamente...")
+        self.log_line.emit("Local analytics reset. Syncing again...")
         self.request_deep_sync()
 
     # ---- Store API ----
@@ -430,7 +430,7 @@ class AppController(QObject):
         if not self.rental: return
         pub = self.ssh.get_public_key()
         if not pub:
-            self.log_line.emit("\u26a0 Chave SSH local n\u00e3o encontrada.")
+            self.log_line.emit("\u26a0 Local SSH key not found.")
             return
         
         def on_keys(keys):
@@ -439,10 +439,10 @@ class AppController(QObject):
             clean = pub.strip().split()[:2]
             match = next((k for k in keys if k.public_key.strip().split()[:2] == clean), None)
             if match:
-                self.log_line.emit(f"\u2713 Chave SSH local ativa (ID: {match.id})")
+                self.log_line.emit(f"\u2713 Local SSH key active (ID: {match.id})")
                 self._last_local_key_id = match.id
             else:
-                self.log_line.emit(f"⌛ Registrando chave local na Vast...")
+                self.log_line.emit("⌛ Registering local key with Vast...")
                 self._trigger_create_ssh_key.emit(pub)
         
         self.ssh_keys_refreshed.connect(on_keys)
@@ -453,7 +453,7 @@ class AppController(QObject):
         # Enforce local key if missing
         if req.ssh_key_id is None and hasattr(self, "_last_local_key_id"):
             req.ssh_key_id = self._last_local_key_id
-            self.log_line.emit("ℹ Usando chave SSH local para o aluguel.")
+            self.log_line.emit("ℹ Using local SSH key for rental.")
         self._trigger_rent.emit(req)
 
     # ---- Actions ----
@@ -503,26 +503,26 @@ class AppController(QObject):
         self.tunnel_status_changed.emit(iid, TunnelStatus.DISCONNECTED.value, "disconnected")
 
     def fix_instance_ssh(self, iid: int):
-        """Injeta a chave pública local em uma instância que já está rodando."""
+        """Attach the local public key to an already-running instance."""
         if not self.vast: return
         pub = self.ssh.get_public_key()
         if not pub:
-            self.log_line.emit("\u2717 Erro: Chave pública n\u00e3o encontrada.")
+            self.log_line.emit("\u2717 Error: public key not found.")
             return
         
-        self.log_line.emit(f"⌛ Tentando injetar chave SSH na inst\u00e2ncia #{iid}...")
+        self.log_line.emit(f"⌛ Trying to inject SSH key into instance #{iid}...")
         try:
             self.vast.attach_ssh_key(iid, pub)
-            self.log_line.emit(f"\u2713 Chave enviada! Aguarde 10s e tente conectar novamente.")
+            self.log_line.emit("\u2713 Key sent. Wait 10s, then try connecting again.")
             self.toast_requested.emit("Chave enviada! Tente novamente em 10s.", "success", 5000)
         except Exception as e:
-            self.log_line.emit(f"\u2717 Falha ao injetar chave: {e}")
+            self.log_line.emit(f"\u2717 Failed to inject key: {e}")
             self.toast_requested.emit(f"Falha ao injetar chave: {e}", "error", 5000)
 
     # ---- Handlers ----
     def _on_tunnel_status(self, iid, status, msg):
         self.tunnel_states[iid] = TunnelStatus(status)
-        self.log_line.emit(f"T\u00fanel #{iid}: {msg}")
+        self.log_line.emit(f"Tunnel #{iid}: {msg}")
         if status == TunnelStatus.CONNECTED.value:
             self._pending_tunnel.discard(iid)
             self._start_live_metrics(iid)

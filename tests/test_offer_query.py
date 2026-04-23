@@ -67,6 +67,16 @@ def test_datacenter_and_country():
     assert d["geolocation"] == {"eq": "US"}
 
 
+def test_region_expands_to_country_list_for_bundle_endpoint():
+    d, *_ = build_offer_query(OfferQuery(region="NA"))
+    assert d["geolocation"] == {"in": ["CA", "US"]}
+
+
+def test_legacy_region_token_expands_to_country_list():
+    d, *_ = build_offer_query(OfferQuery(region="North_America"))
+    assert d["geolocation"] == {"in": ["CA", "US"]}
+
+
 def test_consumer_hosting_maps_to_supported_datacenter_field():
     d, *_ = build_offer_query(OfferQuery(hosting_type="consumer"))
     assert d["datacenter"] == {"eq": False}
@@ -100,12 +110,23 @@ def test_sort_maps_to_order_string():
     assert order == "dlperf_per_dphtotal-"
 
 
+def test_interruptible_price_sort_uses_min_bid():
+    _, order, *_ = build_offer_query(
+        OfferQuery(offer_type=OfferType.INTERRUPTIBLE, sort=OfferSort.DPH_ASC)
+    )
+    assert order == "min_bid"
+    _, order, *_ = build_offer_query(
+        OfferQuery(offer_type=OfferType.INTERRUPTIBLE, sort=OfferSort.DPH_DESC)
+    )
+    assert order == "min_bid-"
+
+
 def test_qt_stringified_enum_values_are_accepted():
     d, order, *_ = build_offer_query(
         OfferQuery(offer_type="bid", sort="dph_total", max_bid=0.25)
     )
     assert d["min_bid"] == {"lte": 0.25}
-    assert order == "dph_total"
+    assert order == "min_bid"
 
 
 def test_storage_forwarded():
@@ -120,3 +141,8 @@ def test_no_default_when_all_three_safety_flags_off():
     d, *_ = build_offer_query(q)
     assert d["verified"] == {"eq": False}
     assert d["external"] == {"eq": True}
+
+
+def test_verified_none_drops_filter_to_include_all_verification_states():
+    d, *_ = build_offer_query(OfferQuery(verified=None))
+    assert "verified" not in d

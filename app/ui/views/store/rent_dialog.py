@@ -45,7 +45,7 @@ class RentDialog(QDialog):
         root.setContentsMargins(t.SPACE_5, t.SPACE_5, t.SPACE_5, t.SPACE_5)
         root.setSpacing(t.SPACE_4)
 
-        title = QLabel(f"{offer.num_gpus}x {offer.gpu_name} - ${offer.dph_total:.3f}/h")
+        title = QLabel(f"{offer.num_gpus}x {offer.gpu_name} - ${offer.effective_price():.3f}/h")
         title.setProperty("role", "title")
         root.addWidget(title)
 
@@ -227,7 +227,7 @@ class RentDialog(QDialog):
 
         self.confirmed.emit(
             RentRequest(
-                offer_id=self.offer.id,
+                offer_id=self.offer.ask_contract_id,
                 image=image or None,
                 template_hash=template_hash,
                 disk_gb=float(self.disk.value()),

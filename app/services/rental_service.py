@@ -53,7 +53,15 @@ class RentalService:
             ) from e
         if not isinstance(raw, list):
             return []
-        return [parse_offer(r) for r in raw if isinstance(r, dict) and "id" in r]
+        parsed: list[Offer] = []
+        for row in raw:
+            if not isinstance(row, dict) or "id" not in row:
+                continue
+            enriched = dict(row)
+            enriched.setdefault("_offer_type", offer_type)
+            enriched.setdefault("_requested_storage_gib", storage)
+            parsed.append(parse_offer(enriched))
+        return parsed
 
     def show_instance_filters(self) -> list[dict]:
         raw = self._call("show_instance_filters")

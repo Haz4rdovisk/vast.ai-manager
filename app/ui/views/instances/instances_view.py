@@ -3,8 +3,17 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
+import qtawesome as qta
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.models import Instance, InstanceState, TunnelStatus, UserInfo
 from app.services.instance_filter import FilterState, apply, gpu_key
@@ -32,6 +41,7 @@ class InstancesView(QWidget):
     destroy_requested = Signal(int)
     set_label_requested = Signal(int, str)
     open_lab_requested = Signal(int)
+    open_store_requested = Signal()
     open_settings_requested = Signal()
     open_logs_requested = Signal()
     open_analytics_requested = Signal()
@@ -86,7 +96,7 @@ class InstancesView(QWidget):
         outer.setSpacing(10)
 
         header = PageHeader(
-            "My Instances (0)",
+            "My Instances",
             "Manage cloud instances, SSH tunnels, and bulk actions.",
         )
         self.title = header.title_label
@@ -127,6 +137,8 @@ class InstancesView(QWidget):
         self._cards_layout = QVBoxLayout(host)
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
         self._cards_layout.setSpacing(8)
+        self.empty_state = self._build_empty_state()
+        self._cards_layout.addWidget(self.empty_state, 1)
         self._cards_layout.addStretch(1)
         self.scroll.setWidget(host)
         outer.addWidget(self.scroll, stretch=1)
@@ -137,16 +149,31 @@ class InstancesView(QWidget):
         self.bulk_bar.setVisible(False)
         outer.addWidget(self.bulk_bar)
 
-        self.console_drawer = ConsoleDrawer()
-        outer.addWidget(self.console_drawer)
-        self.console_drawer._expanded = False
-        self.console_drawer.view.setVisible(False)
-        self.console_drawer.toggle_btn.setText("▸  Console")
+        self.console_drawer = ConsoleDrawer(self)
+        self.console_drawer.expanded_changed.connect(self._position_console_drawer)
+        self.console_drawer.set_expanded(False)
+        self.console_drawer.raise_()
+        QTimer.singleShot(0, self._position_console_drawer)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_console_drawer()
+
+    def _position_console_drawer(self, *_args) -> None:
+        if not hasattr(self, "console_drawer"):
+            return
+        margin_x = t.SPACE_4
+        margin_bottom = t.SPACE_2
+        width = max(240, self.width() - (margin_x * 2))
+        height = self.console_drawer.height() or self.console_drawer.sizeHint().height()
+        y = max(0, self.height() - height - margin_bottom)
+        self.console_drawer.setGeometry(margin_x, y, width, height)
+        self.console_drawer.raise_()
 
     def handle_refresh(self, instances: list[Instance], user: UserInfo) -> None:
         self._clear_loading()
         self._all = self._with_sticky_scheduling(list(instances))
-        self.title.setText(f"My Instances ({len(self._all)})")
+        self.title.setText("My Instances")
 
         gpus = sorted({gpu_key(inst) for inst in self._all})
         self.filter_bar.set_gpu_options(gpus)
@@ -169,8 +196,11 @@ class InstancesView(QWidget):
         if self._all or self._cards or self._loading_cards:
             return
         self.title.setText("My Instances")
+        self.empty_state.setVisible(False)
         if not self._loading_timer.isActive():
             self._loading_timer.start(220)
+        if not self._loading_cards:
+            self._show_loading_cards()
 
     def _show_loading_cards(self) -> None:
         if self._all or self._cards or self._loading_cards:
@@ -186,7 +216,7 @@ class InstancesView(QWidget):
             body.addWidget(SkeletonBlock(420, 14))
             body.addWidget(SkeletonBlock(300, 24))
             self._loading_cards.append(card)
-            self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+            self._insert_list_widget(card)
 
     def _clear_loading(self) -> None:
         self._loading_timer.stop()
@@ -217,7 +247,7 @@ class InstancesView(QWidget):
             else:
                 card = self._build_card(inst)
                 self._cards[inst.id] = card
-                self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+                self._insert_list_widget(card)
             seen.add(inst.id)
 
         for iid in list(self._cards):
@@ -225,7 +255,133 @@ class InstancesView(QWidget):
                 widget = self._cards.pop(iid)
                 widget.setParent(None)
                 widget.deleteLater()
+        self._sync_empty_state(bool(filtered))
         self._refresh_bulk_bar()
+
+    def _insert_list_widget(self, widget: QWidget) -> None:
+        index = self._cards_layout.indexOf(self.empty_state)
+        self._cards_layout.insertWidget(max(0, index), widget)
+
+    def _build_empty_state(self) -> QWidget:
+        host = QWidget()
+        host.setObjectName("instances-empty-host")
+        host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        wrap = QVBoxLayout(host)
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.setSpacing(0)
+        wrap.addStretch(1)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch(1)
+
+        panel = QWidget()
+        panel.setObjectName("instances-empty-panel")
+        panel.setMinimumWidth(420)
+        panel.setMaximumWidth(560)
+        panel.setStyleSheet(
+            f"""
+            QLabel#instances-empty-icon {{
+                color: {t.ACCENT_SOFT};
+            }}
+            QLabel#instances-empty-title {{
+                color: {t.TEXT_HI};
+                font-size: 24px;
+                font-weight: 800;
+            }}
+            QLabel#instances-empty-body {{
+                color: {t.TEXT_MID};
+                font-size: 14px;
+            }}
+            """
+        )
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(0, 0, 0, 0)
+        panel_lay.setSpacing(t.SPACE_4)
+
+        self.empty_icon = QLabel()
+        self.empty_icon.setObjectName("instances-empty-icon")
+        self.empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        try:
+            self.empty_icon.setPixmap(
+                qta.icon("mdi.cloud-off-outline", color=t.ACCENT_SOFT).pixmap(48, 48)
+            )
+        except Exception:
+            self.empty_icon.setText("Cloud")
+
+        self.empty_title = QLabel("Your fleet is empty")
+        self.empty_title.setObjectName("instances-empty-title")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_body = QLabel(
+            "Rent a GPU from Store and it will appear here with live status, SSH actions, and Lab shortcuts."
+        )
+        self.empty_body.setObjectName("instances-empty-body")
+        self.empty_body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_body.setFixedWidth(460)
+        self.empty_body.setWordWrap(True)
+
+        self.empty_action = QPushButton("Go to Store")
+        self.empty_action.setFixedWidth(220)
+        self.empty_action.clicked.connect(self._on_empty_action)
+
+        panel_lay.addWidget(self.empty_icon)
+        panel_lay.addWidget(self.empty_title)
+        panel_lay.addWidget(self.empty_body, 0, Qt.AlignmentFlag.AlignHCenter)
+        panel_lay.addSpacing(t.SPACE_3)
+        panel_lay.addWidget(self.empty_action, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        row.addWidget(panel)
+        row.addStretch(1)
+        wrap.addLayout(row)
+        wrap.addStretch(1)
+        host.setVisible(False)
+        self._empty_mode = "store"
+        return host
+
+    def _on_empty_action(self) -> None:
+        if self._empty_mode == "filters":
+            self.filter_bar.reset.click()
+            return
+        self.open_store_requested.emit()
+
+    def _sync_empty_state(self, has_visible_cards: bool) -> None:
+        if self._loading_cards:
+            self.empty_state.setVisible(False)
+            return
+        if not self._all:
+            self._empty_mode = "store"
+            self.empty_action.setText("Go to Store")
+            try:
+                self.empty_icon.setPixmap(
+                    qta.icon("mdi.cloud-off-outline", color=t.ACCENT_SOFT).pixmap(48, 48)
+                )
+            except Exception:
+                pass
+            self.empty_title.setText("Your fleet is empty")
+            self.empty_body.setText(
+                "Rent a GPU from Store and it will appear here with live status, SSH actions, and Lab shortcuts."
+            )
+            self.empty_state.setVisible(True)
+            self.btn_start_all.setEnabled(False)
+            return
+        if not has_visible_cards:
+            self._empty_mode = "filters"
+            self.empty_action.setText("Clear Filters")
+            try:
+                self.empty_icon.setPixmap(
+                    qta.icon("mdi.filter-off-outline", color=t.ACCENT_SOFT).pixmap(48, 48)
+                )
+            except Exception:
+                pass
+            self.empty_title.setText("No instances match these filters")
+            self.empty_body.setText(
+                "Adjust the GPU, status, label, or sort filters to bring cards back into view."
+            )
+            self.empty_state.setVisible(True)
+            self.btn_start_all.setEnabled(False)
+            return
+        self.empty_state.setVisible(False)
+        self.btn_start_all.setEnabled(True)
 
     def _build_card(self, inst: Instance) -> InstanceCard:
         port = self._controller.port_allocator.get(inst.id)

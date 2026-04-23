@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -17,20 +18,28 @@ from PySide6.QtWidgets import (
 
 from app import theme as t
 from app.models_rental import Offer
-from app.ui.components.primitives import GlassCard, SkeletonBlock
+from app.ui.components import icons
+from app.ui.components.primitives import GlassCard, IconButton, SkeletonBlock
 from app.ui.views.store.offer_card import OfferCard
+
+
+_CARD_RENDER_BATCH_SIZE = 16
+_SCROLL_PREFETCH_PX = 900
 
 
 class OfferList(QWidget):
     rent_clicked = Signal(object)       # Offer
     details_clicked = Signal(object)    # Offer
     gpu_count_selected = Signal(object, object)
+    market_filters_reset_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cards: list[OfferCard] = []
         self.gpu_count_buttons: dict[str, QPushButton] = {}
         self._gpu_button_values: dict[QPushButton, tuple[object, object]] = {}
+        self._offers: list[Offer] = []
+        self._next_offer_index = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -62,6 +71,7 @@ class OfferList(QWidget):
         self.col.setSpacing(t.SPACE_3)
         self.col.addStretch()
         self.scroll.setWidget(self.container)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._maybe_render_more)
         root.addWidget(self.scroll, 1)
 
         self.set_empty("Choose filters, then search Vast.ai offers.")
@@ -111,12 +121,15 @@ class OfferList(QWidget):
         sort_widget: QComboBox,
     ) -> None:
         for widget, width in [
-            (type_widget, 124),
-            (gpu_widget, 138),
-            (region_widget, 132),
-            (sort_widget, 136),
+            (type_widget, 176),
+            (gpu_widget, 154),
+            (region_widget, 162),
+            (sort_widget, 188),
         ]:
             self.toolbar.addWidget(self._market_select(widget, width))
+        self.market_reset = IconButton(icons.CLOSE, "Reset store filters")
+        self.market_reset.clicked.connect(self.market_filters_reset_requested.emit)
+        self.toolbar.addWidget(self.market_reset)
         self.toolbar.addStretch()
 
     def set_gpu_count_choice(self, min_count: object, max_count: object) -> None:
@@ -140,24 +153,81 @@ class OfferList(QWidget):
         self._clear()
         self.count_lbl.setText("Loading offers...")
         for _ in range(4):
-            card = GlassCard()
-            card.body().addWidget(SkeletonBlock(280, 22))
-            card.body().addWidget(SkeletonBlock(520, 14))
-            card.body().addWidget(SkeletonBlock(460, 14))
-            self.col.insertWidget(self.col.count() - 1, card)
+            self.col.insertWidget(self.col.count() - 1, self._skeleton_card())
+
+    def _skeleton_card(self) -> GlassCard:
+        card = GlassCard(raised=True)
+        card.setMinimumHeight(318)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        card.body().setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        card.body().setSpacing(t.SPACE_4)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(t.SPACE_5)
+
+        title_col = QVBoxLayout()
+        title_col.setContentsMargins(0, 0, 0, 0)
+        title_col.setSpacing(10)
+        title_col.addWidget(SkeletonBlock(230, 14))
+        title_col.addWidget(SkeletonBlock(360, 30))
+        top.addLayout(title_col, 1)
+
+        price_col = QVBoxLayout()
+        price_col.setContentsMargins(0, 0, 0, 0)
+        price_col.setSpacing(7)
+        price_col.addWidget(SkeletonBlock(130, 30), 0, Qt.AlignRight)
+        price_col.addWidget(SkeletonBlock(104, 13), 0, Qt.AlignRight)
+        price_col.addWidget(SkeletonBlock(120, 12), 0, Qt.AlignRight)
+        top.addLayout(price_col)
+        card.body().addLayout(top)
+
+        badges = QHBoxLayout()
+        badges.setContentsMargins(0, 0, 0, 0)
+        badges.setSpacing(t.SPACE_4)
+        for width in (84, 80, 78):
+            badges.addWidget(SkeletonBlock(width, 14))
+        badges.addStretch(1)
+        card.body().addLayout(badges)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(t.SPACE_4)
+        grid.setVerticalSpacing(t.SPACE_5)
+        block_widths = [158, 138, 158, 190, 126]
+        for row in range(2):
+            for col, width in enumerate(block_widths):
+                if row == 1 and col == 4:
+                    continue
+                cell = QWidget()
+                cell_lay = QVBoxLayout(cell)
+                cell_lay.setContentsMargins(0, 0, 0, 0)
+                cell_lay.setSpacing(7)
+                cell_lay.addWidget(SkeletonBlock(max(76, width - 34), 12))
+                cell_lay.addWidget(SkeletonBlock(width, 19))
+                cell_lay.addWidget(SkeletonBlock(max(92, width - 18), 12))
+                grid.addWidget(cell, row, col)
+                grid.setColumnStretch(col, 1)
+
+        actions = QWidget()
+        actions_lay = QHBoxLayout(actions)
+        actions_lay.setContentsMargins(0, t.SPACE_3, 0, 0)
+        actions_lay.setSpacing(t.SPACE_2)
+        actions_lay.addWidget(SkeletonBlock(90, 38))
+        actions_lay.addWidget(SkeletonBlock(128, 38))
+        grid.addWidget(actions, 1, 4, Qt.AlignRight | Qt.AlignBottom)
+        card.body().addLayout(grid)
+        return card
 
     def set_results(self, offers: list[Offer]) -> None:
-        self._clear()
-        self.count_lbl.setText(f"{len(offers)} offers")
         if not offers:
             self.set_empty("No offers matched those filters.")
             return
-        for offer in offers:
-            card = OfferCard(offer)
-            card.rent_clicked.connect(self.rent_clicked)
-            card.details_clicked.connect(self.details_clicked)
-            self.cards.append(card)
-            self.col.insertWidget(self.col.count() - 1, card)
+        self._clear()
+        self._offers = list(offers)
+        self._next_offer_index = 0
+        self._update_render_count()
+        self._render_next_batch(_CARD_RENDER_BATCH_SIZE)
 
     def set_error(self, message: str) -> None:
         self._clear()
@@ -195,10 +265,47 @@ class OfferList(QWidget):
         self.col.insertWidget(self.col.count() - 1, card)
 
     def _clear(self) -> None:
+        self._offers.clear()
+        self._next_offer_index = 0
         self.cards.clear()
-        while self.col.count() > 1:
-            item = self.col.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+        self.container.setUpdatesEnabled(False)
+        try:
+            while self.col.count() > 1:
+                item = self.col.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+        finally:
+            self.container.setUpdatesEnabled(True)
+
+    def _render_next_batch(self, count: int = _CARD_RENDER_BATCH_SIZE) -> None:
+        if self._next_offer_index >= len(self._offers):
+            return
+
+        end = min(self._next_offer_index + count, len(self._offers))
+        self.container.setUpdatesEnabled(False)
+        try:
+            for offer in self._offers[self._next_offer_index:end]:
+                card = OfferCard(offer)
+                card.rent_clicked.connect(self.rent_clicked)
+                card.details_clicked.connect(self.details_clicked)
+                self.cards.append(card)
+                self.col.insertWidget(self.col.count() - 1, card)
+        finally:
+            self.container.setUpdatesEnabled(True)
+        self._next_offer_index = end
+
+    def _maybe_render_more(self) -> None:
+        if self._next_offer_index >= len(self._offers):
+            return
+        bar = self.scroll.verticalScrollBar()
+        if bar.maximum() - bar.value() <= _SCROLL_PREFETCH_PX:
+            self._render_next_batch()
+
+    def _update_render_count(self) -> None:
+        total = len(self._offers)
+        if total <= 0:
+            self.count_lbl.setText("0 offers")
+            return
+        self.count_lbl.setText(f"{total} offers")

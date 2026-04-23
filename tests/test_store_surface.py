@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox
 
 from app.models_rental import Offer, OfferSort, RentResult
 
@@ -101,6 +101,25 @@ def test_offer_list_renders_and_relays_rent(qt_app):
     assert captured == [offer]
 
 
+def test_offer_list_renders_large_results_in_batches(qt_app):
+    from app.ui.views.store.offer_list import OfferList, _CARD_RENDER_BATCH_SIZE
+
+    _app()
+    view = OfferList()
+    offers = [_offer(id=i, ask_contract_id=i) for i in range(_CARD_RENDER_BATCH_SIZE + 3)]
+
+    view.set_results(offers)
+
+    assert len(view.cards) == _CARD_RENDER_BATCH_SIZE
+    assert view.count_lbl.text() == f"{len(offers)} offers"
+    assert view.col.count() == _CARD_RENDER_BATCH_SIZE + 1
+
+    view._render_next_batch()
+
+    assert len(view.cards) == len(offers)
+    assert view.count_lbl.text() == f"{len(offers)} offers"
+
+
 def test_offer_list_handles_numeric_text_fields(qt_app):
     from app.ui.views.store.offer_list import OfferList
 
@@ -144,8 +163,25 @@ def test_offer_card_shows_rich_marketplace_fields_and_price_breakdown(qt_app):
     assert card.price_lbl.text() == "$0.085/hr"
     tooltip = card.price_lbl.toolTip()
     assert "Price Breakdown" in tooltip
-    assert "On-Demand GPU" in tooltip
+    assert "GPU Compute" in tooltip
+    assert "Storage (32 GiB)" in tooltip
     assert "$2.667/TB" in tooltip
+
+
+def test_offer_price_breakdown_uses_requested_storage_not_host_disk(qt_app):
+    from app.services.offer_pricing import offer_price_breakdown
+
+    offer = _offer(
+        dph_total=0.20,
+        storage_cost=0.20,
+        disk_space_gb=1000.0,
+        raw={"_requested_storage_gib": 20.0},
+    )
+
+    breakdown = offer_price_breakdown(offer)
+
+    assert abs(breakdown.storage_hour - (0.20 * 20.0 / 720.0)) < 1e-9
+    assert breakdown.total_hour == 0.20
 
 
 def test_offer_details_dialog_is_read_only_and_shows_price_breakdown(qt_app):
@@ -179,6 +215,9 @@ def test_filter_sidebar_defaults_do_not_hide_gpu_count(qt_app):
     assert query.max_num_gpus is None
     assert query.min_reliability is None
     assert len(sidebar.findChildren(CollapsibleSection)) >= 7
+
+    sidebar.verified.setChecked(False)
+    assert sidebar.build_query().verified is None
 
 
 def test_store_view_uses_marketplace_toolbar_order_and_gpu_count_buttons(qt_app):
@@ -274,3 +313,18 @@ def test_store_view_details_does_not_start_rent_flow(qt_app, monkeypatch):
     controller.refresh_templates.assert_not_called()
     controller.refresh_ssh_keys.assert_not_called()
     controller.rent.assert_not_called()
+
+
+def test_rent_dialog_uses_ask_contract_id_for_create_instance(qt_app):
+    from app.ui.views.store.rent_dialog import RentDialog
+
+    _app()
+    dialog = RentDialog(_offer(id=101, ask_contract_id=202))
+    dialog.findChildren(QComboBox)[0].setCurrentIndex(1)
+    captured = []
+    dialog.confirmed.connect(captured.append)
+
+    dialog._confirm()
+
+    assert captured
+    assert captured[0].offer_id == 202

@@ -14,11 +14,36 @@ def test_search_offers_calls_sdk_with_query_dict():
     offers = svc.search_offers(OfferQuery(gpu_names=["RTX 4090"]))
     assert len(offers) == 1
     assert offers[0].gpu_name == "RTX 4090"
+    assert offers[0].offer_type == "on-demand"
+    assert offers[0].raw["_requested_storage_gib"] == 10.0
     _, kwargs = fake_sdk.search_offers.call_args
     assert kwargs["query"]["gpu_name"] == {"eq": "RTX 4090"}
     assert kwargs["type"] == "on-demand"
     assert kwargs["order"] == "score-"
     assert kwargs["storage"] == 10.0
+
+
+def test_search_offers_marks_verified_from_verification_field():
+    fake_sdk = MagicMock()
+    fake_sdk.search_offers.return_value = [
+        {
+            "id": 1,
+            "ask_contract_id": 1,
+            "machine_id": 2,
+            "gpu_name": "RTX 4090",
+            "num_gpus": 1,
+            "gpu_ram": 24564,
+            "dph_total": 0.4,
+            "verification": "verified",
+            "rentable": True,
+        }
+    ]
+    svc = RentalService(api_key="k")
+    svc._sdk = fake_sdk
+
+    offers = svc.search_offers(OfferQuery())
+
+    assert offers[0].verified is True
 
 
 def test_search_offers_accepts_qt_stringified_enum_values():

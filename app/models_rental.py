@@ -62,10 +62,13 @@ class Offer:
     gpu_arch: str | None
     duration_days: float | None
     hosting_type: str | None
+    offer_type: str | None = None
     raw: dict = field(default_factory=dict)
 
     def effective_price(self) -> float:
         """Price shown to user: dph_total for on-demand, min_bid for interruptible."""
+        if self.offer_type in {OfferType.INTERRUPTIBLE.value, "interruptible"} and self.min_bid is not None:
+            return self.min_bid
         return self.dph_total
 
 
@@ -97,7 +100,7 @@ class OfferQuery:
     storage_gib: float = 10.0
 
     # Default safety flags (no_default=False semantics)
-    verified: bool = True
+    verified: bool | None = True
     rentable: bool = True
     rented: bool = False
     external: bool | None = False  # allow external marketplace

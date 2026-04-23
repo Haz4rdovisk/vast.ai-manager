@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any
-from app.models_rental import OfferQuery, OfferType
+from app.models_rental import OfferQuery, OfferSort, OfferType
 
 
 def _gte(v): return {"gte": v}
@@ -9,13 +9,58 @@ def _eq(v):  return {"eq": v}
 def _enum_value(v): return getattr(v, "value", v)
 
 
+_REGION_COUNTRIES: dict[str, list[str]] = {
+    "AF": "DZ,AO,BJ,BW,BF,BI,CM,CV,CF,TD,KM,CD,CG,DJ,EG,GQ,ER,ET,GA,GM,GH,GN,GW,KE,LS,LR,LY,MW,MA,ML,MR,MU,MZ,NA,NE,NG,RW,SH,ST,SN,SC,SL,SO,ZA,SS,SD,SZ,TZ,TG,TN,UG,YE,ZM,ZW".split(","),
+    "AS": "AE,AM,AZ,BD,BH,BN,BT,MM,KH,KP,PH,IN,ID,IR,IQ,IL,JP,JO,KZ,MY,MV,MN,NP,KR,PK,QA,SA,SG,LK,SY,TW,TJ,TH,TR,TM,VN,HK,CN,OM".split(","),
+    "EU": "AL,AD,AT,BY,BE,BA,BG,HR,CY,CZ,DK,EE,FI,FR,GE,DE,GR,HU,IS,IT,LV,LI,LT,LU,MT,MD,MC,ME,NL,NO,PL,PT,RO,RU,RS,SK,SI,ES,SE,CH,UA,GB,VA,MK".split(","),
+    "LC": "AG,AR,BS,BB,BZ,BO,BR,CL,CO,CR,CU,DO,EC,SV,GY,HT,HN,JM,MX,NI,PA,PY,PE,PR,RD,SUR,TT,UR,VZ".split(","),
+    "NA": ["CA", "US"],
+    "OC": "AU,FJ,GU,KI,MH,FM,NR,NZ,PG,PW,SL,TO,TV,VU".split(","),
+}
+
+_REGION_ALIASES = {
+    "north_america": "NA",
+    "north america": "NA",
+    "europe": "EU",
+    "asia": "AS",
+    "south_america": "LC",
+    "south america": "LC",
+    "latin_america": "LC",
+    "latin america": "LC",
+    "oceania": "OC",
+    "africa": "AF",
+}
+
+
+def _region_countries(region: str | None) -> list[str]:
+    if not region:
+        return []
+    token = str(region).strip()
+    key = token.upper()
+    if key not in _REGION_COUNTRIES:
+        key = _REGION_ALIASES.get(token.lower(), "")
+    return list(_REGION_COUNTRIES.get(key, []))
+
+
+def _order_for(q: OfferQuery) -> str:
+    order = str(_enum_value(q.sort))
+    offer_type = str(_enum_value(q.offer_type))
+    if offer_type == OfferType.INTERRUPTIBLE.value:
+        if order == OfferSort.DPH_ASC.value:
+            return "min_bid"
+        if order == OfferSort.DPH_DESC.value:
+            return "min_bid-"
+    return order
+
+
 def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, float]:
     """Translate a UI OfferQuery into (query_dict, order_string, limit, storage_gib)
     suitable for VastAI.search_offers(query=dict, order=..., limit=..., storage=...)."""
     d: dict[str, Any] = {}
 
-    # Safety / provenance flags — always emitted (flip, never drop)
-    d["verified"] = _eq(bool(q.verified))
+    # Safety / provenance flags. None means "include both states".
+    if q.verified is not None:
+        d["verified"] = _eq(bool(q.verified))
     d["rentable"] = _eq(bool(q.rentable))
     d["rented"]   = _eq(bool(q.rented))
     if q.external is not None:
@@ -93,10 +138,10 @@ def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, f
         d["duration"] = _gte(float(q.min_duration_days) * 86400.0)
     if q.country:
         d["geolocation"] = _eq(q.country)
-    if q.region:
-        # Georegion — Vast recognizes `geolocation` tokens like "North_America"
-        # as region when resolved server-side. We emit via same key.
-        d.setdefault("geolocation", _eq(q.region))
+    if q.region and "geolocation" not in d:
+        countries = _region_countries(q.region)
+        if countries:
+            d["geolocation"] = {"in": countries}
     if q.datacenter_only or q.hosting_type == "datacenter":
         d["datacenter"] = _eq(True)
     elif q.hosting_type == "consumer":
@@ -108,4 +153,4 @@ def build_offer_query(q: OfferQuery) -> tuple[dict[str, Any], str, int | None, f
     if q.cluster_id is not None:
         d["cluster_id"] = _eq(int(q.cluster_id))
 
-    return d, str(_enum_value(q.sort)), q.limit, q.storage_gib
+    return d, _order_for(q), q.limit, q.storage_gib

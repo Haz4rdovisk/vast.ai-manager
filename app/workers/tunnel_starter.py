@@ -29,39 +29,39 @@ class TunnelStarter(QObject):
     @Slot(int, int)
     def connect(self, instance_id: int, local_port: int):
         self._emit(instance_id, TunnelStatus.CONNECTING,
-                   "Aguardando instância ficar pronta...")
+                   "Waiting for instance to become ready...")
 
         # 1. Poll until RUNNING with ssh info
         inst = self._wait_for_ready(instance_id)
         if inst is None:
             self._emit(instance_id, TunnelStatus.FAILED,
-                       "Timeout esperando instância ficar pronta")
+                       "Timed out waiting for instance to become ready.")
             return
 
         host, port = inst.ssh_host, inst.ssh_port
 
         # 2. Probe remote sshd until it responds cleanly
         self._emit(instance_id, TunnelStatus.CONNECTING,
-                   f"Aguardando SSH de {host}:{port}...")
+                   f"Waiting for SSH on {host}:{port}...")
         if not self._wait_for_remote_ssh(host, port):
             self._emit(instance_id, TunnelStatus.FAILED,
-                       f"SSH remoto não respondeu em {SSH_PROBE_WAIT_SECONDS}s. "
-                       f"A instância pode ainda estar inicializando — tente novamente em instantes.")
+                       f"Remote SSH did not respond within {SSH_PROBE_WAIT_SECONDS}s. "
+                       "The instance may still be booting. Try again shortly.")
             return
 
         # 3. Open tunnel with retries
         self._emit(instance_id, TunnelStatus.CONNECTING,
-                   f"Estabelecendo túnel em {host}:{port}...")
+                   f"Establishing tunnel to {host}:{port}...")
         last_err = ""
         for attempt in range(1, SSH_RETRY_ATTEMPTS + 1):
             try:
                 handle = self.ssh.start_tunnel(instance_id, host, port, local_port)
             except FileNotFoundError:
                 self._emit(instance_id, TunnelStatus.FAILED,
-                           "SSH não encontrado. Instale o OpenSSH do Windows.")
+                           "SSH not found. Install Windows OpenSSH.")
                 return
             except Exception as e:
-                self._emit(instance_id, TunnelStatus.FAILED, f"Falha ao iniciar SSH: {e}")
+                self._emit(instance_id, TunnelStatus.FAILED, f"Failed to start SSH: {e}")
                 return
 
             ok = wait_for_local_port(
@@ -71,18 +71,18 @@ class TunnelStarter(QObject):
             )
             if ok:
                 self._emit(instance_id, TunnelStatus.CONNECTED,
-                           f"Conectado em 127.0.0.1:{local_port}")
+                            f"Connected at 127.0.0.1:{local_port}")
                 
                 # 4. Handle initialization script if present
                 if self.config.on_connect_script:
-                    self._emit(instance_id, TunnelStatus.CONNECTED, "Roteando script de inicialização da GPU para o servidor...")
+                    self._emit(instance_id, TunnelStatus.CONNECTED, "Sending GPU initialization script to the server...")
                     success, output = self.ssh.run_script(host, port, self.config.on_connect_script)
                     if success:
                         self._emit(instance_id, TunnelStatus.CONNECTED, 
-                                   f"✓ Script Iniciado com Sucesso\n--- Resposta ---\n{output.strip()}\n--- Fim da Resposta ---")
+                                   f"✓ Script started successfully\n--- Response ---\n{output.strip()}\n--- End Response ---")
                     else:
                         self._emit(instance_id, TunnelStatus.CONNECTED, 
-                                   f"⚠ Script reportou um erro\n--- Erro ---\n{output.strip()}\n--- Fim de Erro ---")
+                                   f"⚠ Script reported an error\n--- Error ---\n{output.strip()}\n--- End Error ---")
                 return
 
             # Collect diagnostics and retry
@@ -94,29 +94,29 @@ class TunnelStarter(QObject):
                 if attempt == 1:
                     # First attempt failed with auth error — trigger AUTO-FIX
                     self._emit(instance_id, TunnelStatus.CONNECTING, 
-                               "⚠ Erro de Permissão. Tentando correção automática de chaves...")
+                               "⚠ Permission error. Trying automatic key repair...")
                     self.fix_requested.emit(instance_id)
                     # Wait 10s for Vast.ai to process the new key
                     for _ in range(100):
                         if self.vast is None: break # safety
                         time.sleep(0.1)
-                    self._emit(instance_id, TunnelStatus.CONNECTING, "Retentando conexão após correção...")
+                    self._emit(instance_id, TunnelStatus.CONNECTING, "Retrying connection after repair...")
                     continue
                 else:
                     break  # Already tried fixing, still failing.
 
             if attempt < SSH_RETRY_ATTEMPTS:
                 if "connection closed by" in err_lower:
-                    msg = f"Aguardando servidor iniciar serviços internos ({attempt}/{SSH_RETRY_ATTEMPTS})..."
+                    msg = f"Waiting for the server to start internal services ({attempt}/{SSH_RETRY_ATTEMPTS})..."
                 else:
-                    msg = f"Tentativa {attempt} falhou, aguardando... ({self._short(last_err)})"
+                    msg = f"Attempt {attempt} failed, waiting... ({self._short(last_err)})"
                     
                 self._emit(instance_id, TunnelStatus.CONNECTING, msg)
                 time.sleep(4)
 
         hint = self._auth_hint(last_err)
         self._emit(instance_id, TunnelStatus.FAILED,
-                   f"Não foi possível estabelecer o túnel. {self._short(last_err)}{hint}")
+                   f"Could not establish tunnel. {self._short(last_err)}{hint}")
 
     # ---------- helpers ----------
 
@@ -128,13 +128,13 @@ class TunnelStarter(QObject):
                 all_instances = self.vast.list_instances()
                 inst = next((i for i in all_instances if i.id == instance_id), None)
             except Exception as e:
-                self._emit(instance_id, TunnelStatus.CONNECTING, f"Verificando... ({e})")
+                self._emit(instance_id, TunnelStatus.CONNECTING, f"Checking... ({e})")
                 time.sleep(4)
                 continue
             if inst and inst.state != last_state:
                 last_state = inst.state
                 self._emit(instance_id, TunnelStatus.CONNECTING,
-                           f"Estado da instância: {inst.state.value}")
+                           f"Instance state: {inst.state.value}")
             if (inst
                     and inst.state == InstanceState.RUNNING
                     and inst.ssh_host
@@ -173,9 +173,9 @@ class TunnelStarter(QObject):
                 or "no such identity" in low
                 or "publickey" in low
                 or "host key verification failed" in low):
-            return (" → Parece problema de chave SSH. Verifique se sua chave pública "
-                    "está registrada em https://cloud.vast.ai/account/ e configure o "
-                    "caminho da chave privada em ⚙ Configurações.")
+            return (" -> This looks like an SSH key issue. Check that your public key "
+                    "is registered at https://cloud.vast.ai/account/ and configure the "
+                    "private key path in Settings.")
         return ""
 
     @staticmethod

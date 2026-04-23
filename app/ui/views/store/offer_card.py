@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from app import theme as t
 from app.models_rental import Offer
+from app.services.offer_pricing import offer_price_breakdown, raw_float
 from app.ui.components.primitives import Badge, GlassCard, StatusPill
 
 
@@ -25,17 +26,6 @@ def _text(value: Any, fallback: str = "-") -> str:
         return fallback
     text = str(value).strip()
     return text or fallback
-
-
-def _raw_float(offer: Offer, *names: str) -> float | None:
-    for name in names:
-        value = offer.raw.get(name)
-        try:
-            if value is not None:
-                return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
 
 
 def _fmt_num(value: float | int | None, suffix: str = "", decimals: int = 1) -> str:
@@ -73,23 +63,8 @@ def _fmt_bool(value: bool, true_text: str, false_text: str) -> str:
     return true_text if value else false_text
 
 
-def _price_parts(offer: Offer) -> tuple[float, float, float, float | None, float | None]:
-    total_hour = max(float(offer.dph_total or 0), 0.0)
-    storage_gb = (
-        _raw_float(offer, "allocated_storage", "allocated_storage_gb", "disk_gb")
-        or offer.disk_space_gb
-        or 0.0
-    )
-    storage_month = max(float(offer.storage_cost or 0.0) * storage_gb, 0.0)
-    storage_hour = storage_month / (30.0 * 24.0) if storage_month else 0.0
-    gpu_hour = max(total_hour - storage_hour, 0.0)
-    inet_up = _raw_float(offer, "inet_up_cost")
-    inet_down = _raw_float(offer, "inet_down_cost")
-    return gpu_hour, storage_hour, total_hour, inet_up, inet_down
-
-
 def _price_tooltip(offer: Offer) -> str:
-    gpu_hour, storage_hour, total_hour, inet_up, inet_down = _price_parts(offer)
+    price = offer_price_breakdown(offer)
 
     def row(label: str, hour: float, bold: bool = False) -> str:
         tag = "b" if bold else "span"
@@ -112,14 +87,14 @@ def _price_tooltip(offer: Offer) -> str:
     <div style="font-size:14px; color:#F1F4FA; min-width:420px;">
       <div style="font-size:20px; font-weight:700; margin-bottom:10px;">Price Breakdown</div>
       <table cellspacing="0" cellpadding="5" width="100%">
-        {row("On-Demand GPU", gpu_hour)}
-        {row("Storage", storage_hour)}
-        {row("Total Cost", total_hour, True)}
+        {row("GPU Compute", price.compute_hour)}
+        {row(f"Storage ({price.storage_gib:g} GiB)", price.storage_hour)}
+        {row("Total Cost", price.total_hour, True)}
         <tr>
           <td><b>Internet (usage-based)</b></td>
           <td></td>
-          <td align="right">Up {tb(inet_up)}</td>
-          <td align="right">Down {tb(inet_down)}</td>
+          <td align="right">Up {tb(price.inet_up_per_gb)}</td>
+          <td align="right">Down {tb(price.inet_down_per_gb)}</td>
         </tr>
       </table>
       <div style="margin-top:10px; color:#C7CEDC; font-weight:600;">
@@ -167,6 +142,7 @@ class OfferCard(GlassCard):
         super().__init__(raised=True, parent=parent)
         self.offer = offer
         self.setMinimumHeight(190)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.body().setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         self.body().setSpacing(t.SPACE_3)
 
@@ -250,10 +226,10 @@ class OfferCard(GlassCard):
         self.body().addLayout(header)
 
     def _build_grid(self) -> None:
-        total_flops = _raw_float(self.offer, "total_flops", "flops", "total_flops_tflops")
-        pcie_bw = _raw_float(self.offer, "pcie_bw", "pcie_bandwidth")
-        pci_gen = _raw_float(self.offer, "pci_gen")
-        gpu_mem_bw = _raw_float(self.offer, "gpu_mem_bw", "gpu_mem_bandwidth")
+        total_flops = raw_float(self.offer.raw, "total_flops", "flops", "total_flops_tflops")
+        pcie_bw = raw_float(self.offer.raw, "pcie_bw", "pcie_bandwidth")
+        pci_gen = raw_float(self.offer.raw, "pci_gen")
+        gpu_mem_bw = raw_float(self.offer.raw, "gpu_mem_bw", "gpu_mem_bandwidth")
         compute = self.offer.compute_cap / 100 if self.offer.compute_cap else None
 
         grid = QGridLayout()

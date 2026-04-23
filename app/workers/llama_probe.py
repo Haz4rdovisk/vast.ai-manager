@@ -33,7 +33,7 @@ class LlamaReadyProbe(QThread):
         start = time.time()
         deadline = start + self.timeout_s
         last_emit = -1
-        last_hint = "Aguardando porta abrir..."
+        last_hint = "Waiting for port to open..."
 
         while time.time() < deadline and not self._stop:
             elapsed = int(time.time() - start)
@@ -46,14 +46,14 @@ class LlamaReadyProbe(QThread):
                     if r.status == 200:
                         body = r.read().decode("utf-8", errors="replace")
                         model_id = self._extract_model(body)
-                        self.ready.emit(model_id or "(sem id)")
+                        self.ready.emit(model_id or "(no id)")
                         return
-                    last_hint = f"HTTP {r.status} — esperando..."
+                    last_hint = f"HTTP {r.status} - waiting..."
             except urllib.error.HTTPError as e:
                 # Server is up but endpoint not ready yet (e.g. 404/503 during warmup)
-                last_hint = f"Servidor respondeu HTTP {e.code} — aquecendo..."
+                last_hint = f"Server returned HTTP {e.code} - warming up..."
             except (urllib.error.URLError, ConnectionError, OSError):
-                last_hint = "Porta ainda fechada — modelo carregando..."
+                last_hint = "Port is still closed - model is loading..."
             except Exception as e:
                 last_hint = f"Probe: {e}"
             time.sleep(2)
@@ -61,8 +61,8 @@ class LlamaReadyProbe(QThread):
         if self._stop:
             return
         self.failed.emit(
-            f"Timeout após {self.timeout_s}s sem resposta. "
-            f"Verifique /tmp/llama-server.log na máquina."
+            f"Timed out after {self.timeout_s}s with no response. "
+            "Check /tmp/llama-server.log on the remote machine."
         )
 
     @staticmethod

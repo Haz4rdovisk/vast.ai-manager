@@ -206,6 +206,9 @@ class AppShell(QWidget):
         self.instances.set_label_requested.connect(self._on_set_label)
         self.instances.bulk_requested.connect(controller.bulk_action)
         self.instances.open_lab_requested.connect(self._on_open_lab_from_card)
+        self.instances.open_store_requested.connect(
+            lambda: self._go("store")
+        )
         self.instances.open_settings_requested.connect(
             lambda: self._go("settings")
         )
@@ -299,7 +302,7 @@ class AppShell(QWidget):
         if self._analytics_api_sync_pending:
             return
         self._analytics_api_sync_pending = True
-        self._controller.log_line.emit("Sincronizando Analytics com a API da Vast.ai...")
+        self._controller.log_line.emit("Syncing Analytics with the Vast.ai API...")
         self._controller.request_deep_sync()
 
     def _on_settings_saved(self, cfg):
@@ -833,7 +836,7 @@ class AppShell(QWidget):
             # Let the background prober handle disconnections/failures.
             # This prevents the UI from resetting while the remote process might still be running.
             if self._controller:
-                self._controller.log_line.emit(f"#{iid} Conexão instável durante instalação. Aguardando re-conexão automática...")
+                self._controller.log_line.emit(f"#{iid} Unstable connection during install. Waiting for automatic reconnection...")
             return
 
         self.job_registry.finish(key, ok=True)

@@ -65,7 +65,7 @@ def test_parse_numeric_text_fields_from_live_api():
     })
     assert o.gpu_name == "4090"
     assert o.gpu_arch == "8"
-    assert o.hosting_type == "1"
+    assert o.hosting_type == "datacenter"
     assert o.datacenter is None
 
 
@@ -76,3 +76,38 @@ def test_parse_hosting_type_from_datacenter_flag():
         "datacenter": True,
     })
     assert o.hosting_type == "datacenter"
+
+
+def test_parse_verification_string_from_search_api():
+    o = parse_offer({
+        "id": 1,
+        "ask_contract_id": 1,
+        "machine_id": 2,
+        "gpu_name": "RTX 4090",
+        "num_gpus": 1,
+        "dph_total": 0.42,
+        "verification": "verified",
+        "rentable": "true",
+        "rented": "false",
+        "external": "false",
+    })
+
+    assert o.verified is True
+    assert o.rentable is True
+    assert o.rented is False
+    assert o.external is False
+
+
+def test_parse_interruptible_offer_uses_min_bid_effective_price():
+    o = parse_offer({
+        "id": 1,
+        "ask_contract_id": 1,
+        "machine_id": 2,
+        "gpu_name": "RTX 4090",
+        "num_gpus": 1,
+        "dph_total": 0.90,
+        "min_bid": 0.31,
+        "_offer_type": "bid",
+    })
+
+    assert o.effective_price() == 0.31

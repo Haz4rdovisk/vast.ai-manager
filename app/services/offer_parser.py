@@ -24,6 +24,27 @@ def _s(v: Any) -> str | None:
     return text or None
 
 
+def _truthy(v: Any, *, default: bool = False) -> bool:
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    text = str(v).strip().lower()
+    if text in {"1", "true", "yes", "y", "verified"}:
+        return True
+    if text in {"0", "false", "no", "n", "unverified", "none", ""}:
+        return False
+    return default
+
+
+def _verified(raw: dict) -> bool:
+    if "verified" in raw:
+        return _truthy(raw.get("verified"))
+    return str(raw.get("verification") or "").strip().lower() == "verified"
+
+
 def _country(geo: str | None) -> str | None:
     if not geo:
         return None
@@ -34,15 +55,36 @@ def _country(geo: str | None) -> str | None:
 
 
 def _hosting_type(raw: dict) -> str | None:
-    explicit = _s(raw.get("hosting_type"))
-    if explicit:
-        return explicit
+    explicit = raw.get("hosting_type")
+    if explicit is not None:
+        if isinstance(explicit, bool):
+            return None
+        if isinstance(explicit, (int, float)):
+            mapping = {0: "consumer", 1: "datacenter", 2: "cluster"}
+            return mapping.get(int(explicit), str(explicit))
+        text = _s(explicit)
+        if text:
+            low = text.strip().lower()
+            if low in {"0", "consumer"}:
+                return "consumer"
+            if low in {"1", "datacenter"}:
+                return "datacenter"
+            if low in {"2", "cluster"}:
+                return "cluster"
+            return text
     dc = raw.get("datacenter")
     if isinstance(dc, bool):
         return "datacenter" if dc else "consumer"
     if isinstance(dc, int) and dc in (0, 1):
         return "datacenter" if dc else "consumer"
     return None
+
+
+def _datacenter(raw: dict) -> str | None:
+    value = raw.get("datacenter")
+    if isinstance(value, bool):
+        return None
+    return _s(value)
 
 
 def parse_offer(raw: dict) -> Offer:
@@ -66,7 +108,12 @@ def parse_offer(raw: dict) -> Offer:
         disk_bw_mbps=_f(raw.get("disk_bw")),
         inet_down_mbps=_f(raw.get("inet_down")),
         inet_up_mbps=_f(raw.get("inet_up")),
-        dph_total=_f(raw.get("dph_total")) or 0.0,
+        dph_total=(
+            _f(raw.get("dph_total"))
+            or _f(raw.get("discounted_total_per_hour"))
+            or _f(raw.get("discountedTotalPerHour"))
+            or 0.0
+        ),
         min_bid=_f(raw.get("min_bid")),
         storage_cost=_f(raw.get("storage_cost")),
         reliability=_f(raw.get("reliability2") or raw.get("reliability")),
@@ -75,17 +122,18 @@ def parse_offer(raw: dict) -> Offer:
         flops_per_dphtotal=_f(raw.get("flops_per_dphtotal")),
         cuda_max_good=_f(raw.get("cuda_max_good")),
         compute_cap=_i(raw.get("compute_cap")),
-        verified=bool(raw.get("verified")),
-        rentable=bool(raw.get("rentable")),
-        rented=bool(raw.get("rented")),
-        external=bool(raw.get("external")),
+        verified=_verified(raw),
+        rentable=_truthy(raw.get("rentable")),
+        rented=_truthy(raw.get("rented")),
+        external=_truthy(raw.get("external")),
         geolocation=geo,
         country=_country(geo),
-        datacenter=_s(raw.get("datacenter")),
-        static_ip=bool(raw.get("static_ip")),
+        datacenter=_datacenter(raw),
+        static_ip=_truthy(raw.get("static_ip")),
         direct_port_count=_i(raw.get("direct_port_count")),
         gpu_arch=_s(raw.get("gpu_arch")),
         duration_days=(_f(raw.get("duration")) or 0.0) / 86400.0 if raw.get("duration") else None,
         hosting_type=_hosting_type(raw),
+        offer_type=_s(raw.get("_offer_type") or raw.get("type")),
         raw=raw,
     )
