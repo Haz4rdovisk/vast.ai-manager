@@ -56,29 +56,58 @@ class SettingsView(QWidget):
 
         content = QWidget()
         content.setObjectName("settings-content")
-        content_lay = QHBoxLayout(content)
-        content_lay.setContentsMargins(0, 0, t.SPACE_2, 0)
-        content_lay.setSpacing(t.SPACE_4)
+        
+        # Use QGridLayout for equal-width columns and balanced card heights
+        grid = QGridLayout(content)
+        grid.setContentsMargins(0, 0, t.SPACE_2, 0)
+        grid.setSpacing(t.SPACE_4)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
-        main_col = QVBoxLayout()
-        main_col.setContentsMargins(0, 0, 0, 0)
-        main_col.setSpacing(t.SPACE_4)
-        main_col.addWidget(self._build_connection_card())
-        main_col.addWidget(self._build_ssh_card())
-        main_col.addWidget(self._build_runtime_card())
-        main_col.addWidget(self._build_automation_card())
-        main_col.addStretch(1)
+        # Row 0: Connection and SSH (Equal width and height)
+        conn_card = self._build_connection_card()
+        ssh_card = self._build_ssh_card()
+        
+        # Ensure they both expand to fill the cell height together
+        # Connection's natural height will dictate the row height
+        conn_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        ssh_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        grid.addWidget(conn_card, 0, 0)
+        grid.addWidget(ssh_card, 0, 1)
 
-        side_col = QVBoxLayout()
-        side_col.setContentsMargins(0, 0, 0, 0)
-        side_col.setSpacing(t.SPACE_4)
-        side_col.addWidget(self._build_status_card())
-        side_col.addWidget(self._build_analytics_card())
-        side_col.addWidget(self._build_about_card())
-        side_col.addStretch(1)
+        # Row 1: Runtime and Summary/Analytics
+        runtime_card = self._build_runtime_card()
+        grid.addWidget(runtime_card, 1, 0)
 
-        content_lay.addLayout(main_col, 1)
-        content_lay.addLayout(side_col, 0)
+        summary_col = QVBoxLayout()
+        summary_col.setContentsMargins(0, 0, 0, 0)
+        summary_col.setSpacing(t.SPACE_4)
+        status_card = self._build_status_card()
+        analytics_card = self._build_analytics_card()
+        
+        # Stack vertically and allow both to stretch
+        status_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        analytics_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        summary_col.addWidget(status_card)
+        summary_col.addWidget(analytics_card)
+        grid.addLayout(summary_col, 1, 1)
+
+        # Row 2: Automation and About
+        automation_card = self._build_automation_card()
+        about_card = self._build_about_card()
+        
+        # Balance heights for Automation and About
+        automation_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        about_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        grid.addWidget(automation_card, 2, 0)
+        grid.addWidget(about_card, 2, 1)
+
+        # Push everything to top
+        grid.setRowStretch(3, 1)
+
         self.scroll.setWidget(content)
         root.addWidget(self.scroll, 1)
 
@@ -132,13 +161,9 @@ class SettingsView(QWidget):
         api_row.addWidget(self.test_btn)
         body.addLayout(api_row)
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(t.SPACE_2)
-        self.test_status = QLabel("Add a key and test it before saving.")
-        self.test_status.setObjectName("settings-inline-status")
-        self.test_status.setWordWrap(True)
-        status_row.addWidget(self.test_status, 1)
-        body.addLayout(status_row)
+        self.test_status = _inline_info("Add a key and test it before saving.")
+        body.addWidget(self.test_status)
+        body.addStretch(1)
         return card
 
     def _build_ssh_card(self) -> QFrame:
@@ -161,7 +186,8 @@ class SettingsView(QWidget):
         browse_btn.clicked.connect(self._on_browse_key)
         key_row.addWidget(browse_btn)
         body.addLayout(key_row)
-        body.addWidget(_hint("Leave blank to auto-detect ~/.ssh/id_rsa or id_ed25519."))
+        body.addWidget(_inline_info("Leave blank to auto-detect ~/.ssh/id_rsa or id_ed25519."))
+        body.addStretch(1)
         return card
 
     def _build_runtime_card(self) -> QFrame:
@@ -236,18 +262,29 @@ class SettingsView(QWidget):
         self.script_input.setObjectName("settings-script-input")
         body.addWidget(self.script_input)
         body.addWidget(_hint("Runs remotely via bash. Keep it idempotent so reconnects stay safe."))
+        body.addStretch(1)
         return card
 
     def _build_status_card(self) -> QFrame:
-        card, body = _settings_card("Live summary", "Unsaved edits update this preview.")
+        card, body = _settings_card("Live summary", "")
+        grid = QGridLayout()
+        grid.setSpacing(t.SPACE_3)
+
         self.summary_api = _summary_row("API", "")
         self.summary_ssh = _summary_row("SSH key", "")
         self.summary_runtime = _summary_row("Runtime", "")
         self.summary_auto = _summary_row("Automation", "")
-        body.addWidget(self.summary_api)
-        body.addWidget(self.summary_ssh)
-        body.addWidget(self.summary_runtime)
-        body.addWidget(self.summary_auto)
+
+        for row in [self.summary_api, self.summary_ssh, self.summary_runtime, self.summary_auto]:
+            row.setMinimumHeight(70)
+
+        grid.addWidget(self.summary_api, 0, 0, Qt.AlignTop)
+        grid.addWidget(self.summary_ssh, 0, 1, Qt.AlignTop)
+        grid.addWidget(self.summary_runtime, 1, 0, Qt.AlignTop)
+        grid.addWidget(self.summary_auto, 1, 1, Qt.AlignTop)
+
+        body.addLayout(grid)
+        body.addStretch(1)
         return card
 
     def _build_analytics_card(self) -> QFrame:
@@ -255,24 +292,20 @@ class SettingsView(QWidget):
             "Analytics",
             "Rebuild local billing history from the active Vast.ai account.",
         )
-        desc = QLabel(
-            "Use this when local charts look stale or after switching accounts. "
-            "It clears only local analytics cache."
-        )
-        desc.setObjectName("settings-body")
-        desc.setWordWrap(True)
-        body.addWidget(desc)
         self.reset_analytics_btn = QPushButton("Reset & Re-sync")
         self.reset_analytics_btn.setProperty("variant", "ghost")
         self.reset_analytics_btn.clicked.connect(self.analytics_reset_requested.emit)
         body.addWidget(self.reset_analytics_btn)
+        body.addStretch(1)
         return card
 
     def _build_about_card(self) -> QFrame:
         card, body = _settings_card("About", "Build and workspace details.")
         body.addWidget(_info_line("App", "Vast.ai Manager v2.1"))
+        body.addWidget(_info_line("Author", "Haz4rdovisk"))
         body.addWidget(_info_line("Mode", "Remote AI Lab"))
         body.addWidget(_info_line("Config", "~/.vastai-app/config.json"))
+        body.addStretch(1)
         return card
 
     def _build_footer(self) -> QHBoxLayout:
@@ -384,9 +417,9 @@ class SettingsView(QWidget):
     def _set_status(self, text: str, color: str):
         self.test_status.setText(text)
         self.test_status.setStyleSheet(
-            f"QLabel#settings-inline-status {{ color: {color};"
-            f" background: rgba(255,255,255,0.03); border: 1px solid {t.BORDER_LOW};"
-            f" border-radius: 10px; padding: 9px 11px; font-weight: 700; }}"
+            f"color: {color}; background: rgba(255,255,255,0.03);"
+            f" border: 1px solid {t.BORDER_LOW}; border-radius: 10px;"
+            f" padding: 9px 11px; font-weight: 700;"
         )
 
     def _apply_styles(self):
@@ -463,11 +496,14 @@ def _settings_card(title: str, subtitle: str) -> tuple[QFrame, QVBoxLayout]:
     title_col.setSpacing(2)
     title_label = QLabel(title)
     title_label.setObjectName("settings-card-title")
-    subtitle_label = QLabel(subtitle)
-    subtitle_label.setObjectName("settings-card-subtitle")
-    subtitle_label.setWordWrap(True)
     title_col.addWidget(title_label)
-    title_col.addWidget(subtitle_label)
+    
+    if subtitle:
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("settings-card-subtitle")
+        subtitle_label.setWordWrap(True)
+        title_col.addWidget(subtitle_label)
+        
     header.addLayout(title_col, 1)
     lay.addLayout(header)
     return card, lay
@@ -477,11 +513,12 @@ def _field_block(title: str, caption: str, control: QWidget) -> QFrame:
     box = QFrame()
     box.setObjectName("settings-field-block")
     lay = QVBoxLayout(box)
-    lay.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
+    lay.setContentsMargins(t.SPACE_3, t.SPACE_4, t.SPACE_3, t.SPACE_4)
     lay.setSpacing(t.SPACE_2)
     lay.addWidget(_field_label(title))
     lay.addWidget(control)
     lay.addWidget(_hint(caption))
+    box.setMinimumHeight(86)
     return box
 
 
@@ -498,11 +535,22 @@ def _hint(text: str) -> QLabel:
     return lbl
 
 
+def _inline_info(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"color: {t.TEXT_MID}; background: rgba(255,255,255,0.03);"
+        f" border: 1px solid {t.BORDER_LOW}; border-radius: 10px;"
+        f" padding: 9px 11px; font-weight: 700;"
+    )
+    lbl.setWordWrap(True)
+    return lbl
+
+
 def _summary_row(title: str, value: str) -> QFrame:
     row = QFrame()
     row.setObjectName("settings-field-block")
     lay = QVBoxLayout(row)
-    lay.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
+    lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
     lay.setSpacing(3)
     top = QHBoxLayout()
     top.setContentsMargins(0, 0, 0, 0)
@@ -517,6 +565,7 @@ def _summary_row(title: str, value: str) -> QFrame:
     lay.addWidget(caption)
     row.value = val
     row.caption = caption
+    row.setMinimumHeight(72)
     return row
 
 
@@ -531,7 +580,7 @@ def _info_line(key: str, value: str) -> QFrame:
     row = QFrame()
     row.setObjectName("settings-field-block")
     lay = QHBoxLayout(row)
-    lay.setContentsMargins(t.SPACE_3, t.SPACE_2, t.SPACE_3, t.SPACE_2)
+    lay.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
     lay.setSpacing(t.SPACE_2)
     k = _hint(key)
     v = QLabel(value)
