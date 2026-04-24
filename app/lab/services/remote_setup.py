@@ -261,9 +261,11 @@ JOB_PID=$$
 exec > >(tee -a "$LOG_PATH") 2>&1
 
 write_state() {{
-  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" "${{4:-0}}" "${{5:-}}" <<'PYEOF'
+  CURRENT_STAGE="$1"
+  CURRENT_PERCENT="${{2:-0}}"
+  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" "${{4:-0}}" "${{5:-}}" "${{6:-}}" <<'PYEOF'
 import json, sys, time
-path, pid, stage, pct, bytes_d, bytes_total, speed = sys.argv[1:8]
+path, pid, stage, pct, bytes_d, bytes_total, speed, note = sys.argv[1:9]
 with open(path, "w") as fh:
     payload = {{
         "pid": int(pid),
@@ -272,11 +274,21 @@ with open(path, "w") as fh:
         "bytes_downloaded": int(bytes_d or 0),
         "bytes_total": int(bytes_total or 0),
         "speed": speed or "",
+        "note": note or "",
         "updated_at": int(time.time()),
     }}
     json.dump(payload, fh)
 PYEOF
 }}
+
+CURRENT_STAGE="starting"
+CURRENT_PERCENT=0
+handle_disconnect() {{
+  write_state failed "${{CURRENT_PERCENT:-0}}" 0 0 "" "ssh_session_lost"
+  echo "REMOTE_SESSION_LOST|${{CURRENT_STAGE:-unknown}}|${{CURRENT_PERCENT:-0}}"
+  exit 1
+}}
+trap handle_disconnect HUP TERM INT
 
 echo "Installing llama.cpp with CUDA..."
 write_state apt 0
@@ -422,9 +434,11 @@ JOB_PID=$$
 exec > >(tee -a "$LOG_PATH") 2>&1
 
 write_state() {{
-  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" "${{4:-0}}" "${{5:-}}" <<'PYEOF'
+  CURRENT_STAGE="$1"
+  CURRENT_PERCENT="${{2:-0}}"
+  python3 - "$STATE_PATH" "$JOB_PID" "$1" "${{2:-0}}" "${{3:-0}}" "${{4:-0}}" "${{5:-}}" "${{6:-}}" <<'PYEOF'
 import json, sys, time
-path, pid, stage, pct, bytes_d, bytes_total, speed = sys.argv[1:8]
+path, pid, stage, pct, bytes_d, bytes_total, speed, note = sys.argv[1:9]
 with open(path, "w") as fh:
     payload = {{
         "pid": int(pid),
@@ -433,11 +447,15 @@ with open(path, "w") as fh:
         "bytes_downloaded": int(bytes_d or 0),
         "bytes_total": int(bytes_total or 0),
         "speed": speed or "",
+        "note": note or "",
         "updated_at": int(time.time()),
     }}
     json.dump(payload, fh)
 PYEOF
 }}
+
+CURRENT_STAGE="starting"
+CURRENT_PERCENT=0
 
 format_speed() {{
   BPS="${{1:-0}}"
@@ -483,6 +501,8 @@ fi
 DL_PID=""
 MONITOR_PID=""
 cleanup() {{
+  write_state failed "${{CURRENT_PERCENT:-0}}" "$LAST_BYTES" "$TOTAL_BYTES" "${{LAST_SPEED:-}}" "ssh_session_lost"
+  echo "REMOTE_SESSION_LOST|${{CURRENT_STAGE:-unknown}}|${{CURRENT_PERCENT:-0}}"
   if [ -n "$MONITOR_PID" ]; then
     kill -TERM "$MONITOR_PID" 2>/dev/null || true
   fi
@@ -494,6 +514,7 @@ trap cleanup TERM INT
 
 monitor_progress() {{
   LAST_BYTES=0
+  LAST_SPEED=""
   LAST_TS=$(date +%s)
   while kill -0 "$DL_PID" 2>/dev/null; do
     CUR_BYTES=$(stat -c%s "{dest}" 2>/dev/null || stat -f%z "{dest}" 2>/dev/null || echo 0)
@@ -507,6 +528,7 @@ monitor_progress() {{
       DELTA_BYTES=0
     fi
     SPEED_TEXT=$(format_speed $((DELTA_BYTES / DELTA_TS)))
+    LAST_SPEED="$SPEED_TEXT"
     if [ "$TOTAL_BYTES" -gt 0 ]; then
       PCT=$((CUR_BYTES * 100 / TOTAL_BYTES))
       if [ "$PCT" -gt 99 ]; then
@@ -640,14 +662,29 @@ def script_check_job(job_key: str) -> str:
     state = f"/workspace/.vastai-app/jobs/{job_key}.json"
     return f"""
 STATE="{state}"
+ALT_STATE="/tmp/.vastai-app/jobs/{job_key}.json"
 if [ ! -f "$STATE" ]; then
-    echo "MISSING"
-    exit 0
+    if [ -f "$ALT_STATE" ]; then
+        STATE="$ALT_STATE"
+    else
+        echo "MISSING"
+        exit 0
+    fi
 fi
 PID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$STATE" 2>/dev/null)
 STAGE=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('stage',''))" "$STATE" 2>/dev/null)
 if [ "$STAGE" = "done" ]; then
     echo "DONE"
+    cat "$STATE"
+    exit 0
+fi
+if [ "$STAGE" = "failed" ]; then
+    echo "FAILED"
+    cat "$STATE"
+    exit 0
+fi
+if [ "$STAGE" = "cancelled" ]; then
+    echo "CANCELLED"
     cat "$STATE"
     exit 0
 fi
@@ -665,6 +702,10 @@ def script_cancel_job(job_key: str) -> str:
     state = f"/workspace/.vastai-app/jobs/{job_key}.json"
     return f"""
 STATE="{state}"
+ALT_STATE="/tmp/.vastai-app/jobs/{job_key}.json"
+if [ ! -f "$STATE" ] && [ -f "$ALT_STATE" ]; then
+    STATE="$ALT_STATE"
+fi
 if [ -f "$STATE" ]; then
     PID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid',''))" "$STATE" 2>/dev/null)
     if [ -n "$PID" ]; then
@@ -686,7 +727,7 @@ def parse_check_job_output(output: str) -> tuple[str, dict]:
     if not lines:
         return "MISSING", {}
     status = lines[0].strip()
-    if status not in {"RUNNING", "DONE", "STALE", "MISSING"}:
+    if status not in {"RUNNING", "DONE", "FAILED", "CANCELLED", "STALE", "MISSING"}:
         return "MISSING", {}
     if len(lines) < 2:
         return status, {}
@@ -703,6 +744,10 @@ def script_stream_job_log(job_key: str) -> str:
     log = f"/tmp/install-{job_key}.log"
     return f"""
 STATE="{state}"
+ALT_STATE="/tmp/.vastai-app/jobs/{job_key}.json"
+if [ ! -f "$STATE" ] && [ -f "$ALT_STATE" ]; then
+  STATE="$ALT_STATE"
+fi
 LOG="{log}"
 LAST_LINE=0
 touch "$LOG" 2>/dev/null || true

@@ -1,6 +1,7 @@
 """LabShell V2 — remote instance-first AI Lab workspace.
 Manages views, workers, and wiring against a selected Vast.ai instance."""
 from __future__ import annotations
+import time
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QStackedWidget, QLabel, QVBoxLayout,
 )
@@ -90,6 +91,9 @@ class AppShell(QWidget):
         self._probe_callbacks: dict[int, callable] = {}
         self._setup_workers: dict[int, RemoteSetupWorker] = {}
         self._setup_cooldowns: dict[int, float] = {}
+        self._job_probe_misses: dict[str, int] = {}
+        self._job_log_markers: dict[str, set[str]] = {}
+        self._job_terminal_toasts: set[str] = set()
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -124,6 +128,7 @@ class AppShell(QWidget):
         self.studio.stop_requested.connect(self._stop_server)
         self.studio.fix_requested.connect(self._apply_diagnostic_fix)
         self.studio.instances_requested.connect(lambda: self._go("instances"))
+        self.studio.navigate_requested.connect(self._go)
 
         # --- Discover ---
         self.discover = DiscoverView(self.store, self.job_registry, self)
@@ -593,6 +598,7 @@ class AppShell(QWidget):
         import time
 
         key = build_job_key(iid, "SYSTEM", "SETUP")
+        self._reset_job_tracking(key)
         desc = JobDescriptor(
             key=key,
             iid=iid,
@@ -733,6 +739,7 @@ class AppShell(QWidget):
         from app.lab.state.models import JobDescriptor, build_job_key
 
         key = build_job_key(iid, repo, quant_token)
+        self._reset_job_tracking(key)
         desc = JobDescriptor(
             key=key,
             iid=iid,
@@ -830,10 +837,16 @@ class AppShell(QWidget):
         if not ok:
             # Let the background prober handle disconnections/failures.
             # This prevents the UI from resetting while the remote process might still be running.
+            self._append_job_log_once(
+                desc,
+                "ssh-interrupted",
+                "SSH stream interrupted. Reconnecting now to verify whether the remote process is still alive.",
+            )
             if self._controller:
                 self._controller.log_line.emit(f"#{iid} Unstable connection during install. Waiting for automatic reconnection...")
             return
 
+        self._forget_job_tracking(key)
         self.job_registry.finish(key, ok=True)
         
         # Proactive sync: update store immediately so UI doesn't flicker
@@ -917,7 +930,13 @@ class AppShell(QWidget):
             if desc.iid == iid:
                 self._probe_single_job(desc, instances)
 
+    def _has_live_local_job_stream(self, iid: int) -> bool:
+        worker = self._setup_workers.get(iid)
+        return bool(worker is not None and worker.isRunning())
+
     def _probe_single_job(self, desc, instances):
+        if self._has_live_local_job_stream(desc.iid):
+            return
         inst = next((i for i in instances if i.id == desc.iid), None)
         if not inst or not inst.ssh_host:
             return
@@ -937,8 +956,19 @@ class AppShell(QWidget):
 
     def _on_job_probe(self, desc, status: str, state: dict):
         if status == "OFFLINE":
+            self._append_job_log_once(
+                desc,
+                "probe-offline",
+                "Reconnect attempt failed; remote status is still unknown while SSH is down.",
+            )
             return # Don't drop it. Connection failed, but maybe the machine is just rebooting.
         if status == "DONE":
+            self._forget_job_tracking(desc.key)
+            self._append_job_log_once(
+                desc,
+                "probe-done",
+                "Remote process finished successfully after reconnect.",
+            )
             self.job_registry.finish(desc.key, ok=True)
             if self._controller:
                 self._controller.toast_requested.emit(
@@ -946,17 +976,47 @@ class AppShell(QWidget):
                 )
             self._probe_instance(desc.iid)
             return
+        if status == "FAILED":
+            self._fail_job_after_probe(
+                desc,
+                state,
+                self._format_remote_failure_message(desc, state),
+            )
+            return
+        if status == "CANCELLED":
+            self._fail_job_after_probe(
+                desc,
+                state,
+                "Remote job was cancelled before reconnect completed.",
+                cancelled=True,
+            )
+            return
         if status == "MISSING":
-            # Don't drop it immediately. The script might be slow to create the file
-            # or the filesystem might be momentarily laggy.
+            self._job_probe_misses[desc.key] = self._job_probe_misses.get(desc.key, 0) + 1
+            if desc.percent > 0 or (time.time() - desc.started_at) > 20 or self._job_probe_misses[desc.key] >= 2:
+                self._fail_job_after_probe(
+                    desc,
+                    state,
+                    self._format_missing_job_message(desc),
+                )
+                return
+            self._append_job_log_once(
+                desc,
+                "probe-missing-wait",
+                "Reconnect probe could not find the remote job state file yet. Waiting before declaring the job lost.",
+            )
             return
         if status == "STALE":
-            self.job_registry.update(desc.key, stage="cancelled")
-            self.discover.side_panel.show_stale(desc, state)
+            self._fail_job_after_probe(
+                desc,
+                state,
+                self._format_stale_job_message(desc, state),
+            )
             return
         if status != "RUNNING":
             return
 
+        self._job_probe_misses.pop(desc.key, None)
         self.job_registry.update(
             desc.key,
             stage=state.get("stage", desc.stage),
@@ -971,6 +1031,11 @@ class AppShell(QWidget):
         )
         self._reattach_stream(desc)
         self.job_registry.mark_reattached(desc.key)
+        self._append_job_log_once(
+            desc,
+            "probe-running",
+            "SSH reconnected and the remote job is still running. Live sync resumed.",
+        )
         if self._controller:
             self._controller.toast_requested.emit(
                 f"Reattached to install on #{desc.iid}.", "info", 3000
@@ -1029,6 +1094,64 @@ class AppShell(QWidget):
 
         worker.line.connect(on_line)
         worker.start()
+
+    def _append_job_log_once(self, desc, marker: str, message: str) -> None:
+        seen = self._job_log_markers.setdefault(desc.key, set())
+        if marker in seen:
+            return
+        seen.add(marker)
+        self.discover.side_panel.append_log(desc.key, message)
+
+    def _reset_job_tracking(self, key: str) -> None:
+        self._job_probe_misses.pop(key, None)
+        self._job_log_markers.pop(key, None)
+        self._job_terminal_toasts.discard(key)
+
+    def _forget_job_tracking(self, key: str) -> None:
+        self._job_probe_misses.pop(key, None)
+        self._job_log_markers.pop(key, None)
+
+    def _format_remote_failure_message(self, desc, state: dict) -> str:
+        note = (state.get("note") or "").strip().lower()
+        stage = state.get("stage", desc.stage) or desc.stage
+        pct = state.get("percent", desc.percent) or desc.percent or 0
+        if note == "ssh_session_lost":
+            return (
+                f"Remote process stopped after the SSH session dropped. "
+                f"Last confirmed stage: {stage} ({pct}%)."
+            )
+        return (
+            f"Remote process reported failure after reconnect. "
+            f"Last confirmed stage: {stage} ({pct}%)."
+        )
+
+    def _format_missing_job_message(self, desc) -> str:
+        return (
+            "Reconnect probe could not find the remote job state file in /workspace or /tmp. "
+            "Because this build runs in the SSH session, it likely stopped when SSH disconnected."
+        )
+
+    def _format_stale_job_message(self, desc, state: dict) -> str:
+        stage = state.get("stage", desc.stage) or desc.stage
+        pct = state.get("percent", desc.percent) or desc.percent or 0
+        return (
+            f"Remote reconnect confirmed that the tracked PID is no longer running. "
+            f"Last confirmed stage: {stage} ({pct}%). The foreground build stopped after SSH was lost."
+        )
+
+    def _fail_job_after_probe(self, desc, state: dict, message: str, cancelled: bool = False) -> None:
+        self._append_job_log_once(desc, "probe-terminal", message)
+        self._forget_job_tracking(desc.key)
+        if cancelled:
+            self.job_registry.update(desc.key, stage="cancelled")
+            self.job_registry.finish(desc.key, ok=False, error="cancelled")
+            return
+        self.job_registry.finish(desc.key, ok=False, error=message)
+        if self._controller and desc.key not in self._job_terminal_toasts:
+            self._job_terminal_toasts.add(desc.key)
+            self._controller.toast_requested.emit(
+                f"Remote job on #{desc.iid} stopped after reconnect check.", "warning", 4000
+            )
 
     # --- Model operations ---
 

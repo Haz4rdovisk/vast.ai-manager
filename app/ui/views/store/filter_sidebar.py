@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt, QTimer
 from app import theme as t
 from app.models_rental import OfferQuery, OfferType, OfferSort
+from app.ui.components.primitives import GlassCard
 from app.ui.views.store.constants import (
     POPULAR_GPUS, GPU_ARCHS, CPU_ARCHS, REGIONS, COUNTRIES,
     HOSTING_TYPES, PRESETS,
@@ -21,11 +22,12 @@ def _section_label(text: str) -> QLabel:
     return lbl
 
 
-class CollapsibleSection(QWidget):
+class CollapsibleSection(GlassCard):
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self._title = title
-        root = QVBoxLayout(self)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        root = self.body()
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(t.SPACE_2)
 
@@ -37,7 +39,7 @@ class CollapsibleSection(QWidget):
             f"QToolButton {{ color: {t.TEXT_MID}; background: transparent;"
             f" border: none; font-size: {t.FONT_SIZE_LABEL}px;"
             f" font-weight: 700; letter-spacing: 1.5px; text-align: left;"
-            f" padding: 2px 0; }}"
+            f" padding: 9px 14px 3px 14px; }}"
             f"QToolButton:hover {{ color: {t.TEXT_HI}; }}"
         )
         self.toggle.toggled.connect(self._set_expanded)
@@ -45,7 +47,7 @@ class CollapsibleSection(QWidget):
 
         self.body = QWidget()
         self.body_lay = QVBoxLayout(self.body)
-        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setContentsMargins(t.SPACE_4, 0, t.SPACE_4, t.SPACE_3)
         self.body_lay.setSpacing(t.SPACE_3)
         root.addWidget(self.body)
         self._set_expanded(True)
@@ -96,8 +98,8 @@ class FilterSidebar(QFrame):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         inner = QWidget()
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
-        lay.setSpacing(t.SPACE_4)
+        lay.setContentsMargins(t.SPACE_4, 0, t.SPACE_4, t.SPACE_4)
+        lay.setSpacing(t.SPACE_3)
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 

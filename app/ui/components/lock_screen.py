@@ -14,6 +14,20 @@ class LockScreen(QWidget):
     def __init__(self, title: str, message: str, parent=None):
         super().__init__(parent)
         self.setObjectName("lock-screen")
+        self.setStyleSheet(
+            f"""
+            QWidget#lock-screen QPushButton#lock-screen-cta {{
+                min-width: 220px;
+                max-width: 220px;
+                min-height: 44px;
+                max-height: 44px;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: 700;
+                padding: 0;
+            }}
+            """
+        )
         
         lay = QVBoxLayout(self)
         lay.setContentsMargins(t.SPACE_8, t.SPACE_8, t.SPACE_8, t.SPACE_8)
@@ -41,7 +55,8 @@ class LockScreen(QWidget):
         self.msg_lbl.setWordWrap(True)
 
         self.goto_btn = QPushButton("Go to Instances")
-        self.goto_btn.setFixedWidth(220)
+        self.goto_btn.setObjectName("lock-screen-cta")
+        self.goto_btn.setFixedSize(220, 44)
         self.goto_btn.setProperty("variant", "primary")
         self.goto_btn.clicked.connect(self.instances_requested.emit)
 

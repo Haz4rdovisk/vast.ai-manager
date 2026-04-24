@@ -33,14 +33,25 @@ class InstallProgress(QWidget):
         self._state: dict[str, str] = {stage: "pending" for stage in STAGES}
         self._percent = 0
         self._current_stage = "apt"
+        self._stage_rows: dict[str, QWidget] = {}
+        self._stage_dots: dict[str, QLabel] = {}
+        self._stage_titles: dict[str, QLabel] = {}
+        self._stage_subtitles: dict[str, QLabel] = {}
+        self._stage_suffixes: dict[str, QLabel] = {}
+        self._stage_connectors: dict[str, QFrame] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(t.SPACE_3)
 
         hero = QFrame()
+        hero.setObjectName("install-progress-hero")
         hero.setStyleSheet(
-            f"background: {t.SURFACE_1}; border: 1px solid {t.BORDER_LOW}; border-radius: 14px;"
+            f"QFrame#install-progress-hero {{"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            f" stop:0 rgba(255,255,255,0.035),"
+            f" stop:1 rgba(255,255,255,0.018));"
+            f" border: none; border-radius: 18px; }}"
         )
         hero_lay = QHBoxLayout(hero)
         hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_3, t.SPACE_4, t.SPACE_3)
@@ -92,20 +103,71 @@ class InstallProgress(QWidget):
         root.addWidget(self._bar)
 
         box = QFrame()
+        box.setObjectName("install-progress-timeline")
         box.setStyleSheet(
-            f"background: {t.SURFACE_1}; border: 1px solid {t.BORDER_LOW}; border-radius: 14px;"
+            f"QFrame#install-progress-timeline {{"
+            f"background: rgba(255,255,255,0.022);"
+            f" border: none; border-radius: 18px; }}"
         )
         box_lay = QVBoxLayout(box)
-        box_lay.setContentsMargins(t.SPACE_3, t.SPACE_3, t.SPACE_3, t.SPACE_3)
-        box_lay.setSpacing(8)
+        box_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_3)
+        box_lay.setSpacing(10)
         stage_title = QLabel("Timeline")
-        stage_title.setProperty("role", "section")
+        stage_title.setStyleSheet(
+            f"color: {t.TEXT_LOW}; font-size: 10px; font-weight: 800; letter-spacing: 1.4px;"
+        )
         box_lay.addWidget(stage_title)
-        self._labels: dict[str, QLabel] = {}
-        for stage in STAGES:
-            label = QLabel()
-            self._labels[stage] = label
-            box_lay.addWidget(label)
+        timeline = QWidget()
+        timeline_lay = QVBoxLayout(timeline)
+        timeline_lay.setContentsMargins(0, 0, 0, 0)
+        timeline_lay.setSpacing(2)
+        for idx, stage in enumerate(STAGES):
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(12)
+
+            rail = QVBoxLayout()
+            rail.setContentsMargins(0, 0, 0, 0)
+            rail.setSpacing(0)
+            spacer_top = QWidget()
+            spacer_top.setFixedHeight(6)
+            rail.addWidget(spacer_top)
+            dot = QLabel()
+            dot.setFixedSize(12, 12)
+            dot.setAlignment(Qt.AlignCenter)
+            rail.addWidget(dot, 0, Qt.AlignHCenter)
+            connector = QFrame()
+            connector.setFixedWidth(2)
+            connector.setMinimumHeight(24)
+            connector.setStyleSheet("background: transparent; border: none;")
+            connector.setVisible(idx < len(STAGES) - 1)
+            rail.addWidget(connector, 1, Qt.AlignHCenter)
+            row_lay.addLayout(rail)
+
+            text_col = QVBoxLayout()
+            text_col.setContentsMargins(0, 0, 0, 0)
+            text_col.setSpacing(1)
+            title = QLabel(_STAGE_LABELS[stage].title())
+            title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 13px; font-weight: 700;")
+            subtitle = QLabel("")
+            subtitle.setStyleSheet(f"color: {t.TEXT_LOW}; font-size: 11px;")
+            text_col.addWidget(title)
+            text_col.addWidget(subtitle)
+            row_lay.addLayout(text_col, 1)
+
+            suffix = QLabel()
+            suffix.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            row_lay.addWidget(suffix, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+            self._stage_rows[stage] = row
+            self._stage_dots[stage] = dot
+            self._stage_titles[stage] = title
+            self._stage_subtitles[stage] = subtitle
+            self._stage_suffixes[stage] = suffix
+            self._stage_connectors[stage] = connector
+            timeline_lay.addWidget(row)
+        box_lay.addWidget(timeline)
         root.addWidget(box)
 
         toggle_row = QHBoxLayout()
@@ -196,25 +258,48 @@ class InstallProgress(QWidget):
         self._toggle.setText("Hide log" if visible else "Show log")
 
     def _refresh_labels(self) -> None:
-        glyph = {"pending": "○", "running": "◔", "done": "●", "failed": "✕"}
         colors = {
             "pending": t.TEXT_LOW,
             "running": t.ACCENT,
             "done": t.OK,
             "failed": t.ERR,
         }
+        subtitles = {
+            "pending": "Waiting for previous steps",
+            "running": "Currently running on the remote machine",
+            "done": "Finished successfully",
+            "failed": "Stopped before completion",
+        }
+        chips = {
+            "pending": ("Queued", f"color: {t.TEXT_LOW}; background: rgba(255,255,255,0.04); border: none;"),
+            "running": ("Running", f"color: {t.ACCENT_SOFT}; background: rgba(124,92,255,0.16); border: 1px solid rgba(124,92,255,0.24);"),
+            "done": ("Done", f"color: {t.OK}; background: rgba(59,212,136,0.14); border: 1px solid rgba(59,212,136,0.22);"),
+            "failed": ("Failed", f"color: {t.ERR}; background: rgba(240,85,106,0.14); border: 1px solid rgba(240,85,106,0.22);"),
+        }
         for stage in STAGES:
             state = self._state[stage]
-            label = _STAGE_LABELS[stage]
-            suffix = {
-                "pending": "Queued",
-                "running": "Running",
-                "done": "Done",
-                "failed": "Failed",
-            }[state]
-            self._labels[stage].setText(f"{glyph[state]}  {label}  ·  {suffix}")
-            self._labels[stage].setStyleSheet(
-                f"color: {colors[state]}; font-size: 12px; font-weight: 700; padding: 4px 0;"
+            dot = self._stage_dots[stage]
+            title = self._stage_titles[stage]
+            subtitle = self._stage_subtitles[stage]
+            suffix = self._stage_suffixes[stage]
+            connector = self._stage_connectors[stage]
+            color = colors[state]
+            chip_text, chip_style = chips[state]
+
+            dot.setStyleSheet(
+                f"background: {color}; border: 2px solid rgba(255,255,255,0.06);"
+                "border-radius: 6px;"
+            )
+            title.setStyleSheet(f"color: {color if state != 'pending' else t.TEXT_MID}; font-size: 13px; font-weight: 700;")
+            title.setText(_STAGE_LABELS[stage].title())
+            subtitle.setText(subtitles[state])
+            connector.setStyleSheet(
+                f"background: {color if state in ('done', 'running') else 'rgba(255,255,255,0.08)'};"
+                "border: none; border-radius: 1px;"
+            )
+            suffix.setText(chip_text)
+            suffix.setStyleSheet(
+                chip_style + "border-radius: 999px; padding: 5px 10px; font-size: 11px; font-weight: 800;"
             )
 
     def _refresh_header(self, stage: str | None = None) -> None:

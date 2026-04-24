@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QStackedLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QStackedLayout, QSizePolicy
 
 from app.models import Instance
 from app.theme import ACCENT, BORDER_LOW, FONT_MONO, TEXT, TEXT_LOW, metric_color, temp_color
@@ -11,14 +11,14 @@ class _Bar(QFrame):
     def __init__(self, label: str, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.setSpacing(8)
         self.lbl = QLabel(label)
         font = self.lbl.font()
         font.setPointSize(8)
         font.setFamily(FONT_MONO)
         self.lbl.setFont(font)
-        self.lbl.setFixedWidth(110) # Fixed width prevents text expansion from triggering layout recalc
+        self.lbl.setFixedWidth(118) # Fixed width prevents text expansion from triggering layout recalc
         self.lbl.setStyleSheet(f"color: {TEXT_LOW};")
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -46,9 +46,9 @@ class LiveFooter(QFrame):
 
     def __init__(self, inst: Instance, parent=None) -> None:
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.main_lay = QVBoxLayout(self)
-        # Shifted up to reduce the gap with the separator line
-        self.main_lay.setContentsMargins(0, -8, 0, 16) 
+        self.main_lay.setContentsMargins(0, 8, 0, 10)
         self.main_lay.setSpacing(0)
 
         self.stack = QStackedLayout()
@@ -56,9 +56,10 @@ class LiveFooter(QFrame):
 
         # 1. Loading State
         self.loading_widget = QFrame()
+        self.loading_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         load_lay = QVBoxLayout(self.loading_widget)
-        load_lay.setContentsMargins(0, 0, 0, 0)
-        load_lay.setSpacing(2)
+        load_lay.setContentsMargins(0, 6, 0, 6)
+        load_lay.setSpacing(10)
         
         load_lbl = QLabel("Loading hardware metrics...")
         lf = load_lbl.font()
@@ -82,14 +83,16 @@ class LiveFooter(QFrame):
 
         # 2. Metrics State
         self.metrics_widget = QFrame()
+        self.metrics_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         met_lay = QVBoxLayout(self.metrics_widget)
-        met_lay.setContentsMargins(0, 0, 0, 0)
-        met_lay.setSpacing(6)
+        met_lay.setContentsMargins(0, 4, 0, 6)
+        met_lay.setSpacing(12)
 
         row = QHBoxLayout()
-        row.setSpacing(14)
+        row.setSpacing(18)
         self.bars = [_Bar("GPU \u2014"), _Bar("vRAM \u2014"), _Bar("CPU \u2014"), _Bar("RAM \u2014")]
         for bar in self.bars:
+            bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             row.addWidget(bar, stretch=1)
         met_lay.addLayout(row)
         self.stack.addWidget(self.metrics_widget)

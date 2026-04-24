@@ -37,8 +37,11 @@ from app.lab.services.model_catalog import CatalogEntry
 from app.lab.views.install_panel_side import InstallPanelSide
 from app.lab.workers.huggingface_worker import HFSearchWorker, HFModelDetailWorker
 from app.ui.brand_manager import BrandManager
+from app.ui.components import icons
 from app.ui.components.model_card import ModelCard
 from app.ui.components.lock_screen import LockScreen
+from app.ui.components.page_header import PageHeader
+from app.ui.components.primitives import IconButton
 
 
 _FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err", "pending": "muted"}
@@ -113,21 +116,8 @@ class DiscoverView(QWidget):
             QWidget#discover-view {{
                 background: {t.BG_DEEP};
             }}
-            QWidget#discover-topbar {{
-                background: #05080d;
-                border-bottom: 1px solid rgba(255,255,255,0.06);
-            }}
-            QLabel#discover-brand {{
-                color: {t.TEXT_HI};
-                font-size: 16px;
-                font-weight: 900;
-            }}
-            QLabel#discover-subbrand {{
-                color: {t.TEXT_MID};
-                font-size: 11px;
-                font-weight: 600;
-                letter-spacing: 1px;
-                text-transform: uppercase;
+            QWidget#discover-controls {{
+                background: transparent;
             }}
             QWidget#discover-left-pane {{
                 background: {t.BG_DEEP};
@@ -156,43 +146,54 @@ class DiscoverView(QWidget):
                 font-weight: 800;
             }}
             QLineEdit {{
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 10px;
-                padding: 8px 14px;
+                background: #1C2535;
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 14px;
+                padding: 6px 14px;
+                min-height: 32px;
                 color: {t.TEXT_HI};
             }}
             QLineEdit:focus {{
-                border-color: {t.ACCENT};
-                background: rgba(255,255,255,0.05);
+                border-color: rgba(255,255,255,0.08);
+                background: #202B3E;
             }}
             QComboBox {{
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 10px;
-                padding: 6px 10px;
+                background: #253044;
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 14px;
+                padding: 6px 14px;
+                min-height: 32px;
                 color: {t.TEXT_HI};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 18px;
             }}
             QPushButton#discover-search-btn {{
                 background: {t.ACCENT};
                 border: none;
-                border-radius: 10px;
+                border-radius: 14px;
                 color: white;
                 font-weight: 700;
                 padding: 8px 18px;
+                min-height: 32px;
             }}
             QPushButton#discover-search-btn:hover {{
                 background: {t.ACCENT_HI};
             }}
-            QPushButton#discover-close-btn {{
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.1);
+            QToolButton#discover-close-btn {{
+                background: transparent;
+                border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 10px;
-                color: {t.TEXT_HI};
-                font-weight: 600;
+                color: {t.TEXT_MID};
+                min-width: 28px;
+                max-width: 28px;
+                min-height: 28px;
+                max-height: 28px;
             }}
-            QPushButton#discover-close-btn:hover {{
-                background: rgba(255,255,255,0.08);
+            QToolButton#discover-close-btn:hover {{
+                background: rgba(255,255,255,0.06);
+                color: {t.TEXT_HI};
             }}
             """
         )
@@ -234,35 +235,37 @@ class DiscoverView(QWidget):
         self._splitter_save_timer.timeout.connect(self._flush_splitter_sizes)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
+        root.setSpacing(t.SPACE_3)
+
+        header = PageHeader(
+            "Model Store",
+            "Browse the connected GGUF catalog and install models on your instances.",
+        )
+
+        self.summary_scope = QLabel("0 connected targets")
+        self.summary_scope.setObjectName("discover-summary-chip")
+        header.add_action(self.summary_scope)
+
+        self.summary_ops = QLabel("0 active operations")
+        self.summary_ops.setObjectName("discover-summary-chip")
+        header.add_action(self.summary_ops)
+
+        self.close_panel_btn = IconButton(icons.CLOSE, "Hide settings")
+        self.close_panel_btn.setObjectName("discover-close-btn")
+        self.close_panel_btn.setVisible(True)
+        self.close_panel_btn.clicked.connect(self._toggle_side_panel)
+        header.add_action(self.close_panel_btn)
+
+        root.addWidget(header)
 
         self.topbar = QWidget()
-        self.topbar.setObjectName("discover-topbar")
-        self.topbar.setFixedHeight(64)
+        self.topbar.setObjectName("discover-controls")
         top_lay = QHBoxLayout(self.topbar)
-        top_lay.setContentsMargins(16, 8, 16, 8)
+        top_lay.setContentsMargins(0, 0, 0, 0)
         top_lay.setSpacing(t.SPACE_3)
 
-        # 1. Left Section (Brand)
-        left_sect = QWidget()
-        left_sect_lay = QHBoxLayout(left_sect)
-        left_sect_lay.setContentsMargins(0, 0, 0, 0)
-        left_sect_lay.setSpacing(t.SPACE_3)
-        brand_box = QVBoxLayout()
-        brand_box.setContentsMargins(0, 0, 0, 0)
-        brand_box.setSpacing(1)
-        brand = QLabel("Model Store")
-        brand.setObjectName("discover-brand")
-        brand_box.addWidget(brand)
-        subbrand = QLabel("Connected GGUF Catalog")
-        subbrand.setObjectName("discover-subbrand")
-        brand_box.addWidget(subbrand)
-        left_sect_lay.addLayout(brand_box)
-        left_sect_lay.addStretch()
-        top_lay.addWidget(left_sect, 1)
-
-        # 2. Center Section (Consolidated Search Bar)
+        # Consolidated Search Bar
         center_sect = QWidget()
         center_sect_lay = QHBoxLayout(center_sect)
         center_sect_lay.setContentsMargins(0, 0, 0, 0)
@@ -270,19 +273,19 @@ class DiscoverView(QWidget):
         
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search Hugging Face...")
-        self.search_input.setFixedWidth(280)
+        self.search_input.setFixedWidth(220)
         self.search_input.returnPressed.connect(lambda: self._search())
         center_sect_lay.addWidget(self.search_input)
 
         self.filter = QComboBox()
         self.filter.addItems(list(CATEGORY_MAP.keys()))
-        self.filter.setFixedWidth(100)
+        self.filter.setFixedWidth(110)
         self.filter.currentIndexChanged.connect(lambda _: self._search())
         center_sect_lay.addWidget(self.filter)
 
         self.size_filter = QComboBox()
         self.size_filter.addItems(["All Sizes", "< 7B", "7B - 14B", "14B - 35B", "35B - 80B", "> 80B", "Unknown Size"])
-        self.size_filter.setFixedWidth(100)
+        self.size_filter.setFixedWidth(110)
         self.size_filter.currentIndexChanged.connect(self._render)
         center_sect_lay.addWidget(self.size_filter)
 
@@ -298,34 +301,8 @@ class DiscoverView(QWidget):
         self.search_btn.clicked.connect(lambda: self._search())
         center_sect_lay.addWidget(self.search_btn)
         
-        top_lay.addWidget(center_sect, 0, Qt.AlignCenter)
-
-        # 3. Right Section (System Actions)
-        right_sect = QWidget()
-        right_sect_lay = QHBoxLayout(right_sect)
-        right_sect_lay.setContentsMargins(0, 0, 0, 0)
-        right_sect_lay.setSpacing(t.SPACE_2)
-        right_sect_lay.addStretch()
-
-        self.summary_scope = QLabel("0 connected targets")
-        self.summary_scope.setObjectName("discover-summary-chip")
-        right_sect_lay.addWidget(self.summary_scope, 0, Qt.AlignVCenter)
-
-        self.summary_ops = QLabel("0 active operations")
-        self.summary_ops.setObjectName("discover-summary-chip")
-        right_sect_lay.addWidget(self.summary_ops, 0, Qt.AlignVCenter)
-
-        self.close_panel_btn = QPushButton("Close")
-        self.close_panel_btn.setObjectName("discover-close-btn")
-        self.close_panel_btn.setProperty("variant", "secondary")
-        self.close_panel_btn.setFixedWidth(124)
-        self.close_panel_btn.setVisible(True)
-        self.close_panel_btn.clicked.connect(self._toggle_side_panel)
-        right_sect_lay.addWidget(self.close_panel_btn)
-
-        top_lay.addWidget(right_sect, 1)
-
-        root.addWidget(self.topbar)
+        top_lay.addWidget(center_sect, 0, Qt.AlignLeft)
+        top_lay.addStretch(1)
 
         self.layout_stack = QStackedWidget()
         root.addWidget(self.layout_stack, 1)
@@ -347,8 +324,9 @@ class DiscoverView(QWidget):
         self.left_pane = QWidget()
         self.left_pane.setObjectName("discover-left-pane")
         left_lay = QVBoxLayout(self.left_pane)
-        left_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, 0)
+        left_lay.setContentsMargins(t.SPACE_4, 0, t.SPACE_4, 0)
         left_lay.setSpacing(t.SPACE_4)
+        left_lay.addWidget(self.topbar)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -367,6 +345,7 @@ class DiscoverView(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self.list_host = QWidget()
+        self.list_host.setMinimumWidth(0)
         self.list_lay = QVBoxLayout(self.list_host)
         self.list_lay.setContentsMargins(0, 0, t.SPACE_3, 0)
         self.list_lay.setSpacing(t.SPACE_3)
@@ -376,7 +355,7 @@ class DiscoverView(QWidget):
         self._splitter.setChildrenCollapsible(True)
         self._splitter.setHandleWidth(1)
         self._splitter.setStyleSheet(
-            f"QSplitter::handle {{ background: {t.BORDER_LOW}; }}"
+            "QSplitter::handle { background: transparent; }"
         )
         self._splitter.addWidget(self.left_pane)
         self.side_panel = InstallPanelSide(self.store, self.registry, self)
@@ -1078,7 +1057,7 @@ class DiscoverView(QWidget):
         self._sync_side_panel_button()
 
     def _sync_side_panel_button(self) -> None:
-        self.close_panel_btn.setText("Hide Settings" if self.side_panel.isVisible() else "Show Settings")
+        self.close_panel_btn.setToolTip("Hide settings" if self.side_panel.isVisible() else "Show settings")
 
     def _adopt_default_selection(self, candidate_models: list[HFModel] | None = None) -> None:
         candidates = candidate_models if candidate_models is not None else self.current_models

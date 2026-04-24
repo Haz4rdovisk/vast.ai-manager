@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout
 
 from app.services.instance_filter import FilterState
 from app.theme import BORDER_LOW
+from app import theme as t
 from app.ui.components import icons
 from app.ui.components.primitives import IconButton
 
@@ -44,28 +45,69 @@ class FilterBar(QFrame):
             sort=initial.sort,
         )
         self.setStyleSheet(f"FilterBar {{ border-bottom: 1px solid {BORDER_LOW}; }}")
+        self.setStyleSheet(
+            f"""
+            FilterBar {{
+                border-bottom: 1px solid {BORDER_LOW};
+            }}
+            FilterBar QComboBox {{
+                background: #253044;
+                color: {t.TEXT_HI};
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 14px;
+                padding: 6px 14px;
+                min-height: 32px;
+            }}
+            FilterBar QComboBox::drop-down {{
+                border: none;
+                width: 18px;
+            }}
+            FilterBar QComboBox:focus {{
+                border-color: rgba(255,255,255,0.08);
+                background: #202B3E;
+            }}
+            FilterBar QToolButton {{
+                background: transparent;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 10px;
+                color: {t.TEXT_MID};
+                min-width: 28px;
+                max-width: 28px;
+                min-height: 28px;
+                max-height: 28px;
+            }}
+            FilterBar QToolButton:hover {{
+                background: rgba(255,255,255,0.06);
+                color: {t.TEXT_HI};
+            }}
+            """
+        )
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 6, 0, 6)
         lay.setSpacing(8)
 
         self.gpu_combo = QComboBox()
         self.gpu_combo.addItem("All GPUs", "")
+        self.gpu_combo.setMinimumWidth(120)
         self.gpu_combo.currentIndexChanged.connect(self._on_gpu)
         lay.addWidget(self.gpu_combo)
 
         self.status_combo = QComboBox()
+        self.status_combo.setMinimumWidth(130)
         for label, value in _STATUS_OPTIONS:
             self.status_combo.addItem(label, value)
         self.status_combo.currentIndexChanged.connect(self._on_status)
         lay.addWidget(self.status_combo)
 
         self.label_combo = QComboBox()
+        self.label_combo.setMinimumWidth(112)
         self.label_combo.addItem("All", "")
         self.label_combo.addItem("No Label", "__none__")
         self.label_combo.currentIndexChanged.connect(self._on_label)
         lay.addWidget(self.label_combo)
 
         self.sort_combo = QComboBox()
+        self.sort_combo.setMinimumWidth(132)
         for text, key in _SORT_OPTIONS:
             self.sort_combo.addItem(text, key)
         self.sort_combo.currentIndexChanged.connect(self._on_sort)

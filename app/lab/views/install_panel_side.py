@@ -26,7 +26,7 @@ from app.lab.services.job_registry import JobRegistry
 from app.lab.services.model_catalog import CatalogEntry
 from app.lab.workers.huggingface_worker import HFModelDetailWorker
 from app.ui.components.install_progress import InstallProgress
-from app.ui.components.primitives import Badge, StatusPill
+from app.ui.components.primitives import Badge, GlassCard, StatusPill
 
 
 _FIT_LEVEL = {"perfect": "ok", "good": "info", "marginal": "warn", "too_tight": "err", "pending": "muted"}
@@ -37,6 +37,25 @@ _FIT_LABEL = {
     "too_tight": "Too Large",
     "pending": "Analyzing...",
 }
+
+
+def _flat_card() -> GlassCard:
+    card = GlassCard()
+    card.setGraphicsEffect(None)
+    card.setStyleSheet(
+        """
+        QFrame#SolidCard {
+            background: #101722;
+            border: 1px solid #243047;
+            border-radius: 16px;
+        }
+        QFrame#SolidCard:hover {
+            background: #121b29;
+            border-color: #33415d;
+        }
+        """
+    )
+    return card
 
 
 def _remote_has_selected_file(state, selected_file: HFModelFile | None) -> bool:
@@ -496,10 +515,17 @@ class InstallPanelSide(QWidget):
         self.setStyleSheet(
             f"""
             QWidget#studio-settings {{
-                background: {t.BG_BASE};
-                border-left: 1px solid {t.BORDER_LOW};
+                background: transparent;
             }}
-            QFrame#inspector-card,
+            QWidget#studio-settings QFrame#SolidCard {{
+                background: #101722;
+                border: 1px solid #243047;
+                border-radius: 16px;
+            }}
+            QWidget#studio-settings QFrame#SolidCard:hover {{
+                background: #121b29;
+                border-color: #33415d;
+            }}
             QFrame#stale-install-banner,
             QFrame#danger-strip {{
                 background: {t.SURFACE_1};
@@ -510,16 +536,17 @@ class InstallPanelSide(QWidget):
             QWidget#studio-settings QScrollArea::viewport,
             QWidget#studio-settings QScrollArea > QWidget,
             QWidget#studio-settings QScrollArea > QWidget > QWidget {{
-                background: {t.BG_BASE};
+                background: transparent;
                 border: none;
             }}
             QFrame#deploy-target {{
-                background: #111722;
-                border: 1px solid {t.BORDER_MED};
+                background: #101722;
+                border: 1px solid #243047;
                 border-radius: 16px;
             }}
             QFrame#deploy-target:hover {{
-                border-color: rgba(124,92,255,0.40);
+                background: #121b29;
+                border-color: #33415d;
             }}
             QComboBox {{
                 background: {t.SURFACE_3};
@@ -543,8 +570,14 @@ class InstallPanelSide(QWidget):
         )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
-        root.setSpacing(t.SPACE_4)
+        root.setContentsMargins(t.SPACE_2, 0, t.SPACE_2, t.SPACE_2)
+        root.setSpacing(0)
+
+        panel_card = _flat_card()
+        root.addWidget(panel_card, 1)
+        panel_lay = panel_card.body()
+        panel_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        panel_lay.setSpacing(t.SPACE_4)
 
         header = QHBoxLayout()
         title = QLabel("Settings")
@@ -556,7 +589,7 @@ class InstallPanelSide(QWidget):
         self._panel_meta = QLabel("0 models")
         self._panel_meta.setProperty("role", "muted")
         header.addWidget(self._panel_meta)
-        root.addLayout(header)
+        panel_lay.addLayout(header)
 
         self._stale_banner = QFrame()
         self._stale_banner.setObjectName("stale-install-banner")
@@ -577,10 +610,10 @@ class InstallPanelSide(QWidget):
         discard.clicked.connect(self._on_stale_discard)
         stale_lay.addWidget(discard)
         self._stale_banner.hide()
-        root.addWidget(self._stale_banner)
+        panel_lay.addWidget(self._stale_banner)
 
         self.stack = QStackedWidget()
-        root.addWidget(self.stack, 1)
+        panel_lay.addWidget(self.stack, 1)
         self._idle = self._build_idle()
         self._ready = self._build_ready()
         self._busy = self._build_busy()
@@ -647,11 +680,10 @@ class InstallPanelSide(QWidget):
     def _build_idle(self) -> QWidget:
         widget = QWidget()
         lay = QVBoxLayout(widget)
-        lay.setContentsMargins(0, t.SPACE_6, 0, 0)
-        lay.setSpacing(t.SPACE_4)
-        card = QFrame()
-        card.setObjectName("inspector-card")
-        card_lay = QVBoxLayout(card)
+        lay.setContentsMargins(0, t.SPACE_2, 0, 0)
+        lay.setSpacing(t.SPACE_3)
+        card = _flat_card()
+        card_lay = card.body()
         card_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         card_lay.setSpacing(t.SPACE_3)
         eyebrow = QLabel("MODEL STORE SETTINGS")
@@ -684,9 +716,8 @@ class InstallPanelSide(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(t.SPACE_4)
 
-        hero_card = QFrame()
-        hero_card.setObjectName("inspector-card")
-        hero_lay = QVBoxLayout(hero_card)
+        hero_card = _flat_card()
+        hero_lay = hero_card.body()
         hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         hero_lay.setSpacing(t.SPACE_2)
 
@@ -710,9 +741,8 @@ class InstallPanelSide(QWidget):
         hero_lay.addWidget(self._hero_hint)
         lay.addWidget(hero_card)
 
-        quant_card = QFrame()
-        quant_card.setObjectName("inspector-card")
-        quant_lay = QVBoxLayout(quant_card)
+        quant_card = _flat_card()
+        quant_lay = quant_card.body()
         quant_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         quant_lay.setSpacing(t.SPACE_2)
         sec_quant = QLabel("Target configuration")
@@ -756,9 +786,8 @@ class InstallPanelSide(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(t.SPACE_4)
 
-        hero_card = QFrame()
-        hero_card.setObjectName("inspector-card")
-        hero_lay = QVBoxLayout(hero_card)
+        hero_card = _flat_card()
+        hero_lay = hero_card.body()
         hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         hero_lay.setSpacing(t.SPACE_2)
         section = QLabel("Operations")
@@ -970,10 +999,17 @@ class InstallPanelSide(QWidget):
             if getattr(pending, "key", None) == key:
                 self._pending_jobs.pop(iid, None)
         if not ok:
+            recent = self.registry.recent_for_key(key)
+            error_msg = (
+                recent.error
+                if recent is not None and recent.error
+                else "Operation aborted or crashed."
+            )
+            self._progress.append_log(error_msg)
             # The job is finished but failed. Find the card that was tracking it and lock it into the error state.
             for card in self._instance_cards.values():
                 if card._prog_widget.isVisible() and not card._prog_dismiss.isVisible():
-                    card.show_failed("Operation aborted or crashed.")
+                    card.show_failed(error_msg)
                     break
         self._refresh()
 

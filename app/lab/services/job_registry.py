@@ -43,6 +43,12 @@ class JobRegistry(QObject):
     def get(self, key: str) -> JobDescriptor | None:
         return self._by_key.get(key)
 
+    def recent_for_key(self, key: str) -> JobDescriptor | None:
+        for desc in reversed(self._recent):
+            if desc.key == key:
+                return desc
+        return None
+
     def start_job(self, desc: JobDescriptor) -> None:
         if desc.iid in self._active:
             raise RuntimeError(f"Instance {desc.iid} already has an active job")

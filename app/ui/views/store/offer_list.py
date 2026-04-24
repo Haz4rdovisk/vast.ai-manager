@@ -3,13 +3,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -27,6 +25,25 @@ _CARD_RENDER_BATCH_SIZE = 16
 _SCROLL_PREFETCH_PX = 900
 
 
+class _GpuCountProxy:
+    """Legacy shim so callers can keep using .click()/.setChecked() on
+    a named choice after the GPU-count tabs became a QComboBox."""
+
+    def __init__(self, combo: QComboBox, index: int):
+        self._combo = combo
+        self._index = index
+
+    def click(self) -> None:
+        self._combo.setCurrentIndex(self._index)
+
+    def setChecked(self, flag: bool) -> None:
+        if flag:
+            self._combo.setCurrentIndex(self._index)
+
+    def isChecked(self) -> bool:
+        return self._combo.currentIndex() == self._index
+
+
 class OfferList(QWidget):
     rent_clicked = Signal(object)       # Offer
     details_clicked = Signal(object)    # Offer
@@ -36,8 +53,8 @@ class OfferList(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cards: list[OfferCard] = []
-        self.gpu_count_buttons: dict[str, QPushButton] = {}
-        self._gpu_button_values: dict[QPushButton, tuple[object, object]] = {}
+        self.gpu_count_buttons: dict[str, _GpuCountProxy] = {}
+        self._gpu_button_values: dict[_GpuCountProxy, tuple[object, object]] = {}
         self._offers: list[Offer] = []
         self._next_offer_index = 0
 
@@ -77,41 +94,60 @@ class OfferList(QWidget):
         self.set_empty("Choose filters, then search Vast.ai offers.")
 
     def _build_gpu_count_picker(self) -> None:
-        label = QLabel("#GPUs:")
-        label.setStyleSheet(
-            f"color: {t.TEXT_HI}; font-size: 13px; font-weight: 850;"
-        )
-        self.toolbar.addWidget(label)
+        entries = [
+            ("#GPUs  Any", None, None),
+            ("#GPUs  1x", 1, 1),
+            ("#GPUs  2x", 2, 2),
+            ("#GPUs  4x", 4, 4),
+            ("#GPUs  8x", 8, 8),
+            ("#GPUs  9+", 9, None),
+        ]
 
-        group = QButtonGroup(self)
-        group.setExclusive(True)
-        for text, min_count, max_count in [
-            ("ANY", None, None),
-            ("1X", 1, 1),
-            ("2X", 2, 2),
-            ("4X", 4, 4),
-            ("8X", 8, 8),
-            ("9+", 9, None),
-        ]:
-            btn = QPushButton(text)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(
-                f"QPushButton {{ background: transparent; color: {t.TEXT_MID};"
-                f" border: none; border-bottom: 2px solid transparent;"
-                f" border-radius: 0; padding: 8px 9px;"
-                f" font-size: 13px; font-weight: 850; min-width: 28px; }}"
-                f"QPushButton:hover {{ color: {t.TEXT_HI}; background: rgba(255,255,255,0.04); }}"
-                f"QPushButton:checked {{ color: {t.ACCENT}; border-bottom: 2px solid {t.ACCENT}; background: transparent; }}"
-            )
-            btn.clicked.connect(
-                lambda _checked=False, lo=min_count, hi=max_count: self.gpu_count_selected.emit(lo, hi)
-            )
-            group.addButton(btn)
-            self.toolbar.addWidget(btn)
-            self.gpu_count_buttons[text] = btn
-            self._gpu_button_values[btn] = (min_count, max_count)
-        self.gpu_count_buttons["ANY"].setChecked(True)
+        self.gpu_count_combo = QComboBox()
+        self.gpu_count_combo.setMinimumWidth(120)
+        self.gpu_count_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.gpu_count_combo.setCursor(Qt.PointingHandCursor)
+        self.gpu_count_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background: #253044;
+                color: {t.TEXT_HI};
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 14px;
+                padding: 6px 14px;
+                min-height: 32px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 18px;
+            }}
+            QComboBox:focus {{
+                border-color: rgba(255,255,255,0.08);
+                background: #202B3E;
+            }}
+            """
+        )
+        for text, _lo, _hi in entries:
+            self.gpu_count_combo.addItem(text)
+        self.gpu_count_combo.currentIndexChanged.connect(self._on_gpu_count_changed)
+        self.toolbar.addWidget(self.gpu_count_combo)
+
+        self._gpu_count_entries = entries
+        # Preserve the legacy gpu_count_buttons API used by tests and
+        # other views: each entry exposes click()/setChecked() that
+        # drives the combo box to the matching index.
+        self.gpu_count_buttons = {}
+        for idx, (text, lo, hi) in enumerate(entries):
+            legacy_key = "ANY" if idx == 0 else text.replace("#GPUs", "").strip().upper()
+            proxy = _GpuCountProxy(self.gpu_count_combo, idx)
+            self.gpu_count_buttons[legacy_key] = proxy
+            self._gpu_button_values[proxy] = (lo, hi)
+        self.gpu_count_combo.setCurrentIndex(0)
+
+    def _on_gpu_count_changed(self, index: int) -> None:
+        if 0 <= index < len(self._gpu_count_entries):
+            _, lo, hi = self._gpu_count_entries[index]
+            self.gpu_count_selected.emit(lo, hi)
 
     def set_market_filters(
         self,
@@ -134,19 +170,35 @@ class OfferList(QWidget):
 
     def set_gpu_count_choice(self, min_count: object, max_count: object) -> None:
         target = (min_count, max_count)
-        match = None
-        for btn, values in self._gpu_button_values.items():
-            if values == target:
-                match = btn
-                break
-        if match is not None:
-            match.setChecked(True)
+        for idx, (_text, lo, hi) in enumerate(self._gpu_count_entries):
+            if (lo, hi) == target:
+                if self.gpu_count_combo.currentIndex() != idx:
+                    self.gpu_count_combo.setCurrentIndex(idx)
+                return
 
     def _market_select(self, widget: QComboBox, width: int) -> QWidget:
         widget.setMinimumWidth(width)
         widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        # Clear local style to let global theme (SURFACE_3 rounded chips) take over
-        widget.setStyleSheet("")
+        widget.setStyleSheet(
+            f"""
+            QComboBox {{
+                background: #253044;
+                color: {t.TEXT_HI};
+                border: 1px solid rgba(255,255,255,0.04);
+                border-radius: 14px;
+                padding: 6px 14px;
+                min-height: 32px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 18px;
+            }}
+            QComboBox:focus {{
+                border-color: rgba(255,255,255,0.08);
+                background: #202B3E;
+            }}
+            """
+        )
         return widget
 
     def set_loading(self) -> None:

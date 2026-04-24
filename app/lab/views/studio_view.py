@@ -1,8 +1,8 @@
 """Studio view for loading an installed GGUF on a selected instance."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QUrl, QTimer, QStandardPaths
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal, QUrl, QTimer, QStandardPaths, QEvent
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
+import qtawesome as qta
 
 from app import theme as t
 from app.lab.state.models import ServerParams
@@ -28,76 +28,12 @@ from app.ui.components.diagnostic_banner import DiagnosticBanner
 from app.ui.components.server_params_form import ServerParamsForm
 from app.ui.brand_manager import BrandManager
 from app.ui.components.lock_screen import LockScreen
+from app.ui.components.page_header import PageHeader
+from app.ui.components.primitives import GlassCard
+from app.ui.views.console_drawer import ConsoleDrawer
 from PySide6.QtCore import QSize
 
 
-_EMPTY_WEBUI_HTML = f"""
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      height: 100vh;
-      overflow: hidden;
-      background: {t.BG_DEEP};
-      color: {t.TEXT};
-      font-family: Inter, Segoe UI, sans-serif;
-    }}
-    .stage {{
-      height: 100vh;
-      display: grid;
-      place-items: center;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,0.018), rgba(0,0,0,0)),
-        {t.BG_DEEP};
-    }}
-    .empty {{
-      max-width: 480px;
-      text-align: center;
-      color: {t.TEXT_LOW};
-      font-size: 14px;
-      letter-spacing: 0;
-      padding: 28px 32px;
-      background: rgba(12, 16, 22, 0.72);
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 20px;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.28);
-    }}
-    .eyebrow {{
-      color: {t.ACCENT_SOFT};
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 1.6px;
-      text-transform: uppercase;
-      margin-bottom: 14px;
-    }}
-    strong {{
-      display: block;
-      color: {t.TEXT};
-      font-size: 24px;
-      font-weight: 800;
-      margin-bottom: 10px;
-    }}
-    p {{
-      margin: 0;
-      line-height: 1.6;
-    }}
-  </style>
-</head>
-<body>
-  <main class="stage">
-    <section class="empty">
-      <div class="eyebrow">AI Lab Studio</div>
-      <strong>No model loaded</strong>
-      <p>Pick a model in the top selector, adjust Settings, then press Load Model. The chat input appears here inside the llama.cpp webui after launch.</p>
-    </section>
-  </main>
-</body>
-</html>
-"""
 
 
 _LOADING_WEBUI_HTML = f"""
@@ -159,125 +95,12 @@ _LOADING_WEBUI_HTML = f"""
 """
 
 
-class LaunchLogPanel(QFrame):
-    """Compact launch drawer for llama-server startup output."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("launch-log-panel")
-        self.setFixedHeight(220)
-        self.setStyleSheet(
-            f"""
-            QFrame#launch-log-panel {{
-                background: #090d15;
-                border-top: 1px solid rgba(255,255,255,0.08);
-            }}
-            QLabel#launch-log-title {{
-                color: {t.TEXT_HI};
-                font-size: 13px;
-                font-weight: 800;
-            }}
-            QLabel#launch-log-subtitle {{
-                color: {t.TEXT_LOW};
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QLabel[stage="true"] {{
-                border-radius: 8px;
-                padding: 4px 9px;
-                font-size: 11px;
-                font-weight: 800;
-                font-family: {t.FONT_MONO};
-            }}
-            QPlainTextEdit#launch-log-text {{
-                background: #030508;
-                color: {t.TEXT};
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 8px;
-                padding: 10px;
-                font-family: {t.FONT_MONO};
-                font-size: 12px;
-            }}
-            """
-        )
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_4, t.SPACE_3, t.SPACE_4, t.SPACE_4)
-        root.setSpacing(t.SPACE_3)
-
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(t.SPACE_3)
-
-        title_box = QVBoxLayout()
-        title_box.setContentsMargins(0, 0, 0, 0)
-        title_box.setSpacing(1)
-        title = QLabel("Launch Log")
-        title.setObjectName("launch-log-title")
-        subtitle = QLabel("llama-server startup output")
-        subtitle.setObjectName("launch-log-subtitle")
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
-        header.addLayout(title_box)
-        header.addStretch()
-
-        self._stage_labels: dict[str, QLabel] = {}
-        for key, label in [
-            ("start", "start"),
-            ("load", "load"),
-            ("ready", "ready"),
-        ]:
-            chip = QLabel(label)
-            chip.setProperty("stage", "true")
-            self._stage_labels[key] = chip
-            header.addWidget(chip)
-        root.addLayout(header)
-
-        self._log = QPlainTextEdit()
-        self._log.setObjectName("launch-log-text")
-        self._log.setReadOnly(True)
-        self._log.setMaximumBlockCount(800)
-        self._log.setPlaceholderText("Waiting for llama-server output...")
-        root.addWidget(self._log, 1)
-
-        self.set_stage("start", "pending")
-        self.set_stage("load", "pending")
-        self.set_stage("ready", "pending")
-
-    def append_log(self, line: str) -> None:
-        self._log.appendPlainText(line)
-
-    def log_text(self) -> str:
-        return self._log.toPlainText()
-
-    def set_stage(self, stage: str, state: str) -> None:
-        label = self._stage_labels.get(stage)
-        if label is None:
-            return
-        palette = {
-            "pending": (t.TEXT_LOW, "rgba(255,255,255,0.04)", "rgba(255,255,255,0.08)"),
-            "running": (t.INFO, "rgba(78,168,255,0.10)", "rgba(78,168,255,0.28)"),
-            "done": (t.OK, "rgba(59,212,136,0.10)", "rgba(59,212,136,0.28)"),
-            "failed": (t.ERR, "rgba(240,85,106,0.10)", "rgba(240,85,106,0.28)"),
-        }
-        fg, bg, border = palette.get(state, palette["pending"])
-        label.setStyleSheet(
-            f"QLabel {{ color: {fg}; background: {bg};"
-            f" border: 1px solid {border}; }}"
-        )
-
-    def reset(self) -> None:
-        self._log.clear()
-        self.set_stage("start", "pending")
-        self.set_stage("load", "pending")
-        self.set_stage("ready", "pending")
-
-
 class StudioView(QWidget):
     launch_requested = Signal(object)
     stop_requested = Signal()
     fix_requested = Signal(str)
     instances_requested = Signal()
+    navigate_requested = Signal(str)
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -288,74 +111,119 @@ class StudioView(QWidget):
             QWidget#studio-view {{
                 background: {t.BG_DEEP};
             }}
-            QWidget#studio-topbar {{
-                background: #05080d;
-                border-bottom: 1px solid rgba(255,255,255,0.06);
-            }}
-            QLabel#studio-brand {{
-                color: {t.TEXT_HI};
-                font-size: 15px;
-                font-weight: 900;
-            }}
-            QLabel#studio-subbrand {{
-                color: {t.TEXT_MID};
-                font-size: 11px;
-                font-weight: 600;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-            }}
-            QLabel#studio-status-pill {{
-                border: 1px solid rgba(255,255,255,0.10);
+            /* Shared header-action chip geometry: 38px tall, 10px radius. */
+            QComboBox#studio-instance-picker,
+            QComboBox#studio-model-picker,
+            QLabel#studio-status-pill,
+            QPushButton#studio-eject-btn {{
+                min-height: 38px;
+                max-height: 38px;
                 border-radius: 10px;
-                padding: 8px 12px;
-                min-width: 76px;
-                font-weight: 800;
+                font-size: 13px;
+                font-weight: 600;
             }}
             QComboBox#studio-instance-picker {{
-                background: transparent;
-                border: 1px solid rgba(255,255,255,0.08);
-                color: {t.TEXT};
-                min-height: 30px;
-                padding: 6px 10px;
-                border-radius: 10px;
+                background: {t.SURFACE_3};
+                border: 1px solid {t.BORDER_MED};
+                border-left: 3px solid rgba(255,255,255,0.18);
+                color: {t.TEXT_HI};
+                padding-left: 14px;
+                padding-right: 30px;
+            }}
+            QComboBox#studio-instance-picker[connected="true"] {{
+                border-left: 3px solid {t.OK};
+            }}
+            QComboBox#studio-instance-picker:hover {{
+                background: #303a4f;
+                border-color: {t.BORDER_HI};
             }}
             QComboBox#studio-model-picker {{
-                background: #281f68;
-                border: 1px solid rgba(179,160,255,0.44);
-                color: white;
-                min-height: 38px;
-                padding: 7px 16px;
-                font-weight: 700;
-                border-radius: 12px;
+                background: {t.SURFACE_3};
+                border: 1px solid {t.BORDER_MED};
+                color: {t.TEXT_HI};
+                padding-left: 14px;
+                padding-right: 34px;
+            }}
+            QComboBox#studio-model-picker:hover {{
+                background: #303a4f;
+                border-color: rgba(179,160,255,0.44);
+            }}
+            QComboBox#studio-model-picker:focus {{
+                background: #303a4f;
+                border-color: rgba(179,160,255,0.52);
             }}
             QComboBox#studio-model-picker:disabled {{
-                background: #101722;
-                border-color: rgba(255,255,255,0.10);
+                background: {t.SURFACE_3};
+                border: 1px solid rgba(255,255,255,0.06);
                 color: {t.TEXT_MID};
+                font-weight: 600;
+            }}
+            QComboBox#studio-instance-picker::drop-down,
+            QComboBox#studio-model-picker::drop-down {{
+                border: none;
+                width: 22px;
+                subcontrol-position: right center;
+                margin-right: 6px;
+            }}
+            QLabel#studio-status-pill {{
+                background: rgba(255,255,255,0.03);
+                border: 1px solid rgba(255,255,255,0.10);
+                padding: 0 14px;
+                min-width: 84px;
+                qproperty-alignment: AlignCenter;
+            }}
+            QPushButton#studio-eject-btn {{
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.10);
+                color: {t.TEXT_HI};
+                padding: 0 18px;
+            }}
+            QPushButton#studio-eject-btn:hover:enabled {{
+                background: rgba(240,85,106,0.10);
+                border-color: rgba(240,85,106,0.45);
+                color: {t.ERR};
+            }}
+            QPushButton#studio-eject-btn:disabled {{
+                color: {t.TEXT_MID};
+                background: rgba(255,255,255,0.02);
+                border-color: rgba(255,255,255,0.06);
             }}
             QWidget#studio-view QComboBox,
             QWidget#studio-view QLineEdit,
             QWidget#studio-view QSpinBox,
             QWidget#studio-view QDoubleSpinBox {{
-                background: #111820;
+                background: {t.SURFACE_3};
                 color: {t.TEXT_HI};
-                border: 1px solid rgba(255,255,255,0.10);
-                border-radius: 8px;
-                padding: 5px 10px;
-                min-height: 24px;
+                border: 1px solid {t.BORDER_MED};
+                border-radius: 12px;
+                padding: 7px 14px;
+                min-height: 34px;
             }}
             QWidget#studio-view QComboBox:focus,
             QWidget#studio-view QLineEdit:focus,
             QWidget#studio-view QSpinBox:focus,
             QWidget#studio-view QDoubleSpinBox:focus {{
-                border-color: {t.ACCENT};
+                border-color: rgba(179,160,255,0.42);
+                background: #303a4f;
             }}
             QWidget#studio-view QComboBox::drop-down {{
                 border: none;
                 width: 24px;
+                margin-right: 4px;
             }}
             QWidget#studio-view QPushButton {{
-                border-radius: 8px;
+                border-radius: 12px;
+                min-height: 36px;
+            }}
+            QWidget#studio-settings {{
+                background: transparent;
+            }}
+            QWidget#studio-view QFrame#SolidCard QScrollArea,
+            QWidget#studio-view QFrame#SolidCard QScrollArea::viewport,
+            QWidget#studio-view QFrame#SolidCard QScrollArea > QWidget,
+            QWidget#studio-view QFrame#SolidCard QScrollArea > QWidget > QWidget {{
+                background: transparent;
+                border: none;
             }}
             QWidget#studio-view QScrollArea,
             QWidget#studio-view QScrollArea > QWidget,
@@ -382,68 +250,41 @@ class StudioView(QWidget):
         )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(t.SPACE_5, t.SPACE_3, t.SPACE_5, t.SPACE_4)
+        root.setSpacing(t.SPACE_3)
 
-        topbar = QWidget()
-        topbar.setObjectName("studio-topbar")
-        topbar.setFixedHeight(64)
-        top = QHBoxLayout(topbar)
-        top.setContentsMargins(16, 8, 16, 8)
-        top.setSpacing(t.SPACE_3)
+        header = PageHeader(
+            "AI Lab Studio",
+            "Runtime workspace for selecting instances and launching local models.",
+        )
 
-        left_panel = QWidget()
-        left_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        left_lay = QHBoxLayout(left_panel)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(t.SPACE_3)
-        brand_box = QVBoxLayout()
-        brand_box.setContentsMargins(0, 0, 0, 0)
-        brand_box.setSpacing(1)
-        brand = QLabel("AI Lab Studio")
-        brand.setObjectName("studio-brand")
-        subbrand = QLabel("Runtime Workspace")
-        subbrand.setObjectName("studio-subbrand")
-        brand_box.addWidget(brand)
-        brand_box.addWidget(subbrand)
-        left_lay.addLayout(brand_box)
         self.instance_combo = QComboBox()
         self.instance_combo.setObjectName("studio-instance-picker")
-        self.instance_combo.setMinimumWidth(230)
+        self.instance_combo.setMinimumWidth(260)
         self.instance_combo.setMaximumWidth(320)
+        self.instance_combo.setToolTip("Active instance")
         self.instance_combo.currentIndexChanged.connect(self._on_instance_selected)
-        left_lay.addWidget(self.instance_combo)
-        left_lay.addStretch()
-        top.addWidget(left_panel, 1)
 
         self.model_picker = QComboBox()
         self.model_picker.setObjectName("studio-model-picker")
-        self.model_picker.setMinimumWidth(420)
-        self.model_picker.setMaximumWidth(620)
-        self.model_picker.setIconSize(QSize(24, 24))
+        self.model_picker.setMinimumWidth(320)
+        self.model_picker.setMaximumWidth(460)
+        self.model_picker.setIconSize(QSize(20, 20))
+        self.model_picker.setToolTip("Loaded GGUF model")
         self.model_picker.currentIndexChanged.connect(self._on_model_combo_changed)
-        top.addWidget(self.model_picker, 0, Qt.AlignCenter)
-
-        right_panel = QWidget()
-        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        right_lay = QHBoxLayout(right_panel)
-        right_lay.setContentsMargins(0, 0, 0, 0)
-        right_lay.setSpacing(t.SPACE_2)
-        right_lay.addStretch()
 
         self.launch_status = QLabel("Idle")
         self.launch_status.setObjectName("studio-status-pill")
         self._set_launch_status("Idle", "idle")
-        right_lay.addWidget(self.launch_status)
+        header.add_action(self.launch_status)
 
         self.stop_btn = QPushButton("Eject")
-        self.stop_btn.setProperty("variant", "secondary")
-        self.stop_btn.setFixedWidth(92)
+        self.stop_btn.setObjectName("studio-eject-btn")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop_requested.emit)
-        right_lay.addWidget(self.stop_btn)
-        top.addWidget(right_panel, 1)
-        root.addWidget(topbar)
+        header.add_action(self.stop_btn)
+
+        root.addWidget(header)
         
         self.layout_stack = QStackedWidget()
         root.addWidget(self.layout_stack, 1)
@@ -464,7 +305,7 @@ class StudioView(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(1)
         splitter.setStyleSheet(
-            f"QSplitter::handle {{ background: {t.BORDER_LOW}; }}"
+            "QSplitter::handle { background: transparent; }"
         )
 
         workspace = QWidget()
@@ -529,13 +370,12 @@ class StudioView(QWidget):
         
         self.webui = QWebEngineView()
         chat_page = QWebEnginePage(self.profile, self.webui)
-        self.webui.setPage(chat_page) 
+        self.webui.setPage(chat_page)
         self._pages_to_cleanup.append(chat_page)
         self.webui.page().setBackgroundColor(QColor("#0a0a0b"))
         self.webui.loadFinished.connect(self._on_webui_load_finished)
-        self.webui.setHtml(_EMPTY_WEBUI_HTML)
-        
-        # Proper stacked widget for loading state
+
+        # Proper stacked widget for empty / loading / live states
         self.webui_stack = QStackedWidget()
         self.webui_overlay = QWebEngineView()
         load_page = QWebEnginePage(self.profile, self.webui_overlay)
@@ -543,29 +383,40 @@ class StudioView(QWidget):
         self._pages_to_cleanup.append(load_page)
         self.webui_overlay.page().setBackgroundColor(QColor("#0a0a0b"))
         self.webui_overlay.setHtml(_LOADING_WEBUI_HTML)
-        
-        self.webui_stack.addWidget(self.webui)         # Index 0
-        self.webui_stack.addWidget(self.webui_overlay) # Index 1
-        self.webui_stack.setCurrentIndex(0)
+
+        self.webui_empty = self._build_empty_state()
+
+        self.webui_stack.addWidget(self.webui)         # Index 0 — live chat
+        self.webui_stack.addWidget(self.webui_overlay) # Index 1 — loading
+        self.webui_stack.addWidget(self.webui_empty)   # Index 2 — empty CTA
+        self.webui_stack.setCurrentWidget(self.webui_empty)
         
         workspace_lay.addWidget(self.webui_stack, 1)
 
-        self.launch_log = LaunchLogPanel()
-        self.launch_log.setVisible(False)
-        workspace_lay.addWidget(self.launch_log)
+        self._workspace_surface = workspace
+        self._workspace_surface.installEventFilter(self)
+        self.launch_log = ConsoleDrawer(self._workspace_surface)
+        self.launch_log.set_placeholder_text("Waiting for llama-server output...")
+        self.launch_log.expanded_changed.connect(self._position_launch_log_drawer)
+        self.launch_log.set_expanded(False)
+        self.launch_log.raise_()
+        QTimer.singleShot(0, self._position_launch_log_drawer)
         splitter.addWidget(workspace)
 
         side = QWidget()
         side.setObjectName("studio-settings")
-        side.setMinimumWidth(340)
-        side.setMaximumWidth(440)
-        side.setStyleSheet(
-            f"QWidget#studio-settings {{ background: {t.BG_BASE};"
-            f" border-left: 1px solid {t.BORDER_LOW}; }}"
-        )
+        side.setMinimumWidth(356)
+        side.setMaximumWidth(456)
         side_lay = QVBoxLayout(side)
-        side_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
-        side_lay.setSpacing(t.SPACE_3)
+        side_lay.setContentsMargins(t.SPACE_2, t.SPACE_3, t.SPACE_2, t.SPACE_3)
+        side_lay.setSpacing(0)
+
+        side_card = GlassCard()
+        side_lay.addWidget(side_card, 1)
+
+        card_lay = side_card.body()
+        card_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
+        card_lay.setSpacing(t.SPACE_4)
 
         settings_row = QHBoxLayout()
         title = QLabel("Settings")
@@ -577,34 +428,38 @@ class StudioView(QWidget):
         self.models_count_label = QLabel("0 models")
         self.models_count_label.setProperty("role", "muted")
         settings_row.addWidget(self.models_count_label)
-        side_lay.addLayout(settings_row)
+        card_lay.addLayout(settings_row)
 
-        self.runtime_scope_label = QLabel("Pick an instance and a model to configure the runtime.")
-        self.runtime_scope_label.setWordWrap(True)
-        self.runtime_scope_label.setStyleSheet(
-            f"color: {t.TEXT}; background: {t.SURFACE_1}; border: 1px solid {t.BORDER_LOW}; border-radius: 12px; padding: 12px; font-size: 12px;"
+        picker_label_style = (
+            f"color: {t.TEXT_LOW}; font-size: 11px; font-weight: 700;"
+            f" letter-spacing: 0.6px; text-transform: uppercase;"
         )
-        side_lay.addWidget(self.runtime_scope_label)
+
+        instance_label = QLabel("Instance")
+        instance_label.setStyleSheet(picker_label_style)
+        card_lay.addWidget(instance_label)
+        self.instance_combo.setMaximumWidth(16777215)
+        card_lay.addWidget(self.instance_combo)
+
+        model_label = QLabel("Model")
+        model_label.setStyleSheet(picker_label_style)
+        card_lay.addWidget(model_label)
+        self.model_picker.setMaximumWidth(16777215)
+        card_lay.addWidget(self.model_picker)
 
         self.launch_btn = QPushButton("Load Model")
         self.launch_btn.clicked.connect(self._on_launch)
-        side_lay.addWidget(self.launch_btn)
-
-        self.log_toggle_btn = QPushButton("Show Launch Log")
-        self.log_toggle_btn.setProperty("variant", "ghost")
-        self.log_toggle_btn.clicked.connect(self._toggle_launch_log)
-        self._set_launch_log_visible(False)
+        card_lay.addWidget(self.launch_btn)
         
         self._retry_timer = QTimer(self)
         self._retry_timer.setInterval(1000) # Relaxed polling (1 second)
         self._retry_timer.timeout.connect(self._check_tunnel_and_load)
         self._target_local_port = 0
         self._retry_count = 0
-        side_lay.addWidget(self.log_toggle_btn)
 
         hint = QLabel("Model configuration")
         hint.setProperty("role", "section")
-        side_lay.addWidget(hint)
+        card_lay.addWidget(hint)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -612,14 +467,14 @@ class StudioView(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         form_host = QWidget()
         form_lay = QVBoxLayout(form_host)
-        form_lay.setContentsMargins(0, 0, 0, 0)
-        form_lay.setSpacing(0)
+        form_lay.setContentsMargins(0, 0, t.SPACE_3, 0)
+        form_lay.setSpacing(t.SPACE_2)
         self.params_form = ServerParamsForm([])
         self.params_form.set_model_field_visible(False)
         form_lay.addWidget(self.params_form)
         form_lay.addStretch()
         scroll.setWidget(form_host)
-        side_lay.addWidget(scroll, 1)
+        card_lay.addWidget(scroll, 1)
 
         # Kept as a non-visual model registry for existing tests and signal
         # paths. The visible model picker lives in the top bar.
@@ -628,7 +483,8 @@ class StudioView(QWidget):
         self.model_list.hide()
 
         splitter.addWidget(side)
-        splitter.setSizes([1120, 360])
+        splitter.setSizes([1100, 400])
+        splitter.splitterMoved.connect(lambda *_: QTimer.singleShot(0, self._position_launch_log_drawer))
         self.workspace_lay.addWidget(splitter)
         self.layout_stack.addWidget(self.workspace_host)
 
@@ -678,19 +534,20 @@ class StudioView(QWidget):
     def _on_instance_selected(self, index: int):
         iid = self.instance_combo.itemData(index)
         if iid is None:
+            self._refresh_instance_chip_accent(None)
             return
         self.store.set_instance(iid)
+        self._refresh_instance_chip_accent(iid)
+
+    def _refresh_instance_chip_accent(self, iid):
+        state = self.store.get_state(iid) if iid else None
+        connected = bool(state and getattr(state.setup, "probed", False))
+        self.instance_combo.setProperty("connected", "true" if connected else "false")
+        self.instance_combo.style().unpolish(self.instance_combo)
+        self.instance_combo.style().polish(self.instance_combo)
 
     def _sync_sidebar_on_instance_change(self, iid: int):
         state = self.store.get_state(iid) if iid else None
-        if state is None:
-            self.runtime_scope_label.setText("Pick an instance and a model to configure the runtime.")
-        else:
-            self.runtime_scope_label.setText(
-                f"Instance #{iid} selected. {len(state.gguf)} local model"
-                + ("" if len(state.gguf) == 1 else "s")
-                + " available for launch."
-            )
         self._sync_models(state.gguf if state else [])
 
     def _sync_models(self, gguf):
@@ -720,10 +577,6 @@ class StudioView(QWidget):
         self.models_count_label.setText(
             f"{len(gguf)} model" if len(gguf) == 1 else f"{len(gguf)} models"
         )
-        if not gguf:
-            self.runtime_scope_label.setText(
-                "No GGUF models are installed on this instance yet. Use the Model Store to download one, then come back here to launch it."
-            )
         self.params_form.set_model_paths([model.path for model in gguf])
         
         # 2. Restore selection if possible, otherwise fallback to 0
@@ -750,10 +603,6 @@ class StudioView(QWidget):
         params = self.params_form.current_params()
         params.model_path = path
         self.params_form.set_params(params)
-        name = path.rsplit("/", 1)[-1] if path else "No model selected"
-        self.runtime_scope_label.setText(
-            f"Runtime target: {name}. Review Settings below, then launch the local llama.cpp session."
-        )
         model_index = self.model_picker.findData(path)
         if model_index >= 0 and self.model_picker.currentIndex() != model_index:
             self.model_picker.blockSignals(True)
@@ -765,8 +614,7 @@ class StudioView(QWidget):
         if not params.model_path:
             return
         self.banner.clear()
-        self.launch_log.reset()
-        self.launch_log.set_stage("start", "running")
+        self.launch_log.clear()
         self._set_launch_status("Launching", "busy")
         self.stop_btn.setEnabled(True)
         self._set_launch_log_visible(True)
@@ -837,39 +685,125 @@ class StudioView(QWidget):
             
             QTimer.singleShot(800, reveal)
 
+    def _build_empty_state(self) -> QWidget:
+        """Centered empty placeholder with a CTA to Model Store."""
+        wrap = QWidget()
+        wrap.setObjectName("studio-empty-state")
+        wrap.setStyleSheet(
+            f"QWidget#studio-empty-state {{ background: {t.BG_DEEP}; }}"
+            f" QLabel#studio-empty-title {{ color: {t.TEXT_HI};"
+            f" font-size: 22px; font-weight: 800; }}"
+            f" QLabel#studio-empty-desc {{ color: {t.TEXT_MID};"
+            f" font-size: 14px; }}"
+            f" QLabel#studio-empty-icon {{ background: transparent; }}"
+            f" QPushButton#studio-empty-cta {{"
+            f" min-width: 220px; max-width: 220px;"
+            f" min-height: 44px; max-height: 44px;"
+            f" border-radius: 12px; font-size: 14px;"
+            f" font-weight: 700; padding: 0; }}"
+        )
+
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(32, 32, 32, 32)
+        outer.addStretch(1)
+
+        icon = QLabel()
+        icon.setObjectName("studio-empty-icon")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(56, 56)
+        icon.setPixmap(self._build_empty_state_icon())
+        outer.addWidget(icon, 0, Qt.AlignCenter)
+
+        outer.addSpacing(18)
+
+        title = QLabel("No Model Loaded")
+        title.setObjectName("studio-empty-title")
+        title.setAlignment(Qt.AlignCenter)
+        outer.addWidget(title, 0, Qt.AlignCenter)
+
+        outer.addSpacing(10)
+
+        desc = QLabel(
+            "Browse the Model Store to download a GGUF model onto this instance,\n"
+            "then come back here and load it to start a chat session."
+        )
+        desc.setObjectName("studio-empty-desc")
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setWordWrap(True)
+        desc.setMaximumWidth(560)
+        outer.addWidget(desc, 0, Qt.AlignCenter)
+
+        outer.addSpacing(22)
+
+        cta = QPushButton("Open Model Store")
+        cta.setObjectName("studio-empty-cta")
+        cta.setCursor(Qt.PointingHandCursor)
+        cta.setFixedSize(220, 44)
+        cta.clicked.connect(lambda: self.navigate_requested.emit("discover"))
+        outer.addWidget(cta, 0, Qt.AlignCenter)
+
+        outer.addStretch(1)
+        return wrap
+
+    def _build_empty_state_icon(self) -> QPixmap:
+        try:
+            return qta.icon("mdi.cube-outline", color=t.ACCENT_SOFT).pixmap(48, 48)
+        except Exception:
+            fallback = QPixmap(48, 48)
+            fallback.fill(Qt.transparent)
+            return fallback
+
     def clear_webui(self):
         self._set_launch_status("Idle", "idle")
         self.stop_btn.setEnabled(False)
-        self.webui.setHtml(_EMPTY_WEBUI_HTML)
+        self.webui_stack.setCurrentWidget(self.webui_empty)
         self._set_launch_log_visible(False)
 
     def mark_launch_failed(self):
         self._set_launch_status("Failed", "error")
         self.stop_btn.setEnabled(False)
-        self.launch_log.set_stage("start", "failed")
-        self.launch_log.set_stage("load", "failed")
         self._set_launch_log_visible(True)
 
     def append_launch_log(self, line: str):
-        if not self.launch_log.isVisible():
+        if not self.launch_log.is_expanded():
             self._set_launch_log_visible(True)
-        self.launch_log.append_log(line)
+        self.launch_log.log(line)
         lowered = line.lower()
         if "loading model" in lowered:
             self._set_launch_status("Loading", "busy")
-            self.launch_log.set_stage("start", "done")
-            self.launch_log.set_stage("load", "running")
         elif "server listening" in lowered or "http server listening" in lowered:
             self._set_launch_status("Ready", "ready")
-            self.launch_log.set_stage("load", "done")
-            self.launch_log.set_stage("ready", "done")
 
     def _toggle_launch_log(self):
-        self._set_launch_log_visible(not self.launch_log.isVisible())
+        self._set_launch_log_visible(not self.launch_log.is_expanded())
 
     def _set_launch_log_visible(self, visible: bool):
-        self.launch_log.setVisible(visible)
-        self.log_toggle_btn.setText("Hide Launch Log" if visible else "Show Launch Log")
+        self.launch_log.set_expanded(visible)
+        self._position_launch_log_drawer()
+
+    def _position_launch_log_drawer(self, *_args) -> None:
+        if not hasattr(self, "launch_log") or not hasattr(self, "_workspace_surface"):
+            return
+        margin_x = t.SPACE_4
+        margin_bottom = t.SPACE_2
+        width = max(240, self._workspace_surface.width() - (margin_x * 2))
+        height = self.launch_log.height() or self.launch_log.sizeHint().height()
+        y = max(0, self._workspace_surface.height() - height - margin_bottom)
+        self.launch_log.setGeometry(margin_x, y, width, height)
+        self.launch_log.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_launch_log_drawer()
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "_workspace_surface", None) and event.type() in (
+            QEvent.Resize,
+            QEvent.Show,
+            QEvent.Move,
+        ):
+            QTimer.singleShot(0, self._position_launch_log_drawer)
+        return super().eventFilter(watched, event)
 
     def _set_launch_status(self, text: str, level: str):
         if hasattr(self, "_last_status_level") and self._last_status_level == level and self.launch_status.text() == f"\u25CF  {text}":
@@ -885,8 +819,7 @@ class StudioView(QWidget):
         self.launch_status.setText(f"\u25CF  {text}")
         self.launch_status.setStyleSheet(
             f"QLabel#studio-status-pill {{ color: {fg}; background: {bg};"
-            f" border: 1px solid {border}; border-radius: 8px;"
-            f" padding: 6px 10px; min-width: 76px; font-weight: 800; }}"
+            f" border: 1px solid {border}; }}"
         )
 
     def closeEvent(self, event):

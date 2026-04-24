@@ -24,8 +24,8 @@ class _Cell(QFrame):
     def __init__(self, label: str, value: str, sub: str = "", parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.setSpacing(5)
 
         self._lbl_title = QLabel(label.upper())
         lf = self._lbl_title.font()
@@ -67,9 +67,9 @@ class SpecsGrid(QFrame):
         super().__init__(parent)
         self._cells: dict[str, _Cell] = {}
         grid = QGridLayout(self)
-        grid.setContentsMargins(0, 12, 0, 12) # Massive vertical breathing room
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(4)
+        grid.setContentsMargins(0, 8, 0, 8)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(8)
         self.grid = grid
         
         self.update_instance(inst)

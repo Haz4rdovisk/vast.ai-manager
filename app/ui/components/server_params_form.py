@@ -26,7 +26,7 @@ class ServerParamsForm(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(t.SPACE_2)
+        root.setSpacing(t.SPACE_3)
 
         self.model_label = QLabel("Model")
         root.addWidget(self.model_label)

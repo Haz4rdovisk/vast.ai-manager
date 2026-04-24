@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QVBoxLayout, QSizePolicy
 
 from app.models import Instance, InstanceState, TunnelStatus
 from app.theme import BORDER_LOW
@@ -12,11 +12,11 @@ from app.ui.views.instances.live_footer import LiveFooter
 from app.ui.views.instances.specs_grid import SpecsGrid
 
 
-def _hr() -> QFrame:
-    """A bold horizontal rule with massive 48px vertical breathing room."""
+def _hr(vmargin: int = 14) -> QFrame:
+    """A subtle horizontal rule with compact breathing room."""
     line = QFrame()
     line.setFixedHeight(1)
-    line.setStyleSheet(f"background-color: {BORDER_LOW}; margin: 48px 0px;")
+    line.setStyleSheet(f"background-color: {BORDER_LOW}; margin: {vmargin}px 0px;")
     return line
 
 
@@ -63,7 +63,7 @@ class InstanceCard(QFrame):
 
         self._inner = self._card.body()
         # Tightened outer padding (Red areas in screenshot)
-        self._inner.setContentsMargins(20, 10, 20, 10) 
+        self._inner.setContentsMargins(20, 10, 20, 10)
         self._inner.setSpacing(0)
         self._build()
 
@@ -86,24 +86,27 @@ class InstanceCard(QFrame):
         self._inner.addLayout(top)
 
         # Separator 1: Between Header and Specs
-        self._inner.addWidget(_hr())
+        self._inner.addWidget(_hr(10))
 
         # 2. Specs Section
         self.specs = SpecsGrid(self.inst, self._card)
+        self.specs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._inner.addWidget(self.specs)
 
         self.live: LiveFooter | None = None
         # Only show live metrics footer if the tunnel is explicitly CONNECTED
         if self._tunnel == TunnelStatus.CONNECTED:
             # Separator 2: Between Specs and Metrics
-            self._inner.addWidget(_hr())
+            self._inner.addWidget(_hr(12))
             self.live = LiveFooter(self.inst, self._card)
+            self.live.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self._inner.addWidget(self.live)
 
         # 3. Final Separator for Action Bar
-        self._inner.addWidget(_hr())
+        self._inner.addWidget(_hr(12))
         
         self.actions = ActionBar(self.inst, self._tunnel, self._card)
+        self.actions.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._wire_actions()
         self._inner.addWidget(self.actions)
 

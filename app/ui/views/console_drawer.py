@@ -63,6 +63,15 @@ class ConsoleDrawer(QFrame):
         self.setFixedHeight(panel_height)
         self.expanded_changed.emit(self._expanded)
 
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def clear(self) -> None:
+        self.view.clear()
+
+    def set_placeholder_text(self, text: str) -> None:
+        self.view.setPlaceholderText(text)
+
     def log(self, message: str):
         ts = datetime.now().strftime("%H:%M:%S")
         self.view.append(f"[{ts}] {message}")
