@@ -98,7 +98,7 @@ class FilterSidebar(QFrame):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         inner = QWidget()
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(t.SPACE_4, 0, t.SPACE_4, t.SPACE_4)
+        lay.setContentsMargins(0, 0, t.SPACE_2, t.SPACE_4)
         lay.setSpacing(t.SPACE_3)
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
