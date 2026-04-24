@@ -1,7 +1,7 @@
 """Reusable Discover model card."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,6 +20,42 @@ from app.ui.brand_manager import BrandManager
 _SKIP_TAGS = {"gguf", "region:us", "transformers", "safetensors", "text-generation"}
 
 
+class ElidedLabel(QLabel):
+    """QLabel that reports 0 minimum width and elides its text with '…'."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setTextFormat(Qt.PlainText)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        self._full_text = text
+        self._apply_elide(self.width())
+
+    def text(self) -> str:  # type: ignore[override]
+        return self._full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide(event.size().width())
+
+    def _apply_elide(self, width: int) -> None:
+        if width <= 0:
+            super().setText(self._full_text)
+            return
+        elided = self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, width)
+        super().setText(elided)
+
+    def minimumSizeHint(self) -> QSize:
+        h = super().minimumSizeHint().height()
+        return QSize(0, h)
+
+    def sizeHint(self) -> QSize:
+        fm = self.fontMetrics()
+        return QSize(fm.horizontalAdvance(self._full_text), fm.height())
+
+
 class ModelCard(QFrame):
     details_clicked = Signal(HFModel)
     open_hf_clicked = Signal(str)
@@ -32,8 +68,9 @@ class ModelCard(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(164)
-        self.setMaximumHeight(196)
+        self.setMinimumWidth(0)
+        self.setMinimumHeight(140)
+        self.setMaximumHeight(172)
 
         root = QVBoxLayout(self)
         self._body_lay = root
@@ -49,34 +86,24 @@ class ModelCard(QFrame):
         info.setContentsMargins(0, 0, 0, 0)
         info.setSpacing(7)
 
-        self._eyebrow = QLabel("HUGGING FACE GGUF")
-        self._eyebrow.setStyleSheet(
-            f"color: {t.TEXT_LOW}; font-size: 10px; font-weight: 800; letter-spacing: 1.4px;"
-        )
-        info.addWidget(self._eyebrow)
-
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
         name_row.setSpacing(t.SPACE_2)
-        
+
         # Brand Icon
         self._brand_icon = QLabel()
         self._brand_icon.setFixedSize(24, 24)
         self._brand_icon.setPixmap(BrandManager.get_icon(model.name).pixmap(24, 24))
-        name_row.addWidget(self._brand_icon)
-        
-        self._name = QLabel(model.name)
+        name_row.addWidget(self._brand_icon, 0, Qt.AlignVCenter)
+
+        self._name = ElidedLabel(model.name)
         self._name.setStyleSheet(
             f"color: {t.TEXT_HI}; font-size: 18px; font-weight: 900;"
         )
-        self._name.setWordWrap(True)
-        name_row.addWidget(self._name)
-        name_row.addStretch()
-        info.addLayout(name_row)
+        self._name.setToolTip(model.name)
+        name_row.addWidget(self._name, 1, Qt.AlignVCenter)
 
-        tag_row = QHBoxLayout()
-        tag_row.setContentsMargins(0, 0, 0, 0)
-        tag_row.setSpacing(t.SPACE_2)
+        # Tags inline with the model name (natural width, never squished)
         shown = 0
         for tag in model.tags:
             if (
@@ -86,22 +113,24 @@ class ModelCard(QFrame):
                 or tag.startswith("library:")
             ):
                 continue
-            tag_row.addWidget(Badge(tag))
+            badge = Badge(tag)
+            badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            name_row.addWidget(badge, 0, Qt.AlignVCenter)
             shown += 1
             if shown >= 3:
                 break
-        tag_row.addStretch()
-        info.addLayout(tag_row)
+
+        info.addLayout(name_row)
 
         meta = QHBoxLayout()
         meta.setSpacing(t.SPACE_2)
-        author = QLabel(f"by {model.author}")
+        author = ElidedLabel(f"by {model.author}")
         author.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px; font-weight: 600;")
-        stats = QLabel(f"{model.likes:,} likes | {model.downloads:,} downloads")
+        author.setToolTip(model.author)
+        stats = ElidedLabel(f"{model.likes:,} likes | {model.downloads:,} downloads")
         stats.setStyleSheet(f"color: {t.TEXT_LOW}; font-size: 12px;")
-        meta.addWidget(author)
-        meta.addWidget(stats)
-        meta.addStretch()
+        meta.addWidget(author, 0)
+        meta.addWidget(stats, 1)
         info.addLayout(meta)
 
         self._summary = QLabel("Open Settings.")

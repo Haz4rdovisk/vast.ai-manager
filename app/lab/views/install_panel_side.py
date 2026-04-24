@@ -39,7 +39,26 @@ _FIT_LABEL = {
 }
 
 
-def _flat_card() -> GlassCard:
+def _flat_panel_card() -> GlassCard:
+    card = GlassCard()
+    card.setGraphicsEffect(None)
+    card.setStyleSheet(
+        """
+        QFrame#SolidCard {
+            background: #0d131c;
+            border: 1px solid #1d2737;
+            border-radius: 16px;
+        }
+        QFrame#SolidCard:hover {
+            background: #101722;
+            border-color: #2a3750;
+        }
+        """
+    )
+    return card
+
+
+def _flat_inner_card() -> GlassCard:
     card = GlassCard()
     card.setGraphicsEffect(None)
     card.setStyleSheet(
@@ -573,7 +592,7 @@ class InstallPanelSide(QWidget):
         root.setContentsMargins(t.SPACE_2, 0, t.SPACE_2, t.SPACE_2)
         root.setSpacing(0)
 
-        panel_card = _flat_card()
+        panel_card = _flat_panel_card()
         root.addWidget(panel_card, 1)
         panel_lay = panel_card.body()
         panel_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
@@ -682,7 +701,7 @@ class InstallPanelSide(QWidget):
         lay = QVBoxLayout(widget)
         lay.setContentsMargins(0, t.SPACE_2, 0, 0)
         lay.setSpacing(t.SPACE_3)
-        card = _flat_card()
+        card = _flat_inner_card()
         card_lay = card.body()
         card_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         card_lay.setSpacing(t.SPACE_3)
@@ -716,7 +735,7 @@ class InstallPanelSide(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(t.SPACE_4)
 
-        hero_card = _flat_card()
+        hero_card = _flat_inner_card()
         hero_lay = hero_card.body()
         hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         hero_lay.setSpacing(t.SPACE_2)
@@ -741,7 +760,7 @@ class InstallPanelSide(QWidget):
         hero_lay.addWidget(self._hero_hint)
         lay.addWidget(hero_card)
 
-        quant_card = _flat_card()
+        quant_card = _flat_inner_card()
         quant_lay = quant_card.body()
         quant_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         quant_lay.setSpacing(t.SPACE_2)
@@ -786,7 +805,7 @@ class InstallPanelSide(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(t.SPACE_4)
 
-        hero_card = _flat_card()
+        hero_card = _flat_inner_card()
         hero_lay = hero_card.body()
         hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
         hero_lay.setSpacing(t.SPACE_2)

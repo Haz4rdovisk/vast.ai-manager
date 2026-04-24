@@ -1,0 +1,22 @@
+{
+  "active_jobs": {
+    "123": {
+      "key": "mykey",
+      "iid": 123,
+      "repo_id": "repo",
+      "filename": "file",
+      "quant": "quant",
+      "size_bytes": 0,
+      "needs_llamacpp": true,
+      "remote_state_path": "path1",
+      "remote_log_path": "path2",
+      "started_at": 0.0,
+      "stage": "starting",
+      "percent": 0,
+      "bytes_downloaded": 0,
+      "speed": "",
+      "error": null
+    }
+  },
+  "completed_recent": []
+}

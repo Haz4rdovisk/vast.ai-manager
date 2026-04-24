@@ -67,7 +67,7 @@ def test_today_spend_uses_live_tracker_when_billing_has_no_today(store):
     assert c.today_spend() == 0.42
 
 
-def test_live_overlay_uses_full_fleet_burn_rate(store):
+def test_live_overlay_respects_instance_uptime(store):
     c = AppController(store)
     c.config.include_storage_in_burn_rate = True
     c.config.estimated_network_cost_per_hour = 0.05
@@ -77,6 +77,7 @@ def test_live_overlay_uses_full_fleet_burn_rate(store):
             state=InstanceState.RUNNING,
             gpu_name="RTX 3090",
             dph=0.50,
+            duration_seconds=1800,
             disk_space_gb=200.0,
             storage_total_cost=7.20,
         ),
@@ -95,8 +96,13 @@ def test_live_overlay_uses_full_fleet_burn_rate(store):
 
     overlay = c._live_overlay_since(datetime.now() - timedelta(hours=5))
 
-    expected_hourly = 0.50 + (7.20 / 720.0) + (14.40 / 720.0) + 0.05
-    assert abs(overlay - (expected_hourly * 2.0)) < 0.02
+    expected = (
+        (0.50 * 0.5) +                  # GPU only for the instance uptime
+        ((7.20 / 720.0) * 2.0) +        # running instance storage across window
+        ((14.40 / 720.0) * 2.0) +       # stopped instance storage across window
+        (0.05 * 2.0)                    # network estimate across window
+    )
+    assert abs(overlay - expected) < 0.02
 
 
 def test_on_refreshed_keeps_last_user_during_fast_instance_emit(store):

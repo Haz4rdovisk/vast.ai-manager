@@ -144,20 +144,58 @@ class AppController(QObject):
 
     def _live_overlay_since(self, window_start: datetime) -> float:
         instances = getattr(self, "last_instances", None) or []
-        live_rate = burn_rate_breakdown(
+        breakdown = burn_rate_breakdown(
             instances,
             include_storage=self.config.include_storage_in_burn_rate,
             estimated_network_cost_per_hour=self.config.estimated_network_cost_per_hour,
-        )["total"]
-        if live_rate <= 0:
-            return 0.0
+        )
         last_end = self.analytics_store.last_charge_end()
         start = max(last_end, window_start) if last_end else window_start
         now = datetime.now()
         if now <= start:
             return 0.0
-        hours = (now - start).total_seconds() / 3600.0
-        return live_rate * hours
+
+        active_states = {InstanceState.RUNNING, InstanceState.STARTING}
+        per_instance = {
+            int(item["id"]): item
+            for item in breakdown.get("instances", [])
+            if item.get("id") is not None
+        }
+
+        total = 0.0
+        window_hours = (now - start).total_seconds() / 3600.0
+
+        # Network is an app-level estimate, so we can only project it across the
+        # raw window; GPU/runtime cost, however, should honor each instance's
+        # observed uptime to avoid charging the current burn rate retroactively.
+        total += max(0.0, float(self.config.estimated_network_cost_per_hour or 0.0)) * window_hours
+
+        for inst in instances:
+            detail = per_instance.get(inst.id)
+            if detail is None:
+                continue
+
+            storage_h = max(0.0, float(detail.get("storage_h") or 0.0))
+            if storage_h > 0:
+                total += storage_h * window_hours
+
+            if inst.state not in active_states:
+                continue
+
+            gpu_h = max(0.0, float(detail.get("dph") or 0.0))
+            if gpu_h <= 0:
+                continue
+
+            inst_start = start
+            if inst.duration_seconds is not None and inst.duration_seconds > 0:
+                observed_start = now - timedelta(seconds=int(inst.duration_seconds))
+                if observed_start > inst_start:
+                    inst_start = observed_start
+
+            if now > inst_start:
+                total += gpu_h * ((now - inst_start).total_seconds() / 3600.0)
+
+        return round(total, 4)
 
     # ---- Lifecycle ----
     def bootstrap(self):
