@@ -293,7 +293,7 @@ class SkeletonBlock(QWidget):
 #  Instances revamp primitives
 # ═══════════════════════════════════════════════════════════════════════════════
 import qtawesome as qta
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QPushButton
 
@@ -304,7 +304,7 @@ def icon(name: str, color: str = t.TEXT, size: int = 16) -> QIcon:
 
 
 class IconButton(QPushButton):
-    """26x26 ghost button with an MDI icon and tooltip."""
+    """36x36 ghost button with an MDI icon and tooltip."""
 
     def __init__(
         self,
@@ -316,7 +316,8 @@ class IconButton(QPushButton):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setFixedSize(26, 26)
+        self.setFixedSize(36, 36)
+        self.setIconSize(QSize(20, 20))
         self.setToolTip(tooltip)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mdi = mdi_name
@@ -324,7 +325,7 @@ class IconButton(QPushButton):
         self._refresh_icon()
         self.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {t.BORDER_LOW};"
-            f" border-radius: 6px; padding: 0; }}"
+            f" border-radius: 10px; padding: 0; }}"
             f"QPushButton:hover {{ background: {t.GLASS_HOVER}; border-color: {t.BORDER_MED}; }}"
             f"QPushButton:disabled {{ background: transparent; border-color: {t.BORDER_LOW}; }}"
         )

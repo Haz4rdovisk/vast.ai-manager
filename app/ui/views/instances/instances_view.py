@@ -6,6 +6,7 @@ from dataclasses import replace
 import qtawesome as qta
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -57,6 +58,7 @@ class InstancesView(QWidget):
         self._cards: dict[int, InstanceCard] = {}
         self._selected: set[int] = set()
         self._loading_cards: list[GlassCard] = []
+        self._placeholder_cards: list[QWidget] = []
         self._loading_timer = QTimer(self)
         self._loading_timer.setSingleShot(True)
         self._loading_timer.timeout.connect(self._show_loading_cards)
@@ -208,6 +210,7 @@ class InstancesView(QWidget):
     def _show_loading_cards(self) -> None:
         if self._all or self._cards or self._loading_cards:
             return
+        self._clear_placeholder_cards()
         for _ in range(3):
             card = GlassCard()
             body = card.body()
@@ -241,6 +244,7 @@ class InstancesView(QWidget):
 
     def _reapply_filter(self) -> None:
         filtered = apply(self._all, self._filter)
+        self._clear_placeholder_cards()
         seen: set[int] = set()
         for inst in filtered:
             if inst.id in self._cards:
@@ -259,11 +263,90 @@ class InstancesView(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
         self._sync_empty_state(bool(filtered))
+        self._sync_placeholder_cards(len(filtered))
         self._refresh_bulk_bar()
 
     def _insert_list_widget(self, widget: QWidget) -> None:
         index = self._cards_layout.indexOf(self.empty_state)
         self._cards_layout.insertWidget(max(0, index), widget)
+
+    def _build_placeholder_card(self, opacity: float) -> QWidget:
+        card = GlassCard()
+        card.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        card.setFocusPolicy(Qt.NoFocus)
+        card.setStyleSheet(
+            f"""
+            QFrame#SolidCard {{
+                background: rgba(255,255,255,0.018);
+                border: 1px dashed {t.BORDER_LOW};
+                border-radius: 16px;
+            }}
+            """
+        )
+        body = card.body()
+        body.setContentsMargins(16, 16, 16, 16)
+        body.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(10)
+        bar_style = (
+            f"background: {t.BORDER_LOW}; border-radius: 6px;"
+        )
+        head_bar = QWidget()
+        head_bar.setFixedSize(180, 14)
+        head_bar.setStyleSheet(bar_style)
+        head.addWidget(head_bar)
+        head.addStretch(1)
+        pill = QWidget()
+        pill.setFixedSize(70, 18)
+        pill.setStyleSheet(f"background: {t.BORDER_LOW}; border-radius: 9px;")
+        head.addWidget(pill)
+        body.addLayout(head)
+
+        meta = QHBoxLayout()
+        meta.setContentsMargins(0, 0, 0, 0)
+        meta.setSpacing(24)
+        for width in (90, 70, 80, 110, 80, 90):
+            col = QVBoxLayout()
+            col.setContentsMargins(0, 0, 0, 0)
+            col.setSpacing(6)
+            cap = QWidget()
+            cap.setFixedSize(52, 8)
+            cap.setStyleSheet(f"background: {t.BORDER_LOW}; border-radius: 4px;")
+            val = QWidget()
+            val.setFixedSize(width, 14)
+            val.setStyleSheet(bar_style)
+            col.addWidget(cap)
+            col.addWidget(val)
+            meta.addLayout(col)
+        meta.addStretch(1)
+        body.addLayout(meta)
+
+        effect = QGraphicsOpacityEffect(card)
+        effect.setOpacity(opacity)
+        card.setGraphicsEffect(effect)
+        return card
+
+    def _sync_placeholder_cards(self, real_count: int) -> None:
+        if self._loading_cards or not self._all or real_count >= 4:
+            self._clear_placeholder_cards()
+            return
+        target = max(0, 4 - real_count)
+        if len(self._placeholder_cards) == target:
+            return
+        self._clear_placeholder_cards()
+        opacities = [0.32, 0.20, 0.11, 0.05]
+        for i in range(target):
+            card = self._build_placeholder_card(opacities[min(i, len(opacities) - 1)])
+            self._placeholder_cards.append(card)
+            self._insert_list_widget(card)
+
+    def _clear_placeholder_cards(self) -> None:
+        while self._placeholder_cards:
+            widget = self._placeholder_cards.pop()
+            widget.setParent(None)
+            widget.deleteLater()
 
     def _build_empty_state(self) -> QWidget:
         host = QWidget()

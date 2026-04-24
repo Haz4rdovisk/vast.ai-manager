@@ -103,23 +103,6 @@ class ModelCard(QFrame):
         self._name.setToolTip(model.name)
         name_row.addWidget(self._name, 1, Qt.AlignVCenter)
 
-        # Tags inline with the model name (natural width, never squished)
-        shown = 0
-        for tag in model.tags:
-            if (
-                tag in _SKIP_TAGS
-                or tag.startswith("license:")
-                or tag.startswith("dataset:")
-                or tag.startswith("library:")
-            ):
-                continue
-            badge = Badge(tag)
-            badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            name_row.addWidget(badge, 0, Qt.AlignVCenter)
-            shown += 1
-            if shown >= 3:
-                break
-
         info.addLayout(name_row)
 
         meta = QHBoxLayout()
@@ -141,35 +124,64 @@ class ModelCard(QFrame):
 
         side = QVBoxLayout()
         side.setContentsMargins(0, 0, 0, 0)
-        side.setSpacing(t.SPACE_3)
+        side.setSpacing(t.SPACE_2)
         side.setAlignment(Qt.AlignRight | Qt.AlignTop)
+
+        top_right = QHBoxLayout()
+        top_right.setContentsMargins(0, 0, 0, 0)
+        top_right.setSpacing(t.SPACE_2)
+        top_right.addStretch(1)
+
         if model.params_b > 0:
-            side.addWidget(Badge(f"{model.params_b:.1f}B", accent=True), 0, Qt.AlignRight)
+            top_right.addWidget(
+                Badge(f"{model.params_b:.1f}B", accent=True),
+                0,
+                Qt.AlignVCenter,
+            )
+
+        shown = 0
+        for tag in model.tags:
+            if (
+                tag in _SKIP_TAGS
+                or tag.startswith("license:")
+                or tag.startswith("dataset:")
+                or tag.startswith("library:")
+            ):
+                continue
+            badge = Badge(tag)
+            badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            top_right.addWidget(badge, 0, Qt.AlignVCenter)
+            shown += 1
+            if shown >= 3:
+                break
+        side.addLayout(top_right)
         side.addStretch()
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
-        actions.setSpacing(t.SPACE_2)
-        hf = QPushButton("Open HF")
-        hf.setCursor(Qt.PointingHandCursor)
-        hf.setProperty("variant", "ghost")
-        hf.setProperty("size", "sm")
-        hf.setStyleSheet(
-            f"color: {t.ACCENT_HI}; background: transparent;"
-            f" border: 1px solid {t.BORDER_LOW};"
-            " padding: 5px 11px; border-radius: 8px; font-size: 11px; font-weight: 700;"
+        actions.setSpacing(t.SPACE_1)
+        actions.addStretch(1)
+        hf_link = QPushButton("HF \u2197")
+        hf_link.setCursor(Qt.PointingHandCursor)
+        hf_link.setFlat(True)
+        hf_link.setProperty("variant", "link")
+        hf_link.setStyleSheet(
+            f"""
+            QPushButton {{
+                color: {t.ACCENT_HI};
+                background: transparent;
+                border: none;
+                padding: 2px 4px;
+                font-size: 12px;
+                font-weight: 700;
+                text-decoration: underline;
+            }}
+            QPushButton:hover {{ color: {t.ACCENT}; }}
+            """
         )
-        hf.clicked.connect(lambda _=False, mid=model.id: self.open_hf_clicked.emit(mid))
-        actions.addWidget(hf)
-
-        self._details_btn = QPushButton("Inspect")
-        self._details_btn.setProperty("size", "sm")
-        self._details_btn.setStyleSheet(
-            f"background: {t.ACCENT}; color: white; font-weight: 700;"
-            " padding: 5px 14px; border-radius: 8px; font-size: 11px;"
-        )
-        self._details_btn.clicked.connect(lambda _=False: self.details_clicked.emit(self.model))
-        actions.addWidget(self._details_btn)
+        hf_link.setToolTip("Open on Hugging Face")
+        hf_link.clicked.connect(lambda _=False, mid=model.id: self.open_hf_clicked.emit(mid))
+        actions.addWidget(hf_link, 0, Qt.AlignRight)
         side.addLayout(actions)
         main.addLayout(side)
         root.addLayout(main)

@@ -263,6 +263,7 @@ class StudioView(QWidget):
         self.instance_combo.setMinimumWidth(260)
         self.instance_combo.setMaximumWidth(320)
         self.instance_combo.setToolTip("Active instance")
+        self.instance_combo.setPlaceholderText("No rented instances")
         self.instance_combo.currentIndexChanged.connect(self._on_instance_selected)
 
         self.model_picker = QComboBox()
@@ -518,15 +519,17 @@ class StudioView(QWidget):
             state = self.store.get_state(iid)
             tag = "" if state.gguf else " - no models"
             self.instance_combo.addItem(f"Instance #{iid}{tag}", iid)
-        
+
         # 2. Restore selection
-        if old_iid:
+        if not ids:
+            self.instance_combo.setCurrentIndex(-1)
+        elif old_iid:
             idx = self.instance_combo.findData(old_iid)
             if idx >= 0:
                 self.instance_combo.setCurrentIndex(idx)
-            elif ids:
+            else:
                 self._on_instance_selected(0)
-        elif ids:
+        else:
             self._on_instance_selected(0)
 
         self.instance_combo.blockSignals(False)

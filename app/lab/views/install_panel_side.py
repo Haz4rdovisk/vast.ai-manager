@@ -64,13 +64,9 @@ def _flat_inner_card() -> GlassCard:
     card.setStyleSheet(
         """
         QFrame#SolidCard {
-            background: #101722;
-            border: 1px solid #243047;
-            border-radius: 16px;
-        }
-        QFrame#SolidCard:hover {
-            background: #121b29;
-            border-color: #33415d;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.055);
+            border-radius: 14px;
         }
         """
     )
@@ -537,13 +533,9 @@ class InstallPanelSide(QWidget):
                 background: transparent;
             }}
             QWidget#studio-settings QFrame#SolidCard {{
-                background: #101722;
-                border: 1px solid #243047;
-                border-radius: 16px;
-            }}
-            QWidget#studio-settings QFrame#SolidCard:hover {{
-                background: #121b29;
-                border-color: #33415d;
+                background: rgba(255,255,255,0.025);
+                border: 1px solid rgba(255,255,255,0.055);
+                border-radius: 14px;
             }}
             QFrame#stale-install-banner,
             QFrame#danger-strip {{
@@ -559,13 +551,9 @@ class InstallPanelSide(QWidget):
                 border: none;
             }}
             QFrame#deploy-target {{
-                background: #101722;
-                border: 1px solid #243047;
-                border-radius: 16px;
-            }}
-            QFrame#deploy-target:hover {{
-                background: #121b29;
-                border-color: #33415d;
+                background: rgba(255,255,255,0.025);
+                border: 1px solid rgba(255,255,255,0.055);
+                border-radius: 14px;
             }}
             QComboBox {{
                 background: {t.SURFACE_3};
