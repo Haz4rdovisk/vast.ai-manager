@@ -95,6 +95,32 @@ _LOADING_WEBUI_HTML = f"""
 """
 
 
+class _StudioWebPage(QWebEnginePage):
+    """Keeps WebUI navigation inside the embedded Studio surface.
+
+    llama.cpp's WebUI may occasionally request a popup/new window. If we allow
+    QtWebEngine to create a detached page, Windows can flash a blank renderer
+    window outside the app bounds. We redirect those requests back into the
+    main embedded view instead.
+    """
+
+    def __init__(self, profile: QWebEngineProfile, host_view: QWebEngineView, parent=None):
+        super().__init__(profile, parent)
+        self._host_view = host_view
+
+    def createWindow(self, _window_type):
+        popup = QWebEnginePage(self.profile(), self)
+
+        def _redirect(url: QUrl) -> None:
+            if url.isValid() and self._host_view is not None:
+                self._host_view.setUrl(url)
+
+        popup.urlChanged.connect(_redirect)
+        popup.windowCloseRequested.connect(popup.deleteLater)
+        popup.loadFinished.connect(lambda _ok: popup.deleteLater())
+        return popup
+
+
 class StudioView(QWidget):
     launch_requested = Signal(object)
     stop_requested = Signal()
@@ -370,7 +396,7 @@ class StudioView(QWidget):
         self._pages_to_cleanup = []
         
         self.webui = QWebEngineView()
-        chat_page = QWebEnginePage(self.profile, self.webui)
+        chat_page = _StudioWebPage(self.profile, self.webui, self.webui)
         self.webui.setPage(chat_page)
         self._pages_to_cleanup.append(chat_page)
         self.webui.page().setBackgroundColor(QColor("#0a0a0b"))
@@ -513,6 +539,8 @@ class StudioView(QWidget):
         # 1. Save current selection
         old_iid = self.instance_combo.currentData()
 
+        selected_index = -1
+
         self.instance_combo.blockSignals(True)
         self.instance_combo.clear()
         for iid in ids:
@@ -520,19 +548,30 @@ class StudioView(QWidget):
             tag = "" if state.gguf else " - no models"
             self.instance_combo.addItem(f"Instance #{iid}{tag}", iid)
 
+        preferred_iid = None
+        if self.store.selected_instance_id in ids:
+            preferred_iid = self.store.selected_instance_id
+        elif old_iid in ids:
+            preferred_iid = old_iid
+
         # 2. Restore selection
         if not ids:
             self.instance_combo.setCurrentIndex(-1)
-        elif old_iid:
-            idx = self.instance_combo.findData(old_iid)
+        elif preferred_iid is not None:
+            idx = self.instance_combo.findData(preferred_iid)
             if idx >= 0:
+                selected_index = idx
                 self.instance_combo.setCurrentIndex(idx)
             else:
+                selected_index = 0
                 self._on_instance_selected(0)
         else:
+            selected_index = 0
             self._on_instance_selected(0)
 
         self.instance_combo.blockSignals(False)
+        if selected_index >= 0:
+            self._on_instance_selected(selected_index)
 
     def _on_instance_selected(self, index: int):
         iid = self.instance_combo.itemData(index)

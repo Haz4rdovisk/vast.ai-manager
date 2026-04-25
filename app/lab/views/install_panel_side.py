@@ -4,6 +4,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -73,6 +74,17 @@ def _flat_inner_card() -> GlassCard:
     return card
 
 
+def _compact_count(value: int) -> str:
+    abs_value = abs(value)
+    if abs_value >= 1_000_000:
+        text = f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}M"
+    if abs_value >= 1_000:
+        text = f"{value / 1_000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}K"
+    return str(value)
+
+
 def _remote_has_selected_file(state, selected_file: HFModelFile | None) -> bool:
     if selected_file is None:
         return False
@@ -87,6 +99,48 @@ def _remote_has_selected_file(state, selected_file: HFModelFile | None) -> bool:
         if path.strip().lower().endswith(f"/{wanted}") or path.strip().lower().endswith(f"\\{wanted}"):
             return True
     return False
+
+
+class _HeroInfoTag(QFrame):
+    def __init__(self, emoji: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("deploy-info-tag")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self._full_text = ""
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(7)
+        lay.setAlignment(Qt.AlignVCenter)
+
+        self._emoji = QLabel(emoji)
+        self._emoji.setObjectName("deploy-info-tag-emoji")
+        self._emoji.setAlignment(Qt.AlignCenter)
+        self._emoji.setFixedWidth(16)
+        lay.addWidget(self._emoji, 0, Qt.AlignVCenter)
+
+        self._text = QLabel("")
+        self._text.setObjectName("deploy-info-tag-text")
+        self._text.setWordWrap(False)
+        self._text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._text.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        lay.addWidget(self._text, 1)
+
+    def set_text(self, text: str, tooltip: str | None = None) -> None:
+        self._full_text = text
+        tip = tooltip or text
+        self.setToolTip(tip)
+        self._text.setToolTip(tip)
+        self._refresh_text()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_text()
+
+    def _refresh_text(self) -> None:
+        metrics = QFontMetrics(self._text.font())
+        available = max(10, self._text.width() - 2)
+        self._text.setText(metrics.elidedText(self._full_text, Qt.ElideRight, available))
 
 
 class _InstanceCard(QFrame):
@@ -566,12 +620,31 @@ class InstallPanelSide(QWidget):
             QComboBox:focus {{ border-color: {t.ACCENT}; }}
             QLabel#deploy-model-name {{
                 color: {t.TEXT_HI};
-                font-size: 20px;
+                font-size: 22px;
                 font-weight: 900;
             }}
             QLabel#deploy-model-meta {{
                 color: {t.TEXT_MID};
                 font-size: 12px;
+            }}
+            QFrame#deploy-info-tag {{
+                background: rgba(255,255,255,0.035);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 12px;
+                min-height: 54px;
+            }}
+            QFrame#deploy-info-tag:hover {{
+                background: rgba(255,255,255,0.05);
+                border-color: rgba(255,255,255,0.14);
+            }}
+            QLabel#deploy-info-tag-emoji {{
+                color: {t.ACCENT_SOFT};
+                font-size: 16px;
+            }}
+            QLabel#deploy-info-tag-text {{
+                color: {t.TEXT_HI};
+                font-size: 13px;
+                font-weight: 700;
             }}
             """
         )
@@ -726,26 +799,23 @@ class InstallPanelSide(QWidget):
         hero_card = _flat_inner_card()
         hero_lay = hero_card.body()
         hero_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
-        hero_lay.setSpacing(t.SPACE_2)
-
-        sec_model = QLabel("Selected model")
-        sec_model.setProperty("role", "section")
-        hero_lay.addWidget(sec_model)
+        hero_lay.setSpacing(t.SPACE_3)
 
         self._hero_name = QLabel("")
         self._hero_name.setObjectName("deploy-model-name")
         self._hero_name.setWordWrap(True)
-        self._hero_author = QLabel("")
-        self._hero_author.setObjectName("deploy-model-meta")
-        self._hero_stats = QLabel("")
-        self._hero_stats.setObjectName("deploy-model-meta")
-        self._hero_hint = QLabel("")
-        self._hero_hint.setWordWrap(True)
-        self._hero_hint.setStyleSheet(f"color: {t.TEXT}; font-size: 12px;")
         hero_lay.addWidget(self._hero_name)
-        hero_lay.addWidget(self._hero_author)
-        hero_lay.addWidget(self._hero_stats)
-        hero_lay.addWidget(self._hero_hint)
+
+        hero_tags = QHBoxLayout()
+        hero_tags.setContentsMargins(0, 0, 0, 0)
+        hero_tags.setSpacing(t.SPACE_2)
+        self._hero_author_tag = _HeroInfoTag("👤")
+        self._hero_likes_tag = _HeroInfoTag("❤️")
+        self._hero_downloads_tag = _HeroInfoTag("⬇️")
+        hero_tags.addWidget(self._hero_author_tag, 2)
+        hero_tags.addWidget(self._hero_likes_tag, 1)
+        hero_tags.addWidget(self._hero_downloads_tag, 1)
+        hero_lay.addLayout(hero_tags)
         lay.addWidget(hero_card)
 
         quant_card = _flat_inner_card()
@@ -862,20 +932,10 @@ class InstallPanelSide(QWidget):
         if not self.current_model: return
         m = self.current_model
         self._hero_name.setText(m.name)
-        self._hero_author.setText(f"by {m.author}")
-        params = f" | {m.params_b:.1f}B" if m.params_b > 0 else ""
-        self._hero_stats.setText(f"{m.likes:,} likes | {m.downloads:,} downloads{params}")
-        chosen = self._quant_combo.currentData()
-        if chosen is not None:
-            size_gb = chosen.size_bytes / (1024 ** 3) if chosen.size_bytes else 0
-            q = chosen.quantization
-            self._hero_hint.setText(f"{q if q else chosen.filename} · {size_gb:.1f} GB")
-        elif m.details_loading:
-            self._hero_hint.setText("Loading GGUF file metadata...")
-        elif m.details_error:
-            self._hero_hint.setText(m.details_error)
-        else:
-            self._hero_hint.setText("No quant selected.")
+        author = m.author or "Unknown author"
+        self._hero_author_tag.set_text(author)
+        self._hero_likes_tag.set_text(_compact_count(m.likes), f"{m.likes:,} likes")
+        self._hero_downloads_tag.set_text(_compact_count(m.downloads), f"{m.downloads:,} downloads")
 
     def _populate_quants(self) -> None:
         if not self.current_model: return

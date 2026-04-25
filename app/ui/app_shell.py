@@ -173,6 +173,10 @@ class AppShell(QWidget):
         QShortcut(QKeySequence("Ctrl+,"), self,
                   activated=lambda: self._go("settings"))
 
+    @staticmethod
+    def _is_connected_tunnel(status) -> bool:
+        return status in (TunnelStatus.CONNECTED, TunnelStatus.CONNECTED.value)
+
     # --- View management ---
 
     def _add_view(self, key: str, widget: QWidget):
@@ -329,7 +333,7 @@ class AppShell(QWidget):
 
     def _on_tunnel_status_changed(self, iid: int, status: str, msg: str):
         self._sync_discover_connection_state()
-        if status == TunnelStatus.CONNECTED.value:
+        if self._is_connected_tunnel(status):
             # Proactive Re-probing on successful connection
             self._probe_instance(iid)
             
@@ -408,7 +412,7 @@ class AppShell(QWidget):
         # Check tunnel status before probing
         if self._controller:
             status = self._controller.tunnel_states.get(iid)
-            if status != TunnelStatus.CONNECTED.value:
+            if not self._is_connected_tunnel(status):
                 return
 
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
@@ -914,7 +918,7 @@ class AppShell(QWidget):
         for key, desc in self.job_registry.active_items():
             # Check if tunnel is active for this iid
             status = self._controller.tunnel_states.get(desc.iid)
-            if status == TunnelStatus.CONNECTED.value:
+            if self._is_connected_tunnel(status):
                 self._probe_single_job(desc, instances)
 
     def _probe_active_jobs_for(self, iid: int, instances: list):
@@ -923,7 +927,7 @@ class AppShell(QWidget):
             
         # Check if tunnel is active for this iid
         status = self._controller.tunnel_states.get(iid)
-        if status != TunnelStatus.CONNECTED.value:
+        if not self._is_connected_tunnel(status):
             return
 
         for key, desc in self.job_registry.active_items():
