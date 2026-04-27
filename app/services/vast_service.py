@@ -77,6 +77,31 @@ def _is_scheduling_status(
     return i == "running" and a in _STOPPED_STATUSES
 
 
+_OUTBID_KEYWORDS = {
+    "outbid",
+    "preempt",
+    "terminated",
+    "killed",
+    "auction ended",
+}
+
+
+def _is_outbid_status(
+    actual: str | None,
+    intended: str | None,
+    status_message: str | None = None,
+) -> bool:
+    i = _normalize_status(intended)
+    msg = str(status_message or "").lower()
+    # Only flag as outbid when the user intended it to run and the API
+    # explicitly signals termination / outbid in the status message.
+    # RUNNING -> STOPPED transitions without a message are handled by
+    # the controller's transition detector (sticky outbid logic).
+    if i == "running" and any(kw in msg for kw in _OUTBID_KEYWORDS):
+        return True
+    return False
+
+
 def _derive_state(actual: str | None, intended: str | None) -> InstanceState:
     a = _normalize_status(actual)
     i = _normalize_status(intended)
@@ -184,6 +209,9 @@ def parse_instance(raw: dict) -> Instance:
 
     actual_status, intended_status = _status_pair(raw)
     state = _derive_state(actual_status, intended_status)
+    is_outbid = _is_outbid_status(actual_status, intended_status, status_message)
+    if is_outbid:
+        state = InstanceState.OUTBID
     is_running = state == InstanceState.RUNNING
     normalized_raw = dict(raw)
     normalized_raw["_normalized_actual_status"] = actual_status
@@ -193,6 +221,7 @@ def parse_instance(raw: dict) -> Instance:
         intended_status,
         status_message,
     )
+    normalized_raw["_is_outbid"] = is_outbid
 
     # Telemetry only valid while the container is actually running.
     # Vast keeps stale last-known values on stopped/starting instances —

@@ -243,3 +243,39 @@ def test_fetch_financial_data_uses_sdk_billing_pages(monkeypatch):
     assert len(calls) == 3
     assert calls[0][1]["format"] == "tree"
     assert calls[0][1]["start_date"] == 1_000_000 - 7 * 24 * 3600
+
+
+def test_parse_instance_outbid_from_status_message():
+    raw = {
+        "id": 20,
+        "actual_status": "exited",
+        "intended_status": "running",
+        "status_msg": "instance terminated: outbid",
+    }
+    inst = parse_instance(raw)
+    assert inst.state == InstanceState.OUTBID
+    assert inst.raw.get("_is_outbid") is True
+
+
+def test_parse_instance_outbid_from_preempted_message():
+    raw = {
+        "id": 21,
+        "actual_status": "offline",
+        "intended_status": "running",
+        "status_message": "preempted by higher bid",
+    }
+    inst = parse_instance(raw)
+    assert inst.state == InstanceState.OUTBID
+    assert inst.raw.get("_is_outbid") is True
+
+
+def test_parse_instance_not_outbid_when_intended_stopped():
+    raw = {
+        "id": 22,
+        "actual_status": "exited",
+        "intended_status": "stopped",
+        "status_msg": "outbid",
+    }
+    inst = parse_instance(raw)
+    assert inst.state == InstanceState.STOPPED
+    assert inst.raw.get("_is_outbid") is not True
