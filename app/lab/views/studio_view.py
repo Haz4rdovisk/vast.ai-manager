@@ -109,15 +109,20 @@ class _StudioWebPage(QWebEnginePage):
         self._host_view = host_view
 
     def createWindow(self, _window_type):
-        popup = QWebEnginePage(self.profile(), self)
+        hidden = QWebEngineView()
+        hidden.setAttribute(Qt.WA_DontShowOnScreen, True)
+        hidden.setFixedSize(1, 1)
+        popup = QWebEnginePage(self.profile(), hidden)
+        hidden.setPage(popup)
 
         def _redirect(url: QUrl) -> None:
             if url.isValid() and self._host_view is not None:
                 self._host_view.setUrl(url)
+            hidden.deleteLater()
 
         popup.urlChanged.connect(_redirect)
-        popup.windowCloseRequested.connect(popup.deleteLater)
-        popup.loadFinished.connect(lambda _ok: popup.deleteLater())
+        popup.windowCloseRequested.connect(hidden.deleteLater)
+        popup.loadFinished.connect(lambda _ok: hidden.deleteLater())
         return popup
 
 
