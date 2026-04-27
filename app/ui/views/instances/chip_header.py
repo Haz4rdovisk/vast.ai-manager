@@ -100,6 +100,8 @@ class ChipHeader(QFrame):
             status_variant, status_label = "accent", "STARTING"
         elif inst.state == InstanceState.STOPPING:
             status_variant, status_label = "danger", "STOPPING"
+        elif inst.state == InstanceState.OUTBID:
+            status_variant, status_label = "danger", "OUTBID"
 
         self.status_chip.label.setText(status_label)
         from app.ui.components.primitives import _CHIP_VARIANTS

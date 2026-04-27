@@ -36,6 +36,8 @@ def _status_text(inst: Instance, *keys: str) -> str:
 
 
 def is_scheduling_instance(inst: Instance) -> bool:
+    if inst.raw.get("_is_outbid") is True:
+        return False
     if inst.raw.get("_is_scheduling") is True:
         return True
     actual = _status_text(
@@ -161,6 +163,8 @@ class ActionBar(QFrame):
             p_color, p_sig, p_tip = ACCENT_HI, None, "Starting..."
         elif inst.state == InstanceState.STOPPING:
             p_color, p_sig, p_tip = ERR, None, "Stopping..."
+        elif inst.state == InstanceState.OUTBID:
+            p_color, p_sig, p_tip = ERR, self.deactivate_requested, "Cancel Search"
 
         # Update Power Button
         self.btn_power._base_color = p_color
@@ -177,10 +181,14 @@ class ActionBar(QFrame):
         # 2. Connection Logic
         c_label = "Connect"
         c_sig = None
-        c_color_qss = "" 
+        c_color_qss = ""
         c_enabled = (inst.state == InstanceState.RUNNING)
-        
-        if tunnel == TunnelStatus.CONNECTING:
+
+        if inst.state == InstanceState.OUTBID:
+            c_label = "Unavailable"
+            c_enabled = False
+            c_sig = None
+        elif tunnel == TunnelStatus.CONNECTING:
             c_label = "Connecting..."
         elif tunnel == TunnelStatus.CONNECTED:
             c_label, c_sig = "Disconnect", self.disconnect_requested
@@ -192,8 +200,14 @@ class ActionBar(QFrame):
 
         self.btn_connect.setText(c_label)
         self.btn_connect.setEnabled(c_enabled)
-        self.btn_connect.setToolTip(_scheduling_tooltip(inst) if scheduling else "")
-        self.btn_connect.setStyleSheet(f"padding: 2px 14px; {c_color_qss}") 
+        if inst.state == InstanceState.OUTBID:
+            self.btn_connect.setToolTip(
+                "This instance was outbid or terminated by the provider. "
+                "It will not restart automatically. You can destroy it or search for a new instance."
+            )
+        else:
+            self.btn_connect.setToolTip(_scheduling_tooltip(inst) if scheduling else "")
+        self.btn_connect.setStyleSheet(f"padding: 2px 14px; {c_color_qss}")
         
         try: self.btn_connect.clicked.disconnect()
         except: pass
@@ -212,4 +226,7 @@ class ActionBar(QFrame):
             self.btn_reboot.setToolTip("Reboot")
             self.btn_reboot.clicked.connect(self.reboot_requested)
         self.btn_snapshot.setEnabled(inst.state != InstanceState.STOPPING)
-        self.btn_destroy.setEnabled(inst.state == InstanceState.STOPPED or inst.state == InstanceState.SCHEDULING or scheduling)
+        self.btn_destroy.setEnabled(
+            inst.state in (InstanceState.STOPPED, InstanceState.SCHEDULING, InstanceState.OUTBID)
+            or scheduling
+        )

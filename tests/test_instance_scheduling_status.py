@@ -32,9 +32,9 @@ def test_action_bar_shows_scheduling_cta_with_tooltip(qt_app):
 
     bar = ActionBar(inst, TunnelStatus.DISCONNECTED)
 
-    assert bar.primary.text() == "scheduling..."
+    assert bar.primary.text() == "Connect"
     assert "Attempting to schedule" in bar.primary.toolTip()
-    assert bar.primary.isEnabled() is True
+    assert bar.primary.isEnabled() is False
 
 
 def test_action_bar_uses_default_scheduling_tooltip_when_api_omits_message(qt_app):
@@ -65,7 +65,7 @@ def test_action_bar_detects_scheduling_from_intended_running(qt_app):
 
     bar = ActionBar(inst, TunnelStatus.DISCONNECTED)
 
-    assert bar.primary.text() == "scheduling..."
+    assert bar.primary.text() == "Connect"
     assert "GPU is currently in use" in bar.primary.toolTip()
 
 
@@ -87,3 +87,23 @@ def test_action_bar_stop_icon_stops_scheduling_instance(qt_app):
 
     assert "Storage charges still apply" in bar.btn_reboot.toolTip()
     assert seen == [True]
+
+
+def test_action_bar_shows_outbid_state(qt_app):
+    from app.ui.views.instances.action_bar import ActionBar, is_scheduling_instance
+
+    inst = Instance(
+        id=42,
+        state=InstanceState.OUTBID,
+        gpu_name="RTX 4090",
+        num_gpus=1,
+        gpu_ram_gb=24,
+        image="img",
+        dph=0.5,
+        raw={"actual_status": "exited", "intended_status": "running", "_is_outbid": True},
+    )
+    bar = ActionBar(inst, TunnelStatus.DISCONNECTED)
+    assert bar.primary.text() == "Unavailable"
+    assert bar.primary.isEnabled() is False
+    assert "outbid" in bar.primary.toolTip().lower() or "terminated" in bar.primary.toolTip().lower()
+    assert not is_scheduling_instance(inst)
