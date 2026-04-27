@@ -578,7 +578,11 @@ class InstancesView(QWidget):
         out: list[Instance] = []
         for inst in instances:
             if inst.id in self._start_requested_ids:
-                if inst.state == InstanceState.RUNNING:
+                if inst.state == InstanceState.OUTBID:
+                    self._start_requested_ids.discard(inst.id)
+                    self._start_requested_at.pop(inst.id, None)
+                    out.append(inst)
+                elif inst.state == InstanceState.RUNNING:
                     self._start_requested_ids.discard(inst.id)
                     self._start_requested_at.pop(inst.id, None)
                     out.append(inst)

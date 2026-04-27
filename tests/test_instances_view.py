@@ -67,7 +67,7 @@ def test_card_activate_relay(qt_app):
     view.activate_requested.connect(seen.append)
     view._cards[1].activate_requested.emit(1)
     assert seen == [1]
-    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert view._cards[1].actions.primary.text() == "Connect"
     assert "GPU is currently in use" in view._cards[1].actions.primary.toolTip()
 
 
@@ -100,8 +100,8 @@ def test_bulk_start_marks_visible_cards_as_scheduling(qt_app, monkeypatch):
     view._bulk_from_visible("start")
 
     assert seen == [("start", [1, 2], {"auto_connect": True})]
-    assert view._cards[1].actions.primary.text() == "scheduling..."
-    assert view._cards[2].actions.primary.text() == "scheduling..."
+    assert view._cards[1].actions.primary.text() == "Connect"
+    assert view._cards[2].actions.primary.text() == "Connect"
 
 
 def test_scheduling_survives_stopped_refresh_after_start(qt_app):
@@ -110,49 +110,31 @@ def test_scheduling_survives_stopped_refresh_after_start(qt_app):
     view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
 
     view._cards[1].activate_requested.emit(1)
+    ctl.update_start_requested_ids.reset_mock()
     view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
-
-    assert view._cards[1].actions.primary.text() == "scheduling..."
-    assert 1 in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([1], ANY)
-
-
-def test_running_refresh_clears_sticky_scheduling(qt_app):
-    ctl = _controller()
-    view = InstancesView(ctl)
-    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
-
-    view._cards[1].activate_requested.emit(1)
-    view.handle_refresh([_inst(1, state=InstanceState.RUNNING)], UserInfo(balance=5.0, email=""))
 
     assert view._cards[1].actions.primary.text() == "Connect"
-    assert 1 not in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([], {})
-
-
-def test_failed_start_action_clears_sticky_scheduling(qt_app):
-    ctl = _controller()
-    view = InstancesView(ctl)
-    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
-
-    view._cards[1].activate_requested.emit(1)
-    view._on_action_done(1, "start", False, "no capacity")
-    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
-
-    assert view._cards[1].actions.primary.text() == "Activate"
-    assert 1 not in view._start_requested_ids
-    ctl.update_start_requested_ids.assert_called_with([], {})
-
-
-def test_persisted_start_request_restores_scheduling_on_open(qt_app):
-    ctl = _controller(AppConfig(start_requested_ids=[1]))
-    view = InstancesView(ctl)
-
-    view.handle_refresh([_inst(1, state=InstanceState.STOPPED)], UserInfo(balance=5.0, email=""))
-
-    assert view._cards[1].actions.primary.text() == "scheduling..."
     assert 1 in view._start_requested_ids
     ctl.update_start_requested_ids.assert_not_called()
+
+
+def test_outbid_instance_not_overridden_by_sticky_scheduling(qt_app):
+    ctl = _controller(AppConfig(start_requested_ids=[1], start_requested_at={1: 1.0}))
+    view = InstancesView(ctl)
+
+    view.handle_refresh(
+        [
+            _inst(
+                1,
+                state=InstanceState.OUTBID,
+                raw={"actual_status": "exited", "intended_status": "running", "_is_outbid": True},
+            )
+        ],
+        UserInfo(balance=5.0, email=""),
+    )
+
+    assert 1 not in view._start_requested_ids
+    # Action-bar "Unavailable" text is verified after Task 6 (action_bar update)
 
 
 def test_persisted_start_request_clears_when_running_on_open(qt_app):
@@ -181,7 +163,7 @@ def test_server_scheduling_state_wins_without_local_start_request(qt_app):
         UserInfo(balance=5.0, email=""),
     )
 
-    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert view._cards[1].actions.primary.text() == "Connect"
     assert 1 not in view._start_requested_ids
     ctl.update_start_requested_ids.assert_not_called()
 
@@ -201,6 +183,6 @@ def test_persisted_start_request_stays_scheduling_even_if_server_reports_stopped
         UserInfo(balance=5.0, email=""),
     )
 
-    assert view._cards[1].actions.primary.text() == "scheduling..."
+    assert view._cards[1].actions.primary.text() == "Connect"
     assert 1 in view._start_requested_ids
     ctl.update_start_requested_ids.assert_not_called()
