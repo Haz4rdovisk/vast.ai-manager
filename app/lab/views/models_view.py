@@ -3,11 +3,13 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QMessageBox, QFrame, QSplitter, QComboBox,
-    QSizePolicy,
+    QSizePolicy, QStackedWidget,
 )
 from PySide6.QtCore import Signal, Qt
 from app import theme as t
 from app.ui.components.page_header import PageHeader
+from app.ui.components.lock_screen import LockScreen
+import qtawesome as qta
 from app.ui.components.primitives import GlassCard, StatusPill
 from app.ui.components.model_config_form import ModelConfigForm
 from app.ui.brand_manager import BrandManager
@@ -216,13 +218,72 @@ class ModelsView(QWidget):
         header = PageHeader("Model Library", "")
         self.ctx_lbl = header.subtitle_label
         refresh_btn = QPushButton("\u21BB Rescan")
-        refresh_btn.setProperty("variant", "ghost")
+        refresh_btn.setObjectName("rescan-btn")
+        refresh_btn.setStyleSheet(f"""
+            QPushButton#rescan-btn {{
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.10);
+                color: {t.TEXT_HI};
+                padding: 9px 18px;
+                border-radius: {t.RADIUS_MD}px;
+            }}
+            QPushButton#rescan-btn:hover:enabled {{
+                background: rgba(255,255,255,0.08);
+                border-color: rgba(255,255,255,0.15);
+            }}
+        """)
         refresh_btn.clicked.connect(self.rescan_requested.emit)
         header.add_action(refresh_btn)
-        dl_btn = QPushButton("\u2726 Discover More")
-        dl_btn.clicked.connect(lambda: self.navigate_requested.emit("discover"))
-        header.add_action(dl_btn)
         root.addWidget(header)
+
+        # Layout stack: lock | empty | content
+        self.layout_stack = QStackedWidget()
+        root.addWidget(self.layout_stack, 1)
+
+        # 1. Lock Screen
+        self.lock_screen = LockScreen(
+            title="SSH Tunnel Required",
+            message="An active SSH connection is required to browse and manage GGUF models across your instances."
+        )
+        self.lock_screen.instances_requested.connect(self.instances_requested.emit)
+        self.layout_stack.addWidget(self.lock_screen)
+
+        # 2. Empty State (SSH active, no models)
+        self.empty_state = QWidget()
+        empty_lay = QVBoxLayout(self.empty_state)
+        empty_lay.setAlignment(Qt.AlignCenter)
+        empty_icon = QLabel()
+        empty_icon.setPixmap(qta.icon("mdi.folder-open-outline", color=t.ACCENT).pixmap(64, 64))
+        empty_icon.setAlignment(Qt.AlignCenter)
+        empty_title = QLabel("No Models Found")
+        empty_title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 20px; font-weight: 600;")
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_msg = QLabel("No GGUF models found on any connected instance.\nBrowse the Model Store to get started.")
+        empty_msg.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 14px;")
+        empty_msg.setWordWrap(True)
+        empty_msg.setFixedWidth(400)
+        empty_msg.setAlignment(Qt.AlignCenter)
+        go_discover_btn = QPushButton("\u2726 Discover Models")
+        go_discover_btn.setObjectName("lock-screen-cta")
+        go_discover_btn.setFixedSize(220, 44)
+        go_discover_btn.setProperty("variant", "primary")
+        go_discover_btn.clicked.connect(lambda: self.navigate_requested.emit("discover"))
+        empty_lay.addStretch()
+        empty_lay.addWidget(empty_icon)
+        empty_lay.addSpacing(t.SPACE_3)
+        empty_lay.addWidget(empty_title)
+        empty_lay.addSpacing(t.SPACE_2)
+        empty_lay.addWidget(empty_msg)
+        empty_lay.addSpacing(t.SPACE_4)
+        empty_lay.addWidget(go_discover_btn, 0, Qt.AlignCenter)
+        empty_lay.addStretch()
+        self.layout_stack.addWidget(self.empty_state)
+
+        # 3. Main content
+        self.content_widget = QWidget()
+        content_lay = QVBoxLayout(self.content_widget)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(0)
 
         # Splitter: list | configure panel
         self.splitter = QSplitter(Qt.Horizontal)
@@ -249,7 +310,8 @@ class ModelsView(QWidget):
         self.splitter.addWidget(self.configure_panel)
         self.splitter.setSizes([1, 0])
 
-        root.addWidget(self.splitter, 1)
+        content_lay.addWidget(self.splitter, 1)
+        self.layout_stack.addWidget(self.content_widget)
 
         # Signals
         self.store.instance_state_updated.connect(lambda *_: self._render())
@@ -282,35 +344,26 @@ class ModelsView(QWidget):
         self._model_index = self._build_model_index()
         self._update_subtitle()
 
+        # Determine target state
+        if not self._connected_iids:
+            target_idx = 0  # Lock screen
+        elif not self._model_index:
+            target_idx = 1  # Empty state
+        else:
+            target_idx = 2  # Content
+
+        if self.layout_stack.currentIndex() != target_idx:
+            self.layout_stack.setCurrentIndex(target_idx)
+
+        # Only render list content if on content page
+        if target_idx != 2:
+            return
+
         # Clear list
         while self.list_lay.count():
             item = self.list_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-
-        # Empty state: no connected instances
-        if not self._connected_iids:
-            self._add_empty_state(
-                "\u25A4",
-                "No instances connected.",
-                "Connect to an instance to see installed models.",
-                "Go to Instances",
-                lambda: self.instances_requested.emit()
-            )
-            self.list_lay.addStretch()
-            return
-
-        # Empty state: no models
-        if not self._model_index:
-            self._add_empty_state(
-                "\u25A4",
-                "No GGUF models found across connected instances.",
-                "Download models from Discover to get started.",
-                "Go to Discover",
-                lambda: self.navigate_requested.emit("discover")
-            )
-            self.list_lay.addStretch()
-            return
 
         # Render cards
         for filename, instances in self._model_index.items():
@@ -318,32 +371,6 @@ class ModelsView(QWidget):
             self.list_lay.addWidget(card)
 
         self.list_lay.addStretch()
-
-    def _add_empty_state(self, icon_text: str, title: str, hint: str, cta_text: str, cta_handler):
-        empty = GlassCard()
-        ec = empty.body()
-        icon = QLabel(icon_text)
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet(f"font-size: 32pt; color: {t.TEXT_LOW};")
-        ec.addWidget(icon)
-        msg = QLabel(title)
-        msg.setAlignment(Qt.AlignCenter)
-        msg.setProperty("role", "muted")
-        ec.addWidget(msg)
-        hint_lbl = QLabel(hint)
-        hint_lbl.setAlignment(Qt.AlignCenter)
-        hint_lbl.setStyleSheet(f"color: {t.TEXT_LOW};")
-        ec.addWidget(hint_lbl)
-        go = QPushButton(cta_text)
-        go.setProperty("variant", "ghost")
-        go.setFixedWidth(160)
-        go.clicked.connect(cta_handler)
-        wrap = QHBoxLayout()
-        wrap.addStretch()
-        wrap.addWidget(go)
-        wrap.addStretch()
-        ec.addLayout(wrap)
-        self.list_lay.addWidget(empty)
 
     def _build_model_card(self, filename: str, instances: list[tuple[int, RemoteGGUF]]) -> GlassCard:
         card = GlassCard(raised=True)
