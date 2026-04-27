@@ -9,6 +9,7 @@ class InstanceState(str, Enum):
     RUNNING = "running"
     STOPPING = "stopping"
     SCHEDULING = "scheduling"
+    OUTBID = "outbid"
     UNKNOWN = "unknown"
 
 
