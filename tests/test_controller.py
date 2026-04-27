@@ -226,3 +226,27 @@ def test_bulk_start_defers_auto_connect_until_refresh_ready(store):
 
     assert seen_connect == [(1, 11434)]
     assert c._auto_connect_after_start == {2}
+
+
+def test_controller_marks_running_to_stopped_as_outbid(store):
+    c = AppController(store)
+    c._sync_live_workers = MagicMock()
+    c._log_analytics_snapshot = MagicMock()
+
+    # First refresh: instance is running
+    running_inst = Instance(
+        id=1, state=InstanceState.RUNNING, gpu_name="RTX 4090", num_gpus=1,
+        gpu_ram_gb=24, image="img", dph=0.5,
+        raw={"actual_status": "running", "intended_status": "running"},
+    )
+    c._on_refreshed([running_inst], UserInfo(balance=5.0))
+    assert c.last_instances[0].state == InstanceState.RUNNING
+
+    # Second refresh: instance stopped but intended still running
+    stopped_inst = Instance(
+        id=1, state=InstanceState.STOPPED, gpu_name="RTX 4090", num_gpus=1,
+        gpu_ram_gb=24, image="img", dph=0.5,
+        raw={"actual_status": "exited", "intended_status": "running"},
+    )
+    c._on_refreshed([stopped_inst], UserInfo(balance=5.0))
+    assert c.last_instances[0].state == InstanceState.OUTBID

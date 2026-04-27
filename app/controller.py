@@ -4,7 +4,13 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QTimer, Signal, QThread
 from app.config import ConfigStore
 from app.models import AppConfig, Instance, InstanceState, TunnelStatus, UserInfo
-from app.services.vast_service import VastService, VastAuthError, VastNetworkError
+from app.services.vast_service import (
+    VastService,
+    VastAuthError,
+    VastNetworkError,
+    _normalize_status,
+    _STOPPED_STATUSES,
+)
 from app.services.ssh_service import SSHService
 from app.workers.list_worker import ListWorker
 from app.workers.action_worker import ActionWorker
@@ -88,6 +94,7 @@ class AppController(QObject):
         self._pending_stop:  set[int] = set()
         self._pending_tunnel:set[int] = set()
         self._transition_locks: dict[int, InstanceState] = {}  # iid -> target_state
+        self._prev_instance_states: dict[int, InstanceState] = {}
 
         self._live_workers:   dict[int, LiveMetricsWorker] = {}
         self._model_watchers: dict[int, ModelWatcher] = {}
@@ -398,7 +405,17 @@ class AppController(QObject):
                     # Allow SCHEDULING to show if API already moved there, otherwise stay STARTING
                     if i.state != InstanceState.SCHEDULING:
                         i.state = InstanceState.STARTING
-        
+
+            # --- Outbid Transition Detection ---
+            prev = self._prev_instance_states.get(i.id)
+            if prev == InstanceState.RUNNING and i.state in (InstanceState.STOPPED, InstanceState.STARTING):
+                actual = _normalize_status(i.raw.get("actual_status"))
+                intended = _normalize_status(i.raw.get("intended_status"))
+                if intended == "running" and actual in _STOPPED_STATUSES:
+                    i.state = InstanceState.OUTBID
+
+            self._prev_instance_states[i.id] = i.state
+
         self._log_analytics_snapshot(instances, user, self._force_next_backfill)
         self._force_next_backfill = False
         self._check_tunnels_health()
