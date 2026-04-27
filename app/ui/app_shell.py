@@ -149,6 +149,7 @@ class AppShell(QWidget):
         self.models.rescan_requested.connect(self._manual_probe)
         self.models.navigate_requested.connect(self._go)
         self.models.launch_requested.connect(self._launch_server)
+        self.models.instances_requested.connect(lambda: self._go("instances"))
 
         # --- Hardware ---
         self.hardware = HardwareView(self.store, self)
@@ -268,11 +269,7 @@ class AppShell(QWidget):
         self.store.instance_state_updated.connect(lambda *_: self.hardware._update_lock_state())
         
         # Models connections
-        self.models.back_requested.connect(lambda: self._go("studio"))
         self.models.instances_requested.connect(lambda: self._go("instances"))
-        
-        controller.instances_refreshed.connect(lambda *_: self.models._update_lock_state())
-        self.store.instance_state_updated.connect(lambda *_: self.models._update_lock_state())
         
         # Landing view
         self._switch("instances")
@@ -1160,25 +1157,23 @@ class AppShell(QWidget):
     # --- Model operations ---
 
     def _load_model(self, path: str):
-        # We don't switch to a separate view anymore, just make sure we are on models view
         self._go("models")
-        # The models view should probably auto-expand this path
-        self.models._expanded_path = path
-        self.models._render(self.store.get_state(self.store.selected_instance_id).gguf if self.store.selected_instance_id else [])
 
-    def _delete_model(self, path: str):
-        iid = self.store.selected_instance_id
-        if iid: self._run_single_setup("delete_model", iid, path=path)
+    def _delete_model(self, path: str, iid: int | None = None):
+        target_iid = iid or self.store.selected_instance_id
+        if target_iid:
+            self._run_single_setup("delete_model", target_iid, path=path)
 
     # --- Server operations ---
 
-    def _launch_server(self, params: ServerParams):
-        iid = self.store.selected_instance_id
-        if not iid: return
-        st = self.store.get_state(iid)
+    def _launch_server(self, params: ServerParams, iid: int | None = None):
+        target_iid = iid or self.store.selected_instance_id
+        if not target_iid:
+            return
+        st = self.store.get_state(target_iid)
         binary = st.setup.llamacpp_path or ""
-        self.store.set_instance_busy(iid, "launch", True)
-        self.store.set_server_params(iid, params)
+        self.store.set_instance_busy(target_iid, "launch", True)
+        self.store.set_server_params(target_iid, params)
 
         inst = next((i for i in self._controller.last_instances if i.id == iid), None)
         if not inst:
