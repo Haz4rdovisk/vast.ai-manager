@@ -15,10 +15,12 @@ class ModelConfigForm(QWidget):
     """A compact configuration form for a single model."""
     save_requested = Signal(object)  # ServerParams
 
-    def __init__(self, model_path: str, store, initial_params: ServerParams = None, parent=None):
+    def __init__(self, model_path: str, store, initial_params: ServerParams = None,
+                 target_iid: int | None = None, parent=None):
         super().__init__(parent)
         self._path = model_path
         self._store = store
+        self._target_iid = target_iid
         self._params = initial_params or ServerParams(model_path=model_path)
 
         lay = QVBoxLayout(self)
@@ -190,9 +192,10 @@ class ModelConfigForm(QWidget):
 
     def _update_preview(self, *_):
         p = self.gather_params()
+        iid = self._target_iid or self._store.selected_instance_id
         st = (
-            self._store.get_state(self._store.selected_instance_id)
-            if self._store.selected_instance_id else None
+            self._store.get_state(iid)
+            if iid else None
         )
         binary = (
             (st.setup.llamacpp_path if st else "")
