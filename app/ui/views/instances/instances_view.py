@@ -570,11 +570,6 @@ class InstancesView(QWidget):
     def _with_sticky_scheduling(self, instances: list[Instance]) -> list[Instance]:
         before = set(self._start_requested_ids)
         before_at = dict(self._start_requested_at)
-        alive = {inst.id for inst in instances}
-        self._start_requested_ids &= alive
-        self._start_requested_at = {
-            iid: ts for iid, ts in self._start_requested_at.items() if iid in alive
-        }
         out: list[Instance] = []
         for inst in instances:
             if inst.id in self._start_requested_ids:
