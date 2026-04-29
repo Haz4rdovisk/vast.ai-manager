@@ -187,13 +187,13 @@ class _InstanceCard(QFrame):
         metric_row.addWidget(self._score_value)
         metric_text = QVBoxLayout()
         metric_text.setContentsMargins(0, 0, 0, 0)
-        metric_text.setSpacing(0)
+        metric_text.setSpacing(4)
         self._fit_pill = StatusPill("Calculating fit...", "muted")
-        self._action_hint = QLabel("Select action.")
-        self._action_hint.setWordWrap(True)
-        self._action_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 11px;")
+        self._status_detail = QLabel("Select action.")
+        self._status_detail.setWordWrap(True)
+        self._status_detail.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 11px;")
         metric_text.addWidget(self._fit_pill)
-        metric_text.addWidget(self._action_hint)
+        metric_text.addWidget(self._status_detail)
         metric_row.addLayout(metric_text, 1)
         self._root_lay.addLayout(metric_row)
 
@@ -312,20 +312,6 @@ class _InstanceCard(QFrame):
         act_lay.setContentsMargins(0, t.SPACE_2, 0, 0)
         act_lay.setSpacing(t.SPACE_2)
 
-        runtime_row = QHBoxLayout()
-        runtime_row.setContentsMargins(0, 0, 0, 0)
-        runtime_row.setSpacing(t.SPACE_2)
-        self._runtime_chip = QLabel("Setup required")
-        self._runtime_chip.setStyleSheet(
-            f"color: {t.ACCENT_SOFT}; background: rgba(124,92,255,0.10); border: 1px solid rgba(124,92,255,0.22);"
-            "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
-        )
-        self._runtime_detail = QLabel("Prepare runtime before deploy.")
-        self._runtime_detail.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 11px;")
-        runtime_row.addWidget(self._runtime_chip)
-        runtime_row.addWidget(self._runtime_detail, 1)
-        act_lay.addLayout(runtime_row)
-
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(t.SPACE_2)
@@ -442,6 +428,14 @@ class _InstanceCard(QFrame):
             self.setMinimumHeight(h)
         else: self.setMinimumHeight(120)
 
+    def _set_status_copy(self, fit_text: str | None, fit_level: str = "muted", detail: str = "") -> None:
+        if fit_text:
+            self._fit_pill.set_status(fit_text, fit_level)
+            self._fit_pill.show()
+        else:
+            self._fit_pill.hide()
+        self._status_detail.setText(detail)
+
     def populate_info(self, iid, state, selected_file, busy: bool, active_job, scorer, model_installed: bool = False):
         self._vram_badge.setText(f"{(state.system.gpu_vram_gb or 0):.0f} GB VRAM")
         self._gpu_lbl.setText(state.system.gpu_name or "Unknown GPU")
@@ -449,9 +443,7 @@ class _InstanceCard(QFrame):
         if selected_file is not None:
             if not selected_file.quantization:
                 self._score_value.setText("--")
-                self._fit_pill.set_status("Generic File", "muted")
-                self._fit_pill.show()
-                self._action_hint.setText("Standard download.")
+                self._set_status_copy("Generic File", "muted", "Standard download.")
             else:
                 size_gb = selected_file.size_bytes / (1024 ** 3) if selected_file.size_bytes else 0
                 entry = CatalogEntry(
@@ -465,21 +457,18 @@ class _InstanceCard(QFrame):
                 )
                 scored = scorer.score(entry, state.system)
                 self._score_value.setText(f"{scored.score:.0f}")
-                self._fit_pill.set_status(
-                    f"{_FIT_LABEL.get(scored.fit_level, 'Unknown Fit')}",
-                    _FIT_LEVEL.get(scored.fit_level, "info"),
-                )
+                fit_text = _FIT_LABEL.get(scored.fit_level, "Unknown Fit")
+                fit_level = _FIT_LEVEL.get(scored.fit_level, "info")
                 if model_installed:
-                    self._action_hint.setText("Already on instance.")
+                    detail = "Already installed."
                 elif state.setup.llamacpp_installed:
-                    self._action_hint.setText("Ready to install.")
+                    detail = "Ready to deploy."
                 else:
-                    self._action_hint.setText("Runtime required.")
-                self._fit_pill.show()
+                    detail = "Runtime required before deploy."
+                self._set_status_copy(fit_text, fit_level, detail)
         else:
             self._score_value.setText("--")
-            self._action_hint.setText("Pick quant.")
-            self._fit_pill.hide()
+            self._set_status_copy(None, detail="Pick quant.")
 
         if busy and active_job:
             status_text = f"Busy with {active_job.filename or active_job.stage}"
@@ -492,13 +481,7 @@ class _InstanceCard(QFrame):
             self._busy_lbl.hide()
             if not state.setup.probed:
                 self._score_value.setText("...")
-                self._action_hint.setText("Checking over SSH.")
-                self._runtime_chip.setText("Checking")
-                self._runtime_chip.setStyleSheet(
-                    f"color: {t.WARN}; background: rgba(244,183,64,0.10); border: 1px solid rgba(244,183,64,0.22);"
-                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
-                )
-                self._runtime_detail.setText("Inspecting remote runtime.")
+                self._set_status_copy("Checking", "warn", "Checking remote runtime.")
                 self._btn_setup.setText("Checking...")
                 self._btn_setup.setEnabled(False)
                 self._btn_setup.setVisible(True)
@@ -514,31 +497,9 @@ class _InstanceCard(QFrame):
             self._btn_setup.setEnabled(True)
             has_setup = state.setup.llamacpp_installed
 
-            if model_installed:
-                self._runtime_chip.setText("Installed")
-                self._runtime_chip.setStyleSheet(
-                    f"color: {t.INFO}; background: rgba(78,168,255,0.10); border: 1px solid rgba(78,168,255,0.22);"
-                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
-                )
-                self._runtime_detail.setText("Selected GGUF already present")
-            elif has_setup:
-                self._runtime_chip.setText("Ready")
-                self._runtime_chip.setStyleSheet(
-                    f"color: {t.OK}; background: rgba(59,212,136,0.10); border: 1px solid rgba(59,212,136,0.22);"
-                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
-                )
-                self._runtime_detail.setText("llama.cpp installed")
-            else:
-                self._runtime_chip.setText("Setup required")
-                self._runtime_chip.setStyleSheet(
-                    f"color: {t.ACCENT_SOFT}; background: rgba(124,92,255,0.10); border: 1px solid rgba(124,92,255,0.22);"
-                    "border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 800;"
-                )
-                self._runtime_detail.setText("Prepare runtime before deploy.")
-
             self._btn_setup.setVisible(not has_setup)
             self._btn_reset.setVisible(has_setup)
-                
+                 
             can_deploy = has_setup and selected_file is not None and not model_installed
             if self._btn_deploy.isEnabled() != can_deploy:
                 self._btn_deploy.setEnabled(can_deploy)
@@ -1122,18 +1083,26 @@ class InstallPanelSide(QWidget):
             contextual = self.registry.active_for(self._context_iid)
             if contextual is not None:
                 return contextual
+            pending = self._pending_jobs.get(self._context_iid)
+            if pending is not None:
+                return pending
         
         # 2. Or any instance busy with a job for THIS model OR environment setup
         if self.current_model:
             for _key, desc in self.registry.active_items():
                 if desc.repo_id == self.current_model.id or desc.repo_id == "Environment":
                     return desc
+            for pending in self._pending_jobs.values():
+                if pending.repo_id == self.current_model.id or pending.repo_id == "Environment":
+                    return pending
                     
         # 3. Fallback: Any active job at all (Global visibility)
         active = self.registry.active_values()
         if active:
             return active[0]
-            
+        if self._pending_jobs:
+            return next(iter(self._pending_jobs.values()))
+             
         return None
 
     def _on_stale_resume(self) -> None:

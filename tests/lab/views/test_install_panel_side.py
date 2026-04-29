@@ -29,6 +29,18 @@ def _model():
     )
 
 
+def _generic_model():
+    return HFModel(
+        id="a/b",
+        author="a",
+        name="b-gguf",
+        downloads=1,
+        likes=1,
+        tags=[],
+        files=[HFModelFile("raw-file.gguf", 4_000_000_000, None)],
+    )
+
+
 def _ready_store(store):
     store.set_instance(1)
     state = store.get_state(1)
@@ -221,5 +233,43 @@ def test_installed_selected_file_disables_deploy_cta(qt_app):
 
     assert card._btn_deploy.text() == "Installed"
     assert card._btn_deploy.isEnabled() is False
-    assert card._runtime_chip.text() == "Installed"
-    assert "Already on instance." in card._action_hint.text()
+    assert "Perfect Fit" in card._fit_pill.text()
+    assert card._status_detail.text() == "Already installed."
+
+
+def test_runtime_required_state_uses_single_compact_status(qt_app):
+    panel, store, _ = _panel()
+    store.set_instance(1)
+    state = store.get_state(1)
+    state.system = RemoteSystem(gpu_name="RTX 3090", gpu_vram_gb=24.0, has_gpu=True)
+    state.setup = SetupStatus(llamacpp_installed=False, probed=True)
+
+    panel.set_model(_model())
+    card = panel._instance_cards[1]
+
+    assert "Perfect Fit" in card._fit_pill.text()
+    assert card._status_detail.text() == "Runtime required before deploy."
+    assert card._btn_setup.isHidden() is False
+    assert card._btn_deploy.isEnabled() is False
+
+
+def test_ready_state_uses_compact_ready_copy(qt_app):
+    panel, store, _ = _panel()
+    _ready_store(store)
+    panel.set_model(_model())
+    card = panel._instance_cards[1]
+
+    assert "Perfect Fit" in card._fit_pill.text()
+    assert card._status_detail.text() == "Ready to deploy."
+    assert card._btn_deploy.isEnabled() is True
+
+
+def test_generic_file_uses_standard_download_copy(qt_app):
+    panel, store, _ = _panel()
+    _ready_store(store)
+    panel.set_model(_generic_model())
+    card = panel._instance_cards[1]
+
+    assert card._score_value.text() == "--"
+    assert "Generic File" in card._fit_pill.text()
+    assert card._status_detail.text() == "Standard download."
