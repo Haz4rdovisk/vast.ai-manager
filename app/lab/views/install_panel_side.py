@@ -276,7 +276,7 @@ class _InstanceCard(QFrame):
         button_row.setSpacing(t.SPACE_2)
         
         self._btn_setup = QPushButton("Prepare Runtime")
-        self._btn_setup.setProperty("role", "primary")
+
         self._btn_setup.setProperty("size", "sm")
         self._btn_setup.clicked.connect(lambda: self.setup_requested.emit(self.iid))
 

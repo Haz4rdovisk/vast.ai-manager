@@ -284,9 +284,7 @@ QPushButton[role="primary"] {{
     background: {ACCENT};
     color: #ffffff;
     font-weight: 700;
-    padding: 6px 14px;
     border: none;
-    border-radius: 6px;
 }}
 QPushButton[role="primary"]:hover {{
     background: {ACCENT_HI};
