@@ -160,11 +160,6 @@ class ConfigurePanel(GlassCard):
         self._picker_grid.addWidget(self._model_field, 0, 1)
         self._lay.addLayout(self._picker_grid)
 
-        self._launch_btn = QPushButton("Launch Server")
-        self._launch_btn.setMinimumHeight(44)
-        self._launch_btn.clicked.connect(self._on_launch)
-        self._lay.addWidget(self._launch_btn)
-
         section_lbl = QLabel("Model configuration")
         section_lbl.setProperty("role", "section")
         self._lay.addWidget(section_lbl)

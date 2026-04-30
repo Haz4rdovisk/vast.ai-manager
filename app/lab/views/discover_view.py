@@ -370,6 +370,8 @@ class DiscoverView(QWidget):
 
         self.content_widget = QWidget()
         self.content_widget.setObjectName("discover-workspace")
+
+
         self.content_widget.setStyleSheet(f"QWidget#discover-workspace {{ background: {t.BG_DEEP}; }}")
         content_lay = QVBoxLayout(self.content_widget)
         content_lay.setContentsMargins(0, 0, 0, 0)
@@ -378,7 +380,7 @@ class DiscoverView(QWidget):
         self.left_pane = QWidget()
         self.left_pane.setObjectName("discover-left-pane")
         left_lay = QVBoxLayout(self.left_pane)
-        left_lay.setContentsMargins(t.SPACE_4, 0, t.SPACE_4, 0)
+        left_lay.setContentsMargins(0, 0, t.SPACE_4, 0)
         left_lay.setSpacing(t.SPACE_4)
         left_lay.addWidget(self.topbar)
 

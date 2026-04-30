@@ -544,7 +544,7 @@ class ModelCard(QFrame):
             QFrame#ModelCard {{
                 background: {bg};
                 border: 1px solid {border};
-                border-radius: 14px;
+                border-radius: 8px;
             }}
             QFrame#ModelCard:hover {{
                 background: #141b28;

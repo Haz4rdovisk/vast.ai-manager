@@ -47,7 +47,7 @@ def _flat_panel_card() -> GlassCard:
         QFrame#SolidCard {
             background: #0d131c;
             border: 1px solid #1d2737;
-            border-radius: 16px;
+            border-radius: 8px;
         }
         QFrame#SolidCard:hover {
             background: #101722;
@@ -66,7 +66,7 @@ def _flat_inner_card() -> GlassCard:
         QFrame#SolidCard {
             background: rgba(255,255,255,0.025);
             border: 1px solid rgba(255,255,255,0.055);
-            border-radius: 14px;
+            border-radius: 8px;
         }
         """
     )
@@ -515,13 +515,13 @@ class InstallPanelSide(QWidget):
             QWidget#studio-settings QFrame#SolidCard {{
                 background: rgba(255,255,255,0.025);
                 border: 1px solid rgba(255,255,255,0.055);
-                border-radius: 14px;
+                border-radius: 8px;
             }}
             QFrame#stale-install-banner,
             QFrame#danger-strip {{
                 background: {t.SURFACE_1};
                 border: 1px solid {t.BORDER_LOW};
-                border-radius: 14px;
+                border-radius: 8px;
             }}
             QWidget#studio-settings QScrollArea,
             QWidget#studio-settings QScrollArea::viewport,
@@ -533,7 +533,7 @@ class InstallPanelSide(QWidget):
             QFrame#deploy-target {{
                 background: rgba(255,255,255,0.025);
                 border: 1px solid rgba(255,255,255,0.055);
-                border-radius: 14px;
+                border-radius: 8px;
             }}
             QComboBox {{
                 background: {t.SURFACE_3};
@@ -587,7 +587,7 @@ class InstallPanelSide(QWidget):
 
         header = QHBoxLayout()
         title = QLabel("Settings")
-        title.setProperty("role", "title")
+        title.setStyleSheet(f"color: {t.TEXT_HI}; font-size: 16px; font-weight: 700;")
         header.addWidget(title)
         header.addStretch()
         self._panel_state = StatusPill("Awaiting model", "muted")
