@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any
+import requests
 from app.models import Instance, InstanceState, UserInfo
 
 
@@ -405,8 +406,29 @@ class VastService:
                 raise VastAuthError(str(e)) from e
             raise VastNetworkError(str(e)) from e
 
+    def _show_user_direct(self) -> dict:
+        url = "https://console.vast.ai/api/v0/users/current/"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            msg = str(e).lower()
+            if "401" in msg or "unauthori" in msg or "forbidden" in msg:
+                raise VastAuthError(str(e)) from e
+            raise VastNetworkError(str(e)) from e
+        except requests.RequestException as e:
+            raise VastNetworkError(str(e)) from e
+        return response.json()
+
     def test_connection(self) -> UserInfo:
-        raw = self._call("show_user")
+        try:
+            raw = self._call("show_user")
+        except VastNetworkError as e:
+            msg = str(e).lower()
+            if "users/current" not in msg or "owner=me" not in msg:
+                raise
+            raw = self._show_user_direct()
         return parse_user_info(_normalize_response(raw))
 
     def list_instances(self, *, include_audit_targets: bool = False) -> list[Instance]:

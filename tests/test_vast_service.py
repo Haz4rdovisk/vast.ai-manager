@@ -1,5 +1,6 @@
 from app.services.vast_service import VastService, parse_instance, parse_user_info
 from app.models import InstanceState
+import requests
 
 
 def test_parse_instance_running():
@@ -213,6 +214,39 @@ def test_parse_user_info_missing_fields():
     u = parse_user_info({})
     assert u.balance == 0.0
     assert u.email is None
+
+
+def test_test_connection_falls_back_when_sdk_show_user_sends_rejected_owner_param(monkeypatch):
+    class BrokenSdk:
+        def show_user(self):
+            raise Exception("400 Client Error: Bad Request for url: https://console.vast.ai/api/v0/users/current/?owner=me&api_key=x")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"credit": 12.34, "email": "u@example.com", "api_key": "secret"}
+
+    captured = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    svc = VastService("key")
+    svc._sdk = BrokenSdk()
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    user = svc.test_connection()
+
+    assert user.balance == 12.34
+    assert user.email == "u@example.com"
+    assert captured["url"] == "https://console.vast.ai/api/v0/users/current/"
+    assert captured["headers"]["Authorization"] == "Bearer key"
+    assert captured["timeout"] == 20
 
 
 def test_fetch_financial_data_uses_sdk_billing_pages(monkeypatch):

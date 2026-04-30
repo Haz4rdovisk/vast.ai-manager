@@ -149,6 +149,7 @@ class AppShell(QWidget):
         self.models.rescan_requested.connect(self._manual_probe)
         self.models.navigate_requested.connect(self._go)
         self.models.launch_requested.connect(self._launch_server)
+        self.models.stop_requested.connect(self._stop_server)
         self.models.instances_requested.connect(lambda: self._go("instances"))
 
         # --- Hardware ---
@@ -498,7 +499,13 @@ class AppShell(QWidget):
 
     def _open_jobs_modal(self) -> None:
         from app.ui.views.instances.jobs_modal import JobsModal
-        self._jobs_modal = JobsModal(self.job_registry, anchor=self.instances.btn_jobs, parent=None)
+        self._jobs_modal = JobsModal(
+            self.job_registry,
+            store=self.store,
+            anchor=self.instances.btn_jobs,
+            parent=None,
+        )
+        self._jobs_modal.instances_requested.connect(lambda: self._go("instances"))
         self._jobs_modal.show()
 
     def _show_update_dialog(self, iid: int):
@@ -1175,7 +1182,7 @@ class AppShell(QWidget):
         self.store.set_instance_busy(target_iid, "launch", True)
         self.store.set_server_params(target_iid, params)
 
-        inst = next((i for i in self._controller.last_instances if i.id == iid), None)
+        inst = next((i for i in self._controller.last_instances if i.id == target_iid), None)
         if not inst:
             return
         from app.lab.services.model_params import build_launch_script
@@ -1195,15 +1202,15 @@ class AppShell(QWidget):
             # Instant launch trigger - wait for slots to be idle for absolute stability
             lowered = line.lower()
             if "all slots are idle" in lowered:
-                self._establish_studio_tunnel(iid)
+                self._establish_studio_tunnel(target_iid)
             elif "listening" in lowered and not "all slots are idle" in lowered:
                 # Log a subtle hint that we are waiting for the idle signal
                 pass 
 
         worker.line.connect(handle_line)
-        worker.finished.connect(lambda ok, out: self._on_launch_done(ok, out, iid))
+        worker.finished.connect(lambda ok, out: self._on_launch_done(ok, out, target_iid))
         worker.start()
-        self._setup_workers[iid] = worker
+        self._setup_workers[target_iid] = worker
 
     def _establish_studio_tunnel(self, iid: int):
         """Immediately establish the SSH tunnel and open the WebUI for a running server."""
@@ -1234,13 +1241,13 @@ class AppShell(QWidget):
                 self.studio.mark_launch_failed()
             self._controller.log_line.emit(f"#{iid} Launch failed.")
 
-    def _stop_server(self):
-        iid = self.store.selected_instance_id
-        if iid:
-            self.studio.clear_webui()
-            self._run_single_setup("stop_server", iid)
+    def _stop_server(self, iid: int | None = None):
+        target_iid = iid or self.store.selected_instance_id
+        if target_iid:
+            if target_iid == self.store.selected_instance_id:
+                self.studio.clear_webui()
+            self._run_single_setup("stop_server", target_iid)
         else:
-            self._run_single_setup("stop_server", iid)
             self.studio.clear_webui()
 
     def _restart_server(self):

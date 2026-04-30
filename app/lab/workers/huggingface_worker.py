@@ -16,6 +16,7 @@ class HFSearchWorker(QThread):
         limit: int = 100,
         pipeline_tag: str | None = None,
         cursor: str | None = None,
+        sort_by: str = "downloads",
         parent=None,
     ):
         super().__init__(parent)
@@ -23,6 +24,7 @@ class HFSearchWorker(QThread):
         self.limit = limit
         self.pipeline_tag = pipeline_tag
         self.cursor = cursor
+        self.sort_by = sort_by
         self.client = HuggingFaceClient()
 
     def run(self):
@@ -32,6 +34,7 @@ class HFSearchWorker(QThread):
                 limit=self.limit,
                 pipeline_tag=self.pipeline_tag,
                 cursor=self.cursor,
+                sort_by=self.sort_by,
             )
             self.finished.emit(models, next_cursor)
         except Exception as e:

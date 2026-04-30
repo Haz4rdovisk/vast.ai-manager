@@ -3,6 +3,15 @@ from __future__ import annotations
 from app.lab.state.models import ServerParams
 
 
+def _format_float(value: float) -> str:
+    return f"{value:.2f}"
+
+
+def _normalize_samplers(value: str) -> str:
+    parts = [part.strip() for part in value.replace(",", ";").split(";")]
+    return ";".join(part for part in parts if part)
+
+
 def build_launch_command(params: ServerParams, binary_path: str = "") -> str:
     """Generate the full llama-server command string."""
     binary = binary_path or "/opt/llama.cpp/build/bin/llama-server"
@@ -17,12 +26,46 @@ def build_launch_command(params: ServerParams, binary_path: str = "") -> str:
     if params.threads > 0:
         parts.append(f'-t {params.threads}')
 
+    if params.threads_batch > 0:
+        parts.append(f'-tb {params.threads_batch}')
+
     parts.append(f'-b {params.batch_size}')
+    parts.append(f'-ub {params.ubatch_size}')
     parts.append(f'-np {params.parallel_requests}')
-    parts.append(f'--repeat-penalty {params.repeat_penalty:.2f}')
+    parts.append(f'--temp {_format_float(params.temperature)}')
+    parts.append(f'--top-k {params.top_k}')
+    parts.append(f'--top-p {_format_float(params.top_p)}')
+    parts.append(f'--min-p {_format_float(params.min_p)}')
+    parts.append(f'--repeat-penalty {_format_float(params.repeat_penalty)}')
+    parts.append(f'--n-predict {params.max_tokens}')
 
     if params.flash_attention:
         parts.append('-fa on')
+
+    if not params.continuous_batching:
+        parts.append('--no-cont-batching')
+
+    if params.context_shift:
+        parts.append('--context-shift')
+
+    if params.mlock:
+        parts.append('--mlock')
+
+    if not params.mmap:
+        parts.append('--no-mmap')
+
+    parts.append(f'--dynatemp-range {_format_float(params.dynatemp_range)}')
+    parts.append(f'--dynatemp-exp {_format_float(params.dynatemp_exp)}')
+    parts.append(f'--xtc-probability {_format_float(params.xtc_probability)}')
+    parts.append(f'--xtc-threshold {_format_float(params.xtc_threshold)}')
+    parts.append(f'--typical-p {_format_float(params.typical_p)}')
+
+    normalized_samplers = _normalize_samplers(params.samplers)
+    if normalized_samplers:
+        parts.append(f'--samplers "{normalized_samplers}"')
+
+    if params.backend_sampling:
+        parts.append('--backend-sampling')
 
     if params.kv_cache_type:
         parts.append(f'-ctk {params.kv_cache_type} -ctv {params.kv_cache_type}')
@@ -75,6 +118,8 @@ def params_summary(p: ServerParams) -> str:
         f"ctx={p.context_length}",
         f"ngl={p.gpu_layers}",
         f"batch={p.batch_size}",
+        f"ubatch={p.ubatch_size}",
+        f"temp={_format_float(p.temperature)}",
     ]
     if p.threads > 0:
         parts.append(f"threads={p.threads}")

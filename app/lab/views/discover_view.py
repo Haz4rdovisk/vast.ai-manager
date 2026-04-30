@@ -8,13 +8,13 @@ import pathlib
 import re
 import webbrowser
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QRectF
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -79,8 +79,18 @@ _DEFAULT_DISCOVER_QUERY = ""
 class _SearchRequest:
     term: str
     category: str
+    sort_mode: str = "trending"
     cursor: str | None = None
     append: bool = False
+
+
+@dataclass(frozen=True)
+class _ModelScoreCacheEntry:
+    model_signature: tuple
+    scoring_context: tuple
+    sort_rank: float
+    display_score: float
+    labels: tuple[tuple[tuple[str, object], ...], ...]
 
 
 def apply_category_heuristic(category: str, models: list) -> list:
@@ -95,6 +105,47 @@ def apply_category_heuristic(category: str, models: list) -> list:
 def category_uses_client_heuristic(category: str) -> bool:
     cfg = CATEGORY_MAP.get(category, CATEGORY_MAP["All"])
     return bool(cfg.get("heuristic"))
+
+
+class _SearchSpinner(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(60)
+        self._timer.timeout.connect(self._advance)
+        self.setFixedSize(18, 18)
+        self.hide()
+
+    def start(self) -> None:
+        self.show()
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self.hide()
+
+    def _advance(self) -> None:
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        size = min(self.width(), self.height())
+        rect = QRectF(2, 2, size - 4, size - 4)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        track_pen = QPen(QColor(255, 255, 255, 36), 2.2)
+        track_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(track_pen)
+        painter.drawArc(rect, 0, 360 * 16)
+
+        accent_pen = QPen(QColor(t.ACCENT_HI), 2.4)
+        accent_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(accent_pen)
+        painter.drawArc(rect, (-self._angle) * 16, 110 * 16)
 
 
 class DiscoverView(QWidget):
@@ -210,7 +261,7 @@ class DiscoverView(QWidget):
         self._page_seen_ids: set[str] = set()
         self._connected_instance_ids: list[int] | None = None
         self._instance_render_signatures: dict[int, tuple] = {}
-        self._score_cache: dict[str, tuple[tuple, tuple, float, list[dict]]] = {}
+        self._score_cache: dict[str, _ModelScoreCacheEntry] = {}
         self._displayed_model_ids: tuple[str, ...] = ()
         self._visible_model_count = 0
         self._detail_session_id = 0
@@ -290,9 +341,9 @@ class DiscoverView(QWidget):
         center_sect_lay.addWidget(self.size_filter)
 
         self.sort_combo = QComboBox()
-        self.sort_combo.addItems(["Downloads", "Best Fit"])
+        self.sort_combo.addItems(["Trending", "Downloads", "Best Fit"])
         self.sort_combo.setFixedWidth(110)
-        self.sort_combo.currentIndexChanged.connect(self._render)
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         center_sect_lay.addWidget(self.sort_combo)
 
         self.search_btn = QPushButton("Search")
@@ -300,6 +351,9 @@ class DiscoverView(QWidget):
         self.search_btn.setProperty("size", "sm")
         self.search_btn.clicked.connect(lambda: self._search())
         center_sect_lay.addWidget(self.search_btn)
+
+        self.search_spinner = _SearchSpinner()
+        center_sect_lay.addWidget(self.search_spinner, 0, Qt.AlignVCenter)
         
         top_lay.addWidget(center_sect, 0, Qt.AlignLeft)
         top_lay.addStretch(1)
@@ -327,12 +381,6 @@ class DiscoverView(QWidget):
         left_lay.setContentsMargins(t.SPACE_4, 0, t.SPACE_4, 0)
         left_lay.setSpacing(t.SPACE_4)
         left_lay.addWidget(self.topbar)
-
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setVisible(False)
-        self.progress.setFixedHeight(4)
-        left_lay.addWidget(self.progress)
 
         self.status_lbl = QLabel("Searching starts automatically after an SSH connection is active.")
         self.status_lbl.setProperty("role", "muted")
@@ -466,7 +514,7 @@ class DiscoverView(QWidget):
 
         if self.worker and self.worker.isRunning():
             self._queued_request = request
-            self.progress.setVisible(True)
+            self._set_search_loading(True)
             self.load_more_btn.setEnabled(False)
             self.status_lbl.setText("Updating search...")
             self._refresh_summary(search_text=request.term or "Top GGUF", searching=True)
@@ -478,10 +526,34 @@ class DiscoverView(QWidget):
         if append and self._active_request is not None:
             term = self._active_request.term
             category = self._active_request.category
+            sort_mode = self._active_request.sort_mode
         else:
             term = query if isinstance(query, str) and query else self.search_input.text().strip()
             category = self.filter.currentText()
-        return _SearchRequest(term=term, category=category, cursor=self._next_cursor if append else None, append=append)
+            sort_mode = self._current_sort_mode()
+        return _SearchRequest(
+            term=term,
+            category=category,
+            sort_mode=sort_mode,
+            cursor=self._next_cursor if append else None,
+            append=append,
+        )
+
+    def _current_sort_mode(self) -> str:
+        return {
+            0: "trending",
+            1: "downloads",
+            2: "best_fit",
+        }.get(self.sort_combo.currentIndex(), "trending")
+
+    def _hf_sort_key(self, sort_mode: str) -> str:
+        return "trendingScore" if sort_mode == "trending" else "downloads"
+
+    def _on_sort_changed(self, _index: int) -> None:
+        if self._current_sort_mode() == "best_fit":
+            self._render()
+            return
+        self._search()
 
     def _launch_search(self, request: _SearchRequest, *, reset_buffer: bool) -> None:
         cfg = CATEGORY_MAP.get(request.category, CATEGORY_MAP["All"])
@@ -492,12 +564,16 @@ class DiscoverView(QWidget):
             self._page_buffer = []
             self._page_seen_ids = {model.id for model in self.current_models} if request.append else set()
             if not request.append:
+                for model in self.current_models:
+                    model.details_loading = False
                 self._detail_session_id += 1
                 self._detail_queue = []
+                self._is_fetching_details = False
+                self._detail_worker = None
         self._search_generation += 1
         generation = self._search_generation
 
-        self.progress.setVisible(True)
+        self._set_search_loading(True)
         self.load_more_btn.setEnabled(False)
         self.status_lbl.setText(
             "Loading more..." if request.append else self._search_status_text(request.term)
@@ -509,6 +585,7 @@ class DiscoverView(QWidget):
             limit=_SEARCH_PAGE_SIZE,
             pipeline_tag=cfg["pipeline"],
             cursor=request.cursor,
+            sort_by=self._hf_sort_key(request.sort_mode),
             parent=self,
         )
         self.worker.finished.connect(
@@ -582,6 +659,7 @@ class DiscoverView(QWidget):
             request = _SearchRequest(
                 term=self.search_input.text().strip(),
                 category=legacy_category,
+                sort_mode=self._current_sort_mode(),
                 cursor=None,
                 append=self._append_mode,
             )
@@ -619,7 +697,7 @@ class DiscoverView(QWidget):
             self._publish_search_results(request, filtered_batch, next_cursor, partial=bool(next_cursor))
 
         if self._queued_request is not None and self._queued_request != request:
-            self.progress.setVisible(False)
+            self._set_search_loading(False)
             self.load_more_btn.setEnabled(True)
             self._run_queued_search_if_any()
             return
@@ -628,6 +706,7 @@ class DiscoverView(QWidget):
             next_request = _SearchRequest(
                 term=request.term,
                 category=request.category,
+                sort_mode=request.sort_mode,
                 cursor=next_cursor,
                 append=request.append,
             )
@@ -637,7 +716,7 @@ class DiscoverView(QWidget):
             self._launch_search(next_request, reset_buffer=False)
             return
 
-        self.progress.setVisible(False)
+        self._set_search_loading(False)
         self.load_more_btn.setEnabled(True)
         self._publish_search_results(request, filtered_batch, next_cursor, partial=False)
         self._run_queued_search_if_any()
@@ -647,7 +726,7 @@ class DiscoverView(QWidget):
             return
 
         self.worker = None
-        self.progress.setVisible(False)
+        self._set_search_loading(False)
         self.load_more_btn.setEnabled(bool(self._next_cursor))
         self.status_lbl.setText(f"Search failed: {error}")
         self._refresh_summary()
@@ -718,6 +797,7 @@ class DiscoverView(QWidget):
             for iid in instance_ids
         )
         model_scores: dict[str, float] = {}
+        model_sort_ranks: dict[str, float] = {}
         score_labels: dict[str, list[dict] | None] = {}
         detail_messages: dict[str, str] = {}
         # Quality weights for ranking (higher is better intelligence/quality)
@@ -742,17 +822,16 @@ class DiscoverView(QWidget):
                 score_labels[model.id] = None
                 continue
 
-            model_signature = (
-                round(model.params_b, 3),
-                tuple((item.filename, item.size_bytes, item.quantization) for item in model.files),
-            )
+            model_signature = self._model_signature(model)
             cached = self._score_cache.get(model.id)
-            if cached and cached[0] == model_signature and cached[1] == scoring_context:
-                model_scores[model.id] = cached[2]
-                score_labels[model.id] = list(cached[3])
+            if cached and cached.model_signature == model_signature and cached.scoring_context == scoring_context:
+                model_scores[model.id] = cached.display_score
+                model_sort_ranks[model.id] = cached.sort_rank
+                score_labels[model.id] = self._thaw_cached_labels(cached.labels)
                 continue
 
             max_score = 0.0
+            max_rank = 0.0
             labels: list[dict] = []
             
             for iid in instance_ids:
@@ -815,19 +894,41 @@ class DiscoverView(QWidget):
                 if best_file_match:
                     labels.append(best_file_match)
                     max_score = max(max_score, best_file_match["score"])
+                    max_rank = max(max_rank, best_file_match["rank"])
 
             model_scores[model.id] = max_score
+            model_sort_ranks[model.id] = max_rank
             score_labels[model.id] = labels
-            self._score_cache[model.id] = (model_signature, scoring_context, max_score, list(labels))
+            self._score_cache[model.id] = _ModelScoreCacheEntry(
+                model_signature=model_signature,
+                scoring_context=scoring_context,
+                sort_rank=max_rank,
+                display_score=max_score,
+                labels=self._freeze_cached_labels(labels),
+            )
 
         display_models = list(self.current_models)
         size_idx = self.size_filter.currentIndex()
         if size_idx > 0:
             display_models = [model for model in display_models if self._matches_size(model, size_idx)]
-        if self.sort_combo.currentIndex() == 1:
-            display_models.sort(key=lambda model: model_scores.get(model.id, 0), reverse=True)
-        else:
-            display_models.sort(key=lambda model: model.downloads, reverse=True)
+        if self._current_sort_mode() == "best_fit":
+            display_models.sort(
+                key=lambda model: (
+                    -model_sort_ranks.get(model.id, 0.0),
+                    -model_scores.get(model.id, 0.0),
+                    -model.downloads,
+                    -model.likes,
+                    model.name.lower(),
+                )
+            )
+        elif self._current_sort_mode() == "downloads":
+            display_models.sort(
+                key=lambda model: (
+                    -model.downloads,
+                    -model.likes,
+                    model.name.lower(),
+                )
+            )
 
         self._visible_model_count = len(display_models)
         self._adopt_default_selection(display_models)
@@ -931,6 +1032,7 @@ class DiscoverView(QWidget):
     def _on_bg_detail_finished(self, session_id: int, model_id: str, model: HFModel, files: list[HFModelFile]) -> None:
         self._detail_worker = None
         if session_id != self._detail_session_id:
+            model.details_loading = False
             self._is_fetching_details = False
             self._start_detail_fetch()
             return
@@ -947,6 +1049,7 @@ class DiscoverView(QWidget):
     def _on_bg_detail_error(self, session_id: int, model_id: str, model: HFModel, message: str) -> None:
         self._detail_worker = None
         if session_id != self._detail_session_id:
+            model.details_loading = False
             self._is_fetching_details = False
             self._start_detail_fetch()
             return
@@ -959,6 +1062,35 @@ class DiscoverView(QWidget):
     def _schedule_render(self) -> None:
         if not self._render_timer.isActive():
             self._render_timer.start()
+
+    def _set_search_loading(self, loading: bool) -> None:
+        if loading:
+            self.search_spinner.start()
+        else:
+            self.search_spinner.stop()
+
+    @staticmethod
+    def _freeze_cached_labels(labels: list[dict]) -> tuple[tuple[tuple[str, object], ...], ...]:
+        return tuple(
+            tuple(sorted(item.items()))
+            for item in labels
+        )
+
+    @staticmethod
+    def _thaw_cached_labels(labels: tuple[tuple[tuple[str, object], ...], ...]) -> list[dict]:
+        return [dict(item) for item in labels]
+
+    @staticmethod
+    def _model_signature(model: HFModel) -> tuple:
+        return (
+            round(model.params_b, 3),
+            tuple(
+                sorted(
+                    (item.filename, item.size_bytes, item.quantization)
+                    for item in model.files
+                )
+            ),
+        )
 
     def _get_best_fallback_quant(self, system, params_b: float) -> str:
         """Pick the best likely quantization that fits the given hardware as a fallback."""
@@ -1086,13 +1218,12 @@ class DiscoverView(QWidget):
         )
         active_ops = len(list(self.registry.active_items()))
         visible_models = model_count if model_count is not None else self._current_visible_model_count()
-        selected = self.side_panel.current_model.name if self.side_panel.current_model else "No model selected"
 
         if searching:
             self.status_lbl.setText(f"Searching {search_text}...")
         elif visible_models:
             noun = "model" if visible_models == 1 else "models"
-            self.status_lbl.setText(f"{visible_models} {noun} loaded · Focus: {selected}")
+            self.status_lbl.setText(f"{visible_models} {noun} loaded")
         else:
             self.status_lbl.setText("Search. Fit. Deploy.")
 

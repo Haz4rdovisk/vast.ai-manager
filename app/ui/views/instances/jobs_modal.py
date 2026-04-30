@@ -1,14 +1,16 @@
 from __future__ import annotations
 import time
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QPushButton, QSizePolicy, QStackedWidget
 )
 
 from app import theme as t
+from app.lab.state.store import LabStore
 from app.ui.components.primitives import GlassCard, IconButton, SkeletonBlock
 from app.ui.components import icons
+from app.ui.components.lock_screen import LockScreen
 from app.lab.services.job_registry import JobRegistry
 
 
@@ -42,9 +44,12 @@ class JobProgressBar(QWidget):
 
 class JobsModal(QWidget):
     """A minimal floating modal showing all background jobs."""
-    def __init__(self, registry: JobRegistry, anchor=None, parent=None):
+    instances_requested = Signal()
+
+    def __init__(self, registry: JobRegistry, store: LabStore | None = None, anchor=None, parent=None):
         super().__init__(parent)
         self.registry = registry
+        self.store = store
         self.anchor = anchor
         self.setWindowTitle("Global Active Jobs")
         self.resize(500, 450)
@@ -62,6 +67,7 @@ class JobsModal(QWidget):
         # Render initial skeleton state
         for _ in range(3):
             self._add_skeleton_card()
+        self._update_lock_state()
 
         # Simulate brief loading delay to let the UI feel premium
         QTimer.singleShot(500, self._finish_loading)
@@ -70,6 +76,12 @@ class JobsModal(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(1000)
+
+        if self.store is not None:
+            self.store.instance_state_updated.connect(lambda *_: self._refresh())
+        self.registry.job_started.connect(lambda *_: self._refresh())
+        self.registry.job_updated.connect(lambda *_: self._refresh())
+        self.registry.job_finished.connect(lambda *_: self._refresh())
 
         # Wire close shortcut
         self.close_btn.clicked.connect(self.close)
@@ -127,23 +139,57 @@ class JobsModal(QWidget):
         header.addWidget(self.close_btn)
         lay.addLayout(header)
 
+        self.layout_stack = QStackedWidget()
+        lay.addWidget(self.layout_stack, 1)
+
+        self.lock_screen = LockScreen(
+            title="Global Operations Locked",
+            message="This panel only updates while at least one instance has an active SSH-backed session or there is a job still running."
+        )
+        self.lock_screen.instances_requested.connect(self.instances_requested.emit)
+        self.layout_stack.addWidget(self.lock_screen)
+
+        self.content_widget = QWidget()
+        content_lay = QVBoxLayout(self.content_widget)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(0)
+
         # Scrollable area
         scroll = QScrollArea()
+        self.scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
+
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         self.cards_layout = QVBoxLayout(container)
         self.cards_layout.setContentsMargins(0, 0, 14, 0)
         self.cards_layout.setSpacing(10)
         self.cards_layout.addStretch()
-        
         scroll.setWidget(container)
-        lay.addWidget(scroll)
+        content_lay.addWidget(scroll)
+        self.layout_stack.addWidget(self.content_widget)
 
         root.addWidget(main_bg)
+
+    def _has_probed_connection(self) -> bool:
+        if self.store is None:
+            return True
+        for iid in self.store.all_instance_ids():
+            state = self.store.get_state(iid)
+            if state and state.setup.probed:
+                return True
+        return False
+
+    def _update_lock_state(self) -> None:
+        if not hasattr(self, "layout_stack"):
+            return
+        has_active_jobs = bool(self.registry.active_values())
+        has_probed_connection = self._has_probed_connection()
+        target = self.content_widget if (has_probed_connection or has_active_jobs) else self.lock_screen
+        if self.layout_stack.currentWidget() is not target:
+            self.layout_stack.setCurrentWidget(target)
 
     def _refresh(self):
         if not self.isVisible() or not self.cards_layout:
@@ -151,6 +197,8 @@ class JobsModal(QWidget):
             
         if getattr(self, "_is_loading", False):
             return
+
+        self._update_lock_state()
 
         # Clear existing
         while self.cards_layout.count() > 1:
@@ -181,13 +229,14 @@ class JobsModal(QWidget):
 
         top = QHBoxLayout()
         name = QLabel(f"{desc.filename}")
+        name.setWordWrap(True)
+        name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         name.setStyleSheet(f"color: {t.TEXT_HI}; font-weight: 800;")
-        top.addWidget(name)
-        top.addStretch()
+        top.addWidget(name, 1)
         
         iid_lbl = QLabel(f"#{desc.iid}")
         iid_lbl.setStyleSheet(f"color: {t.TEXT_MID}; font-family: {t.FONT_MONO};")
-        top.addWidget(iid_lbl)
+        top.addWidget(iid_lbl, 0, Qt.AlignmentFlag.AlignTop)
         body.addLayout(top)
 
         bottom = QHBoxLayout()

@@ -7,7 +7,7 @@ from app.lab.services.huggingface import HFModel, HFModelFile
 from app.lab.services.job_registry import JobRegistry
 from app.lab.state.models import JobDescriptor, RemoteGGUF, RemoteSystem, SetupStatus
 from app.lab.state.store import LabStore
-from app.lab.views.install_panel_side import InstallPanelSide, _remote_has_selected_file
+from app.lab.views.install_panel_side import InstallPanelSide, _compact_count, _remote_has_selected_file
 
 
 def _panel():
@@ -41,6 +41,35 @@ def _generic_model():
     )
 
 
+def _many_file_model():
+    quants = [
+        ("F16", 900_000_000),
+        ("BF16", 910_000_000),
+        ("F32", 1_800_000_000),
+        ("IQ2_M", 2_100_000_000),
+        ("IQ3_XXS", 2_200_000_000),
+        ("Q2_K_XL", 2_200_000_001),
+        ("Q3_K_S", 2_300_000_000),
+        ("Q3_K_M", 2_400_000_000),
+        ("Q3_K_XL", 2_700_000_000),
+        ("IQ4_XS", 2_800_000_000),
+        ("Q4_0", 3_000_000_000),
+        ("Q4_K_S", 3_100_000_000),
+        ("Q4_K_M", 3_200_000_000),
+        ("Q5_K_S", 3_500_000_000),
+        ("Q6_K", 4_200_000_000),
+    ]
+    return HFModel(
+        id="a/b",
+        author="a",
+        name="b-gguf",
+        downloads=1,
+        likes=1,
+        tags=[],
+        files=[HFModelFile(f"b-{quant}.gguf", size, quant) for quant, size in quants],
+    )
+
+
 def _ready_store(store):
     store.set_instance(1)
     state = store.get_state(1)
@@ -61,6 +90,33 @@ def test_set_model_switches_to_ready_mode(qt_app):
     assert panel._quant_combo.count() == 1
 
 
+def test_compact_count_rounds_thousands_to_integer_k():
+    assert _compact_count(650_100) == "650K"
+    assert _compact_count(1_200) == "1K"
+    assert _compact_count(1_250_000) == "1.2M"
+
+
+def test_refresh_does_not_reset_quant_popup_scroll_when_options_unchanged(qt_app):
+    panel, store, _ = _panel()
+    _ready_store(store)
+    panel.set_model(_many_file_model())
+    panel.show()
+    qt_app.processEvents()
+
+    combo = panel._quant_combo
+    combo.setCurrentIndex(8)
+    before_text = combo.currentText()
+    removed_spy = QSignalSpy(combo.model().rowsRemoved)
+    inserted_spy = QSignalSpy(combo.model().rowsInserted)
+
+    panel._refresh()
+    qt_app.processEvents()
+
+    assert removed_spy.count() == 0
+    assert inserted_spy.count() == 0
+    assert combo.currentText() == before_text
+
+
 def test_ready_mode_renders_instance_card_and_confirm_emits(qt_app):
     panel, store, _ = _panel()
     _ready_store(store)
@@ -72,6 +128,35 @@ def test_ready_mode_renders_instance_card_and_confirm_emits(qt_app):
     panel._instance_cards[1]._btn_confirm.click()
     assert spy.count() == 1
     assert spy.at(0) == [1, "a/b", "b-Q4_K_M.gguf"]
+
+
+def test_confirm_back_button_is_ghost_and_matches_primary_width(qt_app):
+    panel, store, _ = _panel()
+    _ready_store(store)
+    panel.set_model(_model())
+    panel.show()
+    panel.show_confirm_overlay(1, mode="setup")
+    qt_app.processEvents()
+
+    card = panel._instance_cards[1]
+
+    assert card._btn_cancel.property("variant") == "ghost"
+    assert card._btn_cancel.height() == card._btn_confirm.height()
+    assert card._btn_confirm.width() > card._btn_cancel.width()
+
+
+def test_confirm_summary_does_not_repeat_gpu_header_details(qt_app):
+    panel, store, _ = _panel()
+    _ready_store(store)
+    panel.set_model(_model())
+
+    panel.show_confirm_overlay(1, mode="setup")
+    summary = panel._instance_cards[1]._summary_lbl.text()
+
+    assert "GPU:" not in summary
+    assert "RTX 3090" not in summary
+    assert "24.0 GB" not in summary
+    assert "• deps" in summary
 
 
 def test_busy_mode_reflects_registry_updates_and_cancel(qt_app):
@@ -264,6 +349,21 @@ def test_ready_state_uses_compact_ready_copy(qt_app):
     assert card._btn_deploy.isEnabled() is True
 
 
+def test_rebuild_button_keeps_balanced_width_next_to_deploy(qt_app):
+    panel, store, _ = _panel()
+    _ready_store(store)
+    panel.set_model(_model())
+    panel.show()
+    qt_app.processEvents()
+
+    card = panel._instance_cards[1]
+
+    assert card._btn_setup.isHidden() is True
+    assert card._btn_reset.isHidden() is False
+    assert card._btn_reset.height() == card._btn_deploy.height()
+    assert abs(card._btn_reset.width() - card._btn_deploy.width()) <= 4
+
+
 def test_generic_file_uses_standard_download_copy(qt_app):
     panel, store, _ = _panel()
     _ready_store(store)
@@ -273,3 +373,18 @@ def test_generic_file_uses_standard_download_copy(qt_app):
     assert card._score_value.text() == "--"
     assert "Generic File" in card._fit_pill.text()
     assert card._status_detail.text() == "Standard download."
+
+
+def test_connected_targets_placeholder_is_removed_when_instance_appears(qt_app):
+    panel, store, _ = _panel()
+    panel.set_connected_instance_ids([])
+    panel.set_model(_model())
+
+    assert panel._empty_targets_label is not None
+    assert panel._empty_targets_label.text() == "No connected targets."
+
+    _ready_store(store)
+    panel.set_connected_instance_ids([1])
+
+    assert panel._empty_targets_label is None
+    assert 1 in panel._instance_cards

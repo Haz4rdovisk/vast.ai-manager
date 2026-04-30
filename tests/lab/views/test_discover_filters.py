@@ -73,7 +73,7 @@ def test_discover_prefetches_more_pages_for_underfilled_heuristic_category(qt_ap
     )
     view = DiscoverView(store)
 
-    request = _SearchRequest(term="", category="Coding")
+    request = _SearchRequest(term="", category="Coding", sort_mode="trending")
     view._active_request = request
     view._search_generation = 1
     view._page_seen_ids = set()
@@ -92,7 +92,7 @@ def test_discover_prefetches_more_pages_for_underfilled_heuristic_category(qt_ap
 
     view._on_search_finished(1, request, models, "NEXTCURSOR")
 
-    assert launches == [(_SearchRequest(term="", category="Coding", cursor="NEXTCURSOR", append=False), False)]
+    assert launches == [(_SearchRequest(term="", category="Coding", sort_mode="trending", cursor="NEXTCURSOR", append=False), False)]
     assert len(view.current_models) == 8
 
 
@@ -201,7 +201,7 @@ def test_discover_summary_uses_visible_count_not_total_count(qt_app):
     view._render()
     view._refresh_summary()
 
-    assert view.status_lbl.text() == "1 model loaded · Focus: visible-model-3B-GGUF"
+    assert view.status_lbl.text() == "1 model loaded"
     assert "1 visible" in view._format_result_status(total_count=2, visible_count=1, partial=False)
 
 
@@ -213,12 +213,19 @@ def test_discover_queues_latest_request_while_previous_search_is_running(qt_app)
     store = LabStore()
     view = DiscoverView(store)
     view.worker = _RunningWorker()
-    view._active_request = _SearchRequest(term="llama", category="All")
+    view._active_request = _SearchRequest(term="llama", category="All", sort_mode="trending")
     view.search_input.setText("qwen")
 
     view._search()
 
-    assert view._queued_request == _SearchRequest(term="qwen", category="All", cursor=None, append=False)
+    assert view._queued_request == _SearchRequest(term="qwen", category="All", sort_mode="trending", cursor=None, append=False)
+
+
+def test_discover_uses_trending_as_default_sort(qt_app):
+    view = DiscoverView(LabStore())
+
+    assert view.sort_combo.currentText() == "Trending"
+    assert view._current_sort_mode() == "trending"
 
 
 def test_discover_ignores_stale_detail_worker_result(qt_app):

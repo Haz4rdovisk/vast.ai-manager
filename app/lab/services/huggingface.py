@@ -1,12 +1,17 @@
 """Hugging Face API client for searching and fetching GGUF models."""
 from __future__ import annotations
 
+import json
 import re
+import time
 from urllib.parse import unquote
 
 import requests
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from app.services.sqlite_store import DEFAULT_DB_PATH, SQLiteStore
 
 @dataclass
 class HFModelFile:
@@ -83,12 +88,22 @@ class HFModel:
 class HuggingFaceClient:
     BASE_URL = "https://huggingface.co/api"
 
+    def __init__(
+        self,
+        *,
+        cache_db_path: Path | str = DEFAULT_DB_PATH,
+        cache_ttl_seconds: int = 24 * 60 * 60,
+    ):
+        self.cache_ttl_seconds = max(1, int(cache_ttl_seconds))
+        self._sqlite = SQLiteStore(cache_db_path)
+
     def search_gguf_models(
         self,
         query: str = "",
         limit: int = 100,
         pipeline_tag: str | None = None,
         cursor: str | None = None,
+        sort_by: str = "downloads",
         full: bool = True,
         raise_on_error: bool = False,
     ) -> tuple[list[HFModel], str | None]:
@@ -102,7 +117,7 @@ class HuggingFaceClient:
         params: dict[str, Any] = {
             "search": query,
             "filter": "gguf",
-            "sort": "downloads",
+            "sort": sort_by,
             "direction": "-1",
             "limit": limit,
             "full": "true" if full else "false", # Get full model info including siblings (files)
@@ -160,6 +175,10 @@ class HuggingFaceClient:
 
     def get_model_files(self, model_id: str) -> list[HFModelFile]:
         """Get GGUF files and sizes by walking the repo tree recursively."""
+        cached = self._load_cached_files(model_id)
+        if cached is not None and self._cache_is_fresh(cached["fetched_at"]):
+            return cached["files"]
+
         try:
             pending_dirs = [""]
             seen_dirs: set[str] = set()
@@ -198,10 +217,54 @@ class HuggingFaceClient:
                         size_bytes=size,
                         quantization=quant
                     ))
+            if files:
+                self._store_cached_files(model_id, files)
             return files
         except Exception as e:
             print(f"Error fetching tree for {model_id}: {e}")
+            if cached is not None:
+                return cached["files"]
             return []
+
+    def _cache_is_fresh(self, fetched_at: float) -> bool:
+        return (time.time() - float(fetched_at)) < self.cache_ttl_seconds
+
+    def _load_cached_files(self, model_id: str) -> dict[str, Any] | None:
+        row = self._sqlite.get_hf_model_cache_entry(model_id)
+        if not row:
+            return None
+        try:
+            payload = json.loads(row["files_json"])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        files = [
+            HFModelFile(
+                filename=str(item.get("filename", "")),
+                size_bytes=int(item.get("size_bytes", 0) or 0),
+                quantization=str(item.get("quantization", "")),
+            )
+            for item in payload
+            if isinstance(item, dict)
+        ]
+        return {
+            "files": files,
+            "fetched_at": float(row.get("fetched_at") or 0.0),
+        }
+
+    def _store_cached_files(self, model_id: str, files: list[HFModelFile]) -> None:
+        payload = [
+            {
+                "filename": item.filename,
+                "size_bytes": item.size_bytes,
+                "quantization": item.quantization,
+            }
+            for item in files
+        ]
+        self._sqlite.upsert_hf_model_cache_entry(
+            model_id,
+            json.dumps(payload, separators=(",", ":")),
+            time.time(),
+        )
 
 
 def _parse_next_cursor(link_header: str | None) -> str | None:

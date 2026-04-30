@@ -14,6 +14,7 @@ def test_worker_forwards_pipeline_tag_and_cursor(qt_app):
             limit=100,
             pipeline_tag="text-generation",
             cursor="PREV",
+            sort_by="trendingScore",
         )
         spy = QSignalSpy(worker.finished)
         worker.run()
@@ -22,6 +23,7 @@ def test_worker_forwards_pipeline_tag_and_cursor(qt_app):
             limit=100,
             pipeline_tag="text-generation",
             cursor="PREV",
+            sort_by="trendingScore",
         )
         assert spy.count() == 1
         assert spy.at(0)[0] == []

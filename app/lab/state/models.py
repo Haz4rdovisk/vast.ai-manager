@@ -114,12 +114,30 @@ class ServerParams:
     context_length: int = 4096
     gpu_layers: int = 99
     threads: int = 0               # 0 = auto
+    threads_batch: int = 0         # 0 = auto / same as threads
     batch_size: int = 512
+    ubatch_size: int = 512
     parallel_requests: int = 1
+    temperature: float = 0.80
+    dynatemp_range: float = 0.00
+    dynatemp_exp: float = 1.00
+    top_k: int = 40
+    top_p: float = 0.95
+    min_p: float = 0.05
+    xtc_probability: float = 0.00
+    xtc_threshold: float = 0.10
+    typical_p: float = 1.00
+    max_tokens: int = -1
+    samplers: str = "penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature"
+    backend_sampling: bool = False
     repeat_penalty: float = 1.10
     host: str = "127.0.0.1"
     port: int = 11434
     flash_attention: bool = True
+    continuous_batching: bool = True
+    context_shift: bool = False
+    mlock: bool = False
+    mmap: bool = True
     kv_cache_type: str = "bf16"    # bf16|f16|q8_0|q4_0
     extra_args: str = ""
     no_warmup: bool = True

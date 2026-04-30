@@ -4,7 +4,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from PySide6.QtCore import QEvent, Qt, Signal, QTimer
-from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -80,8 +79,7 @@ def _compact_count(value: int) -> str:
         text = f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".")
         return f"{text}M"
     if abs_value >= 1_000:
-        text = f"{value / 1_000:.1f}".rstrip("0").rstrip(".")
-        return f"{text}K"
+        return f"{round(value / 1_000):.0f}K"
     return str(value)
 
 
@@ -99,48 +97,6 @@ def _remote_has_selected_file(state, selected_file: HFModelFile | None) -> bool:
         if path.strip().lower().endswith(f"/{wanted}") or path.strip().lower().endswith(f"\\{wanted}"):
             return True
     return False
-
-
-class _HeroInfoTag(QFrame):
-    def __init__(self, emoji: str, parent=None):
-        super().__init__(parent)
-        self.setObjectName("deploy-info-tag")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self._full_text = ""
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(7)
-        lay.setAlignment(Qt.AlignVCenter)
-
-        self._emoji = QLabel(emoji)
-        self._emoji.setObjectName("deploy-info-tag-emoji")
-        self._emoji.setAlignment(Qt.AlignCenter)
-        self._emoji.setFixedWidth(16)
-        lay.addWidget(self._emoji, 0, Qt.AlignVCenter)
-
-        self._text = QLabel("")
-        self._text.setObjectName("deploy-info-tag-text")
-        self._text.setWordWrap(False)
-        self._text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self._text.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        lay.addWidget(self._text, 1)
-
-    def set_text(self, text: str, tooltip: str | None = None) -> None:
-        self._full_text = text
-        tip = tooltip or text
-        self.setToolTip(tip)
-        self._text.setToolTip(tip)
-        self._refresh_text()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._refresh_text()
-
-    def _refresh_text(self) -> None:
-        metrics = QFontMetrics(self._text.font())
-        available = max(10, self._text.width() - 2)
-        self._text.setText(metrics.elidedText(self._full_text, Qt.ElideRight, available))
 
 
 class _InstanceCard(QFrame):
@@ -287,13 +243,16 @@ class _InstanceCard(QFrame):
         conf_btns = QHBoxLayout()
         conf_btns.setSpacing(t.SPACE_2)
         self._btn_cancel = QPushButton("Back")
-        self._btn_cancel.setFixedWidth(110)
+        self._btn_cancel.setProperty("variant", "ghost")
         self._btn_cancel.setProperty("size", "sm")
+        self._btn_cancel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._btn_cancel.setMinimumWidth(108)
         self._btn_cancel.clicked.connect(self.show_idle)
         
         self._btn_confirm = QPushButton("Confirm")
         self._btn_confirm.setProperty("role", "primary")
         self._btn_confirm.setProperty("size", "sm")
+        self._btn_confirm.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._btn_confirm.clicked.connect(lambda: self.confirmed.emit(getattr(self, "_active_mode", "deploy"), self.iid))
         self._confirm_btn = self._btn_confirm
         
@@ -324,16 +283,18 @@ class _InstanceCard(QFrame):
         self._btn_reset = QPushButton("Rebuild")
         self._btn_reset.setProperty("variant", "ghost")
         self._btn_reset.setProperty("size", "sm")
+        self._btn_reset.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._btn_reset.clicked.connect(lambda: self.reset_requested.emit(self.iid))
         
         self._btn_deploy = QPushButton("Deploy Now")
         self._btn_deploy.setProperty("role", "primary")
         self._btn_deploy.setProperty("size", "sm")
+        self._btn_deploy.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._btn_deploy.clicked.connect(lambda: self.deploy_requested.emit(self.iid))
         
         button_row.addWidget(self._btn_setup, 1)
-        button_row.addWidget(self._btn_reset)
-        button_row.addWidget(self._btn_deploy, 2)
+        button_row.addWidget(self._btn_reset, 1)
+        button_row.addWidget(self._btn_deploy, 1)
         act_lay.addLayout(button_row)
         self._root_lay.addWidget(self._action_widget)
 
@@ -369,6 +330,8 @@ class _InstanceCard(QFrame):
         self._btn_confirm.setProperty("role", "primary" if mode != "wipe" else "danger")
         self._btn_confirm.style().unpolish(self._btn_confirm)
         self._btn_confirm.style().polish(self._btn_confirm)
+        self._btn_cancel.setFixedHeight(self._btn_confirm.sizeHint().height())
+        self._btn_confirm.setFixedHeight(self._btn_cancel.height())
         
         self._action_widget.hide()
         self._prog_widget.hide()
@@ -468,7 +431,7 @@ class _InstanceCard(QFrame):
                 self._set_status_copy(fit_text, fit_level, detail)
         else:
             self._score_value.setText("--")
-            self._set_status_copy(None, detail="Pick quant.")
+            self._set_status_copy(None, detail="")
 
         if busy and active_job:
             status_text = f"Busy with {active_job.filename or active_job.stage}"
@@ -533,7 +496,9 @@ class InstallPanelSide(QWidget):
         self.mode = self.MODE_IDLE
         self._instance_cards: dict[int, _InstanceCard] = {}
         self._connected_instance_ids: list[int] | None = None
+        self._empty_targets_label: QLabel | None = None
         self._instance_render_signatures: dict[int, tuple] = {}
+        self._quant_items_signature: tuple = ()
         self._context_iid: int | None = None
         self._pending_jobs: dict[int, object] = {}
         self._stale_desc = None
@@ -766,43 +731,22 @@ class InstallPanelSide(QWidget):
         self._hero_name.setObjectName("deploy-model-name")
         self._hero_name.setWordWrap(True)
         hero_lay.addWidget(self._hero_name)
-
-        hero_tags = QHBoxLayout()
-        hero_tags.setContentsMargins(0, 0, 0, 0)
-        hero_tags.setSpacing(t.SPACE_2)
-        self._hero_author_tag = _HeroInfoTag("👤")
-        self._hero_likes_tag = _HeroInfoTag("❤️")
-        self._hero_downloads_tag = _HeroInfoTag("⬇️")
-        hero_tags.addWidget(self._hero_author_tag, 2)
-        hero_tags.addWidget(self._hero_likes_tag, 1)
-        hero_tags.addWidget(self._hero_downloads_tag, 1)
-        hero_lay.addLayout(hero_tags)
-        lay.addWidget(hero_card)
-
-        quant_card = _flat_inner_card()
-        quant_lay = quant_card.body()
-        quant_lay.setContentsMargins(t.SPACE_4, t.SPACE_4, t.SPACE_4, t.SPACE_4)
-        quant_lay.setSpacing(t.SPACE_2)
         sec_quant = QLabel("Target configuration")
         sec_quant.setProperty("role", "section")
-        quant_lay.addWidget(sec_quant)
-        self._quant_hint = QLabel("Pick quant.")
+        hero_lay.addWidget(sec_quant)
+        self._quant_hint = QLabel("")
         self._quant_hint.setWordWrap(True)
         self._quant_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px;")
-        quant_lay.addWidget(self._quant_hint)
+        self._quant_hint.hide()
+        hero_lay.addWidget(self._quant_hint)
         self._quant_combo = QComboBox()
         self._quant_combo.currentIndexChanged.connect(lambda _: self._render_instance_cards())
-        quant_lay.addWidget(self._quant_combo)
-        lay.addWidget(quant_card)
+        hero_lay.addWidget(self._quant_combo)
+        lay.addWidget(hero_card)
 
         sec_targets = QLabel("Connected deployment targets")
         sec_targets.setProperty("role", "section")
         lay.addWidget(sec_targets)
-        self._targets_hint = QLabel("Ready or needs runtime.")
-        self._targets_hint.setWordWrap(True)
-        self._targets_hint.setStyleSheet(f"color: {t.TEXT_MID}; font-size: 12px;")
-        lay.addWidget(self._targets_hint)
-
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
@@ -893,36 +837,50 @@ class InstallPanelSide(QWidget):
         if not self.current_model: return
         m = self.current_model
         self._hero_name.setText(m.name)
-        author = m.author or "Unknown author"
-        self._hero_author_tag.set_text(author)
-        self._hero_likes_tag.set_text(_compact_count(m.likes), f"{m.likes:,} likes")
-        self._hero_downloads_tag.set_text(_compact_count(m.downloads), f"{m.downloads:,} downloads")
+
+    @staticmethod
+    def _quant_signature(model_id: str, files: list[HFModelFile]) -> tuple:
+        return (
+            model_id,
+            tuple((item.filename, item.size_bytes, item.quantization) for item in files),
+        )
 
     def _populate_quants(self) -> None:
         if not self.current_model: return
-        curr = self._quant_combo.currentData()
-        self._quant_combo.blockSignals(True)
-        self._quant_combo.clear()
         files = sorted(self.current_model.files, key=lambda i: i.size_bytes)
-        default_idx = 0
-        for idx, item in enumerate(files):
-            size_gb = item.size_bytes / (1024 ** 3) if item.size_bytes else 0
-            q = item.quantization
-            label = f"{q if q else item.filename} ({size_gb:.1f} GB)"
-            self._quant_combo.addItem(label, item)
-            if curr and curr.filename == item.filename: default_idx = idx
-            elif not curr and "Q4_K_M" in (item.quantization or "").upper(): default_idx = idx
-        if files: self._quant_combo.setCurrentIndex(default_idx)
-        self._quant_combo.blockSignals(False)
+        signature = self._quant_signature(self.current_model.id, files)
+        if signature != self._quant_items_signature:
+            curr = self._quant_combo.currentData()
+            curr_filename = curr.filename if curr else ""
+            self._quant_combo.blockSignals(True)
+            self._quant_combo.clear()
+            default_idx = 0
+            for idx, item in enumerate(files):
+                size_gb = item.size_bytes / (1024 ** 3) if item.size_bytes else 0
+                q = item.quantization
+                label = f"{q if q else item.filename} ({size_gb:.1f} GB)"
+                self._quant_combo.addItem(label, item)
+                if curr_filename and curr_filename == item.filename:
+                    default_idx = idx
+                elif not curr_filename and "Q4_K_M" in (item.quantization or "").upper():
+                    default_idx = idx
+            if files:
+                self._quant_combo.setCurrentIndex(default_idx)
+            self._quant_combo.blockSignals(False)
+            self._quant_items_signature = signature
         self._panel_meta.setText(f"{len(files)} quant" + ("" if len(files) == 1 else "s"))
         if self.current_model.details_loading:
             self._quant_hint.setText("Loading GGUF file metadata...")
+            self._quant_hint.show()
         elif self.current_model.details_error:
             self._quant_hint.setText(self.current_model.details_error)
+            self._quant_hint.show()
         elif files:
-            self._quant_hint.setText("Pick quant.")
+            self._quant_hint.clear()
+            self._quant_hint.hide()
         else:
             self._quant_hint.setText("No GGUF files available.")
+            self._quant_hint.show()
 
     def _render_instance_cards(self) -> None:
         ids = (
@@ -934,6 +892,9 @@ class InstallPanelSide(QWidget):
         for iid in to_del: self._instance_cards.pop(iid).deleteLater()
 
         if not ids:
+            if self._empty_targets_label is not None:
+                self._empty_targets_label.deleteLater()
+                self._empty_targets_label = None
             while self._instance_lay.count() > 1:
                 it = self._instance_lay.takeAt(0)
                 if it.widget(): it.widget().deleteLater()
@@ -942,8 +903,14 @@ class InstallPanelSide(QWidget):
                 f"color: {t.TEXT_MID}; background: {t.SURFACE_1}; border: 1px solid {t.BORDER_LOW}; border-radius: 14px; padding: {t.SPACE_5}px; font-size: 12px;"
             )
             empty.setAlignment(Qt.AlignCenter)
+            self._empty_targets_label = empty
             self._instance_lay.insertWidget(0, empty)
             return
+
+        if self._empty_targets_label is not None:
+            self._instance_lay.removeWidget(self._empty_targets_label)
+            self._empty_targets_label.deleteLater()
+            self._empty_targets_label = None
 
         sel_file = self._quant_combo.currentData()
         for iid in ids:
@@ -975,17 +942,16 @@ class InstallPanelSide(QWidget):
         self._context_iid = iid
         card = self._instance_cards[iid]
         state = self.store.get_state(iid)
-        gpu = f"GPU: {state.system.gpu_name or '?'} | {(state.system.gpu_vram_gb or 0):.1f} GB"
         if mode == "setup":
-            summary = f"{gpu}\n\n• deps\n• build llama.cpp\n• enable deploy"
+            summary = "• deps\n• build llama.cpp\n• enable deploy"
         elif mode == "wipe":
-            summary = f"{gpu}\n\n• stop servers\n• remove runtime\n• clean rebuild"
+            summary = "• stop servers\n• remove runtime\n• clean rebuild"
         else:
             f = self._quant_combo.currentData()
             gb = f.size_bytes / (1024 ** 3) if f else 0
             needs = "• runtime required\n" if not state.setup.llamacpp_installed else ""
             summary = (
-                f"{gpu}\nRepo: {self.current_model.id}\nFile: {f.filename if f else '?'}\nSize: {gb:.1f} GB\n\n"
+                f"Repo: {self.current_model.id}\nFile: {f.filename if f else '?'}\nSize: {gb:.1f} GB\n\n"
                 f"{needs}• download GGUF\n• sync progress here"
             )
         card.show_confirm(mode, summary)

@@ -1,3 +1,6 @@
+import sqlite3
+import time
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from app.lab.services.huggingface import (
@@ -23,12 +26,13 @@ def test_search_passes_pipeline_tag_and_limit():
     client = HuggingFaceClient()
     with patch("app.lab.services.huggingface.requests.get") as mock_get:
         mock_get.return_value = _fake_response([])
-        client.search_gguf_models(query="llama", limit=100, pipeline_tag="text-generation")
+        client.search_gguf_models(query="llama", limit=100, pipeline_tag="text-generation", sort_by="trendingScore")
         params = mock_get.call_args.kwargs["params"]
         assert params["pipeline_tag"] == "text-generation"
         assert params["limit"] == 100
         assert params["search"] == "llama"
         assert params["filter"] == "gguf"
+        assert params["sort"] == "trendingScore"
 
 
 def test_search_returns_models_and_cursor():
@@ -108,3 +112,100 @@ def test_get_model_files_walks_nested_gguf_directory():
     assert files[0].filename == "gguf/model-f16.gguf"
     assert files[0].quantization == "F16"
     assert files[0].size_bytes == 123456789
+
+
+def _seed_hf_cache(db_path: Path, model_id: str, files_json: str, fetched_at: float) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hf_model_files_cache (
+                model_id TEXT PRIMARY KEY,
+                files_json TEXT NOT NULL,
+                fetched_at REAL NOT NULL,
+                last_error TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO hf_model_files_cache (model_id, files_json, fetched_at, last_error)
+            VALUES (?, ?, ?, NULL)
+            """,
+            (model_id, files_json, fetched_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_get_model_files_uses_fresh_sqlite_cache(tmp_path):
+    db_path = tmp_path / "app.db"
+    _seed_hf_cache(
+        db_path,
+        "org/model",
+        '[{"filename":"cached/model-q4.gguf","size_bytes":42,"quantization":"Q4_K_M"}]',
+        time.time(),
+    )
+    client = HuggingFaceClient(cache_db_path=db_path)
+
+    with patch("app.lab.services.huggingface.requests.get") as mock_get:
+        files = client.get_model_files("org/model")
+
+    assert mock_get.called is False
+    assert len(files) == 1
+    assert files[0].filename == "cached/model-q4.gguf"
+    assert files[0].size_bytes == 42
+    assert files[0].quantization == "Q4_K_M"
+
+
+def test_get_model_files_refreshes_stale_sqlite_cache(tmp_path):
+    db_path = tmp_path / "app.db"
+    _seed_hf_cache(
+        db_path,
+        "org/model",
+        '[{"filename":"cached/model-q4.gguf","size_bytes":42,"quantization":"Q4_K_M"}]',
+        time.time() - (60 * 60 * 48),
+    )
+    client = HuggingFaceClient(cache_db_path=db_path, cache_ttl_seconds=60)
+
+    payload = [{"type": "file", "path": "fresh/model-f16.gguf", "size": 123456789}]
+    with patch("app.lab.services.huggingface.requests.get") as mock_get:
+        mock_get.return_value = _fake_response(payload)
+        files = client.get_model_files("org/model")
+
+    assert mock_get.called is True
+    assert len(files) == 1
+    assert files[0].filename == "fresh/model-f16.gguf"
+    assert files[0].quantization == "F16"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT files_json FROM hf_model_files_cache WHERE model_id = ?",
+            ("org/model",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert "fresh/model-f16.gguf" in row[0]
+
+
+def test_get_model_files_returns_stale_sqlite_cache_on_refresh_error(tmp_path):
+    db_path = tmp_path / "app.db"
+    _seed_hf_cache(
+        db_path,
+        "org/model",
+        '[{"filename":"cached/model-q4.gguf","size_bytes":42,"quantization":"Q4_K_M"}]',
+        time.time() - (60 * 60 * 48),
+    )
+    client = HuggingFaceClient(cache_db_path=db_path, cache_ttl_seconds=60)
+
+    with patch("app.lab.services.huggingface.requests.get", side_effect=RuntimeError("boom")) as mock_get:
+        files = client.get_model_files("org/model")
+
+    assert mock_get.called is True
+    assert len(files) == 1
+    assert files[0].filename == "cached/model-q4.gguf"
+    assert files[0].size_bytes == 42

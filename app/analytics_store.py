@@ -1,7 +1,8 @@
-"""Persistent analytics store — append-only JSON log of cost snapshots.
+"""Persistent analytics store backed by SQLite with legacy JSON migration.
 Provides real spending data computed from balance deltas over time.
 
-Storage: ~/.vastai-app/analytics.json
+Storage: ~/.vastai-app/app.db
+Legacy import: ~/.vastai-app/analytics.json
 Retention: 30 days, auto-pruned on load.
 Sampling: 1 entry per 5 minutes max.
 """
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from app.services.sqlite_store import SQLiteStore
 
 
 _LOG_PATH = Path.home() / ".vastai-app" / "analytics.json"
@@ -37,6 +40,8 @@ class AnalyticsStore:
 
     def __init__(self, path: Path = _LOG_PATH):
         self._path = path
+        self._db_path = path.parent / "app.db"
+        self._sqlite = SQLiteStore(self._db_path)
         self._entries: list[dict] = []
         self._owner_key: str | None = None
         self._last_recharge_val = 0.0
@@ -50,34 +55,18 @@ class AnalyticsStore:
     # ── Persistence ─────────────────────────────────────────────────────
 
     def _load(self):
-        if not self._path.exists():
+        payload = self._sqlite.load_analytics_payload()
+        if _payload_has_analytics_data(payload):
+            self._hydrate_payload(payload)
+        elif self._path.exists():
+            self._hydrate_payload(self._load_legacy_payload())
+        else:
             self._entries = []
-            return
-        
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            
-            # Suporte para migração: se for o formato novo (dict)
-            if isinstance(data, dict):
-                self._entries = data.get("entries", [])
-                self._owner_key = _normalize_owner_key(data.get("owner_key"))
-                self._last_recharge_val = data.get("last_recharge_val", 0.0)
-                self._last_recharge_ts = data.get("last_recharge_ts", 0.0)
-                self._billing_summary = data.get("billing_summary", {})
-                self._billing_events = data.get("billing_events", [])
-            # Se for o formato antigo (list)
-            elif isinstance(data, list):
-                self._entries = data
-                self._last_recharge_val = 0.0
-                self._last_recharge_ts = 0.0
-                self._billing_summary = {}
-                self._billing_events = []
-            else:
-                self._entries = []
-                
-        except (json.JSONDecodeError, OSError):
-            self._entries = []
+            self._owner_key = None
+            self._last_recharge_val = 0.0
+            self._last_recharge_ts = 0.0
+            self._billing_summary = {}
+            self._billing_events = []
 
         # Prune old entries
         cutoff = (datetime.now() - timedelta(days=_RETENTION_DAYS)).isoformat()
@@ -92,8 +81,7 @@ class AnalyticsStore:
                 self._last_write = None
 
     def _save(self):
-        """Thread-safe background persistence."""
-        # Deep copy data for safe serialization outside the lock
+        """Thread-safe SQLite persistence."""
         with self._save_lock:
             payload = {
                 "entries": list(self._entries),
@@ -104,19 +92,31 @@ class AnalyticsStore:
                 "billing_events": list(self._billing_events),
             }
 
-        def worker():
-            try:
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = self._path.with_suffix(".tmp")
-                tmp_path.write_text(
-                    json.dumps(payload, separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                tmp_path.replace(self._path)
-            except OSError:
-                pass
+        try:
+            self._sqlite.save_analytics_payload(payload)
+        except Exception:
+            pass
 
-        threading.Thread(target=worker, daemon=True).start()
+    def _load_legacy_payload(self) -> dict:
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list):
+            return {"entries": data}
+        return {}
+
+    def _hydrate_payload(self, payload: dict) -> None:
+        self._entries = list(payload.get("entries") or [])
+        self._owner_key = _normalize_owner_key(payload.get("owner_key"))
+        self._last_recharge_val = payload.get("last_recharge_val", 0.0) or 0.0
+        self._last_recharge_ts = payload.get("last_recharge_ts", 0.0) or 0.0
+        self._billing_summary = dict(payload.get("billing_summary") or {})
+        self._billing_events = list(payload.get("billing_events") or [])
 
     # ── Logging ─────────────────────────────────────────────────────────
 
@@ -688,6 +688,19 @@ class AnalyticsStore:
     @property
     def owner_key(self) -> str | None:
         return self._owner_key
+
+
+def _payload_has_analytics_data(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return any(
+        (
+            payload.get("entries"),
+            payload.get("owner_key"),
+            payload.get("billing_events"),
+            payload.get("billing_summary"),
+        )
+    )
 
 
 def _empty_summary(sync_meta: dict | None = None) -> dict:

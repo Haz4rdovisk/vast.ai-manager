@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from app.analytics_store import AnalyticsStore
+from app.analytics_store import AnalyticsStore, CostSnapshot
 
 
 def test_import_history_rebuilds_balance_and_summary(tmp_path):
@@ -212,3 +212,74 @@ def test_daily_and_bucket_charts_use_billing_charges_when_available(tmp_path):
     assert daily[-1][1] == 1.0
     assert daily[-2][1] == 2.0
     assert round(sum(value for _, value in buckets), 3) == 1.0
+
+
+def test_analytics_store_persists_snapshots_in_sqlite(tmp_path):
+    path = tmp_path / "analytics.json"
+    store = AnalyticsStore(path=path)
+
+    store.log_snapshot(
+        CostSnapshot(
+            ts="2026-04-29T12:00:00",
+            balance=12.5,
+            burn_total=1.5,
+            burn_gpu=1.0,
+            burn_storage=0.25,
+            burn_network=0.25,
+            instances=[],
+        )
+    )
+    store._save()
+
+    db_path = tmp_path / "app.db"
+    assert db_path.exists()
+
+    reloaded = AnalyticsStore(path=path)
+    assert reloaded.entry_count == 1
+    assert reloaded.latest_balance == 12.5
+
+
+def test_analytics_store_migrates_legacy_json_file_into_sqlite(tmp_path):
+    path = tmp_path / "analytics.json"
+    path.write_text(
+        """
+        {
+          "entries": [
+            {
+              "ts": "2026-04-28T10:00:00",
+              "balance": 9.5,
+              "burn_total": 0.0,
+              "burn_gpu": 0.0,
+              "burn_storage": 0.0,
+              "burn_network": 0.0,
+              "instances": []
+            }
+          ],
+          "owner_key": "email:test@example.com",
+          "billing_summary": {"charges": 1.0},
+          "billing_events": [
+            {
+              "ts": "2026-04-28T10:00:00",
+              "ts_start": "2026-04-28T09:00:00",
+              "amount": 1.0,
+              "rate": 1.0,
+              "kind": "charge",
+              "source": "instance-1",
+              "categories": {"gpu": 1.0, "storage": 0.0, "network": 0.0, "other": 0.0}
+            }
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    migrated = AnalyticsStore(path=path)
+    assert migrated.entry_count == 1
+    assert migrated.owner_key == "email:test@example.com"
+
+    path.unlink()
+
+    reloaded = AnalyticsStore(path=path)
+    assert reloaded.entry_count == 1
+    assert reloaded.owner_key == "email:test@example.com"
+    assert reloaded.has_billing_events is True

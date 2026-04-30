@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -24,12 +25,13 @@ import qtawesome as qta
 
 from app import theme as t
 from app.lab.state.models import ServerParams
+from app.ui.components import icons
 from app.ui.components.diagnostic_banner import DiagnosticBanner
 from app.ui.components.server_params_form import ServerParamsForm
 from app.ui.brand_manager import BrandManager
 from app.ui.components.lock_screen import LockScreen
 from app.ui.components.page_header import PageHeader
-from app.ui.components.primitives import GlassCard
+from app.ui.components.primitives import GlassCard, IconButton
 from app.ui.views.console_drawer import ConsoleDrawer
 from PySide6.QtCore import QSize
 
@@ -310,6 +312,10 @@ class StudioView(QWidget):
         self._set_launch_status("Idle", "idle")
         header.add_action(self.launch_status)
 
+        self.side_panel_btn = IconButton(icons.COLLAPSE, "Hide settings")
+        self.side_panel_btn.clicked.connect(self._toggle_side_panel)
+        header.add_action(self.side_panel_btn)
+
         self.stop_btn = QPushButton("Eject")
         self.stop_btn.setObjectName("studio-eject-btn")
         self.stop_btn.setEnabled(False)
@@ -335,6 +341,8 @@ class StudioView(QWidget):
         self.workspace_lay.setContentsMargins(0, 0, 0, 0)
         
         splitter = QSplitter(Qt.Horizontal)
+        self.splitter = splitter
+        self._side_panel_last_width = 400
         splitter.setHandleWidth(1)
         splitter.setStyleSheet(
             "QSplitter::handle { background: transparent; }"
@@ -436,9 +444,10 @@ class StudioView(QWidget):
         splitter.addWidget(workspace)
 
         side = QWidget()
+        self.side_panel = side
         side.setObjectName("studio-settings")
-        side.setMinimumWidth(356)
-        side.setMaximumWidth(456)
+        side.setMinimumWidth(392)
+        side.setMaximumWidth(520)
         side_lay = QVBoxLayout(side)
         side_lay.setContentsMargins(t.SPACE_2, t.SPACE_3, t.SPACE_2, t.SPACE_3)
         side_lay.setSpacing(0)
@@ -467,17 +476,28 @@ class StudioView(QWidget):
             f" letter-spacing: 0.6px; text-transform: uppercase;"
         )
 
+        self._picker_grid = QGridLayout()
+        self._picker_grid.setContentsMargins(0, 0, 0, 0)
+        self._picker_grid.setHorizontalSpacing(t.SPACE_4)
+        self._picker_grid.setVerticalSpacing(t.SPACE_3)
+        self._picker_grid.setColumnStretch(0, 2)
+        self._picker_grid.setColumnStretch(1, 3)
+
         instance_label = QLabel("Instance")
         instance_label.setStyleSheet(picker_label_style)
-        card_lay.addWidget(instance_label)
+        self.instance_combo.setMinimumWidth(0)
         self.instance_combo.setMaximumWidth(16777215)
-        card_lay.addWidget(self.instance_combo)
+        self._instance_field = self._build_picker_field(instance_label, self.instance_combo)
+        self._picker_grid.addWidget(self._instance_field, 0, 0)
 
         model_label = QLabel("Model")
         model_label.setStyleSheet(picker_label_style)
-        card_lay.addWidget(model_label)
+        self.model_picker.setMinimumWidth(0)
         self.model_picker.setMaximumWidth(16777215)
-        card_lay.addWidget(self.model_picker)
+        self._model_field = self._build_picker_field(model_label, self.model_picker)
+        self._picker_grid.addWidget(self._model_field, 0, 1)
+
+        card_lay.addLayout(self._picker_grid)
 
         self.launch_btn = QPushButton("Load Model")
         self.launch_btn.clicked.connect(self._on_launch)
@@ -515,17 +535,27 @@ class StudioView(QWidget):
         self.model_list.hide()
 
         splitter.addWidget(side)
-        splitter.setSizes([1100, 400])
-        splitter.splitterMoved.connect(lambda *_: QTimer.singleShot(0, self._position_launch_log_drawer))
+        splitter.setSizes([1060, 440])
+        splitter.splitterMoved.connect(self._on_splitter_moved)
         self.workspace_lay.addWidget(splitter)
         self.layout_stack.addWidget(self.workspace_host)
 
         self.store.instance_changed.connect(self._on_instance_changed)
         self.store.instance_state_updated.connect(lambda *_: self._update_lock_state())
         self._update_lock_state()
+        self._sync_side_panel_button()
 
         store.instance_changed.connect(self._sync_sidebar_on_instance_change)
         store.remote_gguf_changed.connect(self._sync_models)
+
+    def _build_picker_field(self, label: QLabel, control: QWidget) -> QWidget:
+        field = QWidget()
+        lay = QVBoxLayout(field)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(t.SPACE_2)
+        lay.addWidget(label)
+        lay.addWidget(control)
+        return field
 
     def _update_lock_state(self):
         iid = self.store.selected_instance_id
@@ -728,6 +758,7 @@ class StudioView(QWidget):
             def reveal():
                 self.webui_stack.setCurrentIndex(0)
                 self._set_launch_status("Ready", "ready")
+                self._set_side_panel_visible(False)
                 QTimer.singleShot(1000, lambda: self._set_launch_log_visible(False))
             
             QTimer.singleShot(800, reveal)
@@ -868,6 +899,35 @@ class StudioView(QWidget):
             f"QLabel#studio-status-pill {{ color: {fg}; background: {bg};"
             f" border: 1px solid {border}; }}"
         )
+
+    def _toggle_side_panel(self) -> None:
+        self._set_side_panel_visible(not self.side_panel.isVisible())
+
+    def _set_side_panel_visible(self, visible: bool) -> None:
+        self.side_panel.setVisible(visible)
+        if visible:
+            total = max(2, self.splitter.width() or sum(self.splitter.sizes()) or 1500)
+            panel_width = min(max(392, self._side_panel_last_width), 520)
+            self.splitter.setSizes([max(1, total - panel_width), panel_width])
+        else:
+            sizes = self.splitter.sizes()
+            if len(sizes) == 2 and sizes[1] > 0:
+                self._side_panel_last_width = sizes[1]
+            self.splitter.setSizes([1, 0])
+        self._sync_side_panel_button()
+        self._position_launch_log_drawer()
+
+    def _sync_side_panel_button(self) -> None:
+        showing = self.side_panel.isVisible()
+        self.side_panel_btn._mdi = icons.COLLAPSE if showing else icons.EXPAND
+        self.side_panel_btn._refresh_icon()
+        self.side_panel_btn.setToolTip("Hide settings" if showing else "Show settings")
+
+    def _on_splitter_moved(self, *_args) -> None:
+        sizes = self.splitter.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            self._side_panel_last_width = sizes[1]
+        QTimer.singleShot(0, self._position_launch_log_drawer)
 
     def closeEvent(self, event):
         """Explicit cleanup to prevent QtWebEngine profile release warnings."""
