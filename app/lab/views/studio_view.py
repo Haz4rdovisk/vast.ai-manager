@@ -409,6 +409,7 @@ class StudioView(QWidget):
         self._pages_to_cleanup = []
         
         self.webui = QWebEngineView()
+        self.webui.installEventFilter(self)
         chat_page = _StudioWebPage(self.profile, self.webui, self.webui)
         self.webui.setPage(chat_page)
         self._pages_to_cleanup.append(chat_page)
@@ -430,6 +431,7 @@ class StudioView(QWidget):
         self.webui_stack.addWidget(self.webui_overlay) # Index 1 — loading
         self.webui_stack.addWidget(self.webui_empty)   # Index 2 — empty CTA
         self.webui_stack.setCurrentWidget(self.webui_empty)
+        self.webui_stack.currentChanged.connect(lambda *_: self._schedule_webui_page_sync())
         
         workspace_lay.addWidget(self.webui_stack, 1)
 
@@ -704,6 +706,7 @@ class StudioView(QWidget):
         self._target_local_port = local_port
         self._retry_count = 0
         self._retry_timer.start()
+        self._schedule_webui_page_sync()
         # Don't setUrl yet, wait for timer to confirm port is open
 
     def _check_tunnel_and_load(self):
@@ -759,6 +762,7 @@ class StudioView(QWidget):
                 self.webui_stack.setCurrentIndex(0)
                 self._set_launch_status("Ready", "ready")
                 self._set_side_panel_visible(False)
+                self._schedule_webui_page_sync()
                 QTimer.singleShot(1000, lambda: self._set_launch_log_visible(False))
             
             QTimer.singleShot(800, reveal)
@@ -836,6 +840,7 @@ class StudioView(QWidget):
         self.stop_btn.setEnabled(False)
         self.webui_stack.setCurrentWidget(self.webui_empty)
         self._set_launch_log_visible(False)
+        self._schedule_webui_page_sync()
 
     def mark_launch_failed(self):
         self._set_launch_status("Failed", "error")
@@ -874,7 +879,20 @@ class StudioView(QWidget):
         super().resizeEvent(event)
         self._position_launch_log_drawer()
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._schedule_webui_page_sync()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._schedule_webui_page_sync()
+
     def eventFilter(self, watched, event):
+        if watched is getattr(self, "webui", None) and event.type() in (
+            QEvent.Show,
+            QEvent.Hide,
+        ):
+            QTimer.singleShot(0, self._sync_webui_page_state)
         if watched is getattr(self, "_workspace_surface", None) and event.type() in (
             QEvent.Resize,
             QEvent.Show,
@@ -899,6 +917,28 @@ class StudioView(QWidget):
             f"QLabel#studio-status-pill {{ color: {fg}; background: {bg};"
             f" border: 1px solid {border}; }}"
         )
+
+    def _schedule_webui_page_sync(self) -> None:
+        QTimer.singleShot(0, self._sync_webui_page_state)
+
+    def _sync_webui_page_state(self) -> None:
+        if not hasattr(self, "webui"):
+            return
+        page = self.webui.page()
+        if page is None:
+            return
+
+        keep_live_session = self.webui_stack.currentWidget() is self.webui
+        desired_visible = True if keep_live_session else self.webui.isVisible()
+
+        try:
+            if page.isVisible() != desired_visible:
+                page.setVisible(desired_visible)
+            if desired_visible and page.lifecycleState() != QWebEnginePage.LifecycleState.Active:
+                page.setLifecycleState(QWebEnginePage.LifecycleState.Active)
+        except RuntimeError:
+            # Qt may tear down the page during app shutdown while queued syncs are pending.
+            return
 
     def _toggle_side_panel(self) -> None:
         self._set_side_panel_visible(not self.side_panel.isVisible())
